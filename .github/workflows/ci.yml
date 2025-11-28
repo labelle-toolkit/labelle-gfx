@@ -38,6 +38,9 @@ jobs:
       - name: Build library
         run: zig build
 
+      - name: Run tests
+        run: zig build test
+
       - name: Run examples and capture screenshots
         run: |
           # Start virtual framebuffer for headless rendering

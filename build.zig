@@ -18,6 +18,12 @@ pub fn build(b: *std.Build) void {
     });
     const ecs = ecs_dep.module("zig-ecs");
 
+    const zspec_dep = b.dependency("zspec", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zspec = zspec_dep.module("zspec");
+
     // Main library module
     const lib_mod = b.addModule("raylib-ecs-gfx", .{
         .root_source_file = b.path("src/lib.zig"),
@@ -84,17 +90,20 @@ pub fn build(b: *std.Build) void {
         full_run_step.dependOn(&run_cmd.step);
     }
 
-    // Tests
+    // Tests with zspec
     const lib_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/lib.zig"),
+            .root_source_file = b.path("src/tests/lib_test.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
+                .{ .name = "raylib-ecs-gfx", .module = lib_mod },
                 .{ .name = "raylib", .module = raylib },
                 .{ .name = "ecs", .module = ecs },
+                .{ .name = "zspec", .module = zspec },
             },
         }),
+        .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
     });
 
     const run_lib_tests = b.addRunArtifact(lib_tests);

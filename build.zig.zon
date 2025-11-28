@@ -13,6 +13,10 @@
             .url = "git+https://github.com/prime31/zig-ecs#dbf3647c2cc4f327fe87067e40f8436c7f87f209",
             .hash = "entt-1.0.0-qJPtbNLVAgDPXaUbyRSsBTK75Cr1WujUA92kToJugWry",
         },
+        .zspec = .{
+            .url = "git+https://github.com/apotema/zspec?ref=v0.3.0#a3845bc64c2ef4840dda4f2cdae8a8cb4f992c7c",
+            .hash = "zspec-0.3.0-jaKLbbqZAgAB-MBfy6M3HKB3jSTQ-TsNW9OxpLhLlav5",
+        },
     },
 
     .paths = .{

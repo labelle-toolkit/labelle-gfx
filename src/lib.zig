@@ -57,7 +57,9 @@ pub const ZIndex = renderer.ZIndex;
 // Texture exports
 pub const texture = @import("texture/texture_manager.zig");
 pub const TextureManager = texture.TextureManager;
-pub const SpriteAtlas = @import("texture/sprite_atlas.zig").SpriteAtlas;
+const sprite_atlas = @import("texture/sprite_atlas.zig");
+pub const SpriteAtlas = sprite_atlas.SpriteAtlas;
+pub const SpriteData = sprite_atlas.SpriteData;
 
 // Camera exports
 pub const camera = @import("camera/camera.zig");
