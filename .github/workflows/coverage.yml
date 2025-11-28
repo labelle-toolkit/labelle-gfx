@@ -20,7 +20,7 @@ jobs:
         with:
           version: '0.15.2'
 
-      - name: Install kcov dependencies
+      - name: Install kcov and raylib dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -30,7 +30,18 @@ jobs:
             libdw-dev \
             libiberty-dev \
             cmake \
-            ninja-build
+            ninja-build \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxi-dev \
+            libxext-dev \
+            libxfixes-dev \
+            libxrender-dev \
+            libwayland-dev \
+            libxkbcommon-dev
 
       - name: Build and install kcov
         run: |
@@ -44,20 +55,33 @@ jobs:
       - name: Run tests with coverage
         run: |
           mkdir -p coverage
-          # Build and emit the test binary
+
+          # Build the test binary (don't run it yet)
           zig build test --summary all 2>&1 || true
 
-          # Find the test binary in zig-cache
-          TEST_BIN=$(find .zig-cache/o -type f -executable -name "test" 2>/dev/null | head -1)
-
-          if [ -z "$TEST_BIN" ]; then
-            # Try alternative pattern
-            TEST_BIN=$(find .zig-cache -type f -executable 2>/dev/null | xargs file | grep ELF | head -1 | cut -d: -f1)
-          fi
+          # Find ELF executables that are likely the test binary (not the build script)
+          # The test binary will be larger than the build script
+          TEST_BIN=""
+          for bin in $(find .zig-cache/o -type f -executable 2>/dev/null); do
+            if file "$bin" | grep -q "ELF.*executable"; then
+              SIZE=$(stat -c%s "$bin" 2>/dev/null || stat -f%z "$bin" 2>/dev/null || echo "0")
+              # Test binary should be larger than 100KB
+              if [ "$SIZE" -gt 100000 ]; then
+                TEST_BIN="$bin"
+                echo "Found candidate test binary: $bin (size: $SIZE)"
+                break
+              fi
+            fi
+          done
 
           if [ -n "$TEST_BIN" ] && [ -f "$TEST_BIN" ]; then
-            echo "Found test binary: $TEST_BIN"
-            kcov --include-pattern=/src/ coverage "$TEST_BIN"
+            echo "Running coverage with: $TEST_BIN"
+            kcov --include-pattern=/src/ coverage "$TEST_BIN" || {
+              echo "kcov failed, running tests without coverage"
+              zig build test
+              mkdir -p coverage/test
+              echo '{"percent_covered":"0"}' > coverage/test/coverage.json
+            }
           else
             echo "Warning: Could not find test binary for coverage"
             echo "Running tests without coverage..."
