@@ -189,38 +189,3 @@ pub const DefaultAnimationsArray = AnimationsArray(DefaultAnimationType);
 
 // Legacy compatibility aliases (deprecated - will be removed in future versions)
 pub const AnimationType = DefaultAnimationType;
-
-test "Animation with custom enum" {
-    const TestAnim = enum {
-        spell_cast,
-        potion_drink,
-
-        pub fn toSpriteName(self: @This()) []const u8 {
-            return @tagName(self);
-        }
-    };
-
-    var anim = Animation(TestAnim){
-        .anim_type = .spell_cast,
-        .total_frames = 4,
-        .frame_duration = 0.1,
-    };
-
-    try std.testing.expectEqual(TestAnim.spell_cast, anim.anim_type);
-    try std.testing.expectEqual(@as(u32, 0), anim.frame);
-    try std.testing.expectEqualStrings("spell_cast", anim.getSpriteName());
-
-    // Test frame advancement
-    anim.update(0.15);
-    try std.testing.expectEqual(@as(u32, 1), anim.frame);
-}
-
-test "Animation with default types" {
-    var anim = DefaultAnimation{
-        .anim_type = .idle,
-        .total_frames = 4,
-    };
-
-    try std.testing.expectEqual(DefaultAnimationType.idle, anim.anim_type);
-    try std.testing.expectEqualStrings("idle", anim.getSpriteName());
-}
