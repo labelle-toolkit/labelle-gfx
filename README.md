@@ -1,7 +1,7 @@
 # raylib-ecs-gfx
 
 [![CI](https://github.com/Flying-Platform/raylib-ecs-gfx/actions/workflows/ci.yml/badge.svg)](https://github.com/Flying-Platform/raylib-ecs-gfx/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/apotema/GIST_ID/raw/test-badge.json)](https://github.com/Flying-Platform/raylib-ecs-gfx/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/apotema/0069615a643f5e3d215d25c5c6de10be/raw/test-badge.json)](https://github.com/Flying-Platform/raylib-ecs-gfx/actions/workflows/ci.yml)
 [![Zig](https://img.shields.io/badge/zig-0.15.2-orange)](https://ziglang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
