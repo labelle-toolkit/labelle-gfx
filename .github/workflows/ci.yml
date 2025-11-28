@@ -95,14 +95,17 @@ jobs:
           fi
 
           echo "Running example 08..."
-          CI_TEST=1 zig build run-08_nested_animations || echo "Example 08 failed"
+          if ! CI_TEST=1 zig build run-08_nested_animations; then
+            echo "::error::Example 08 failed to run"
+            FAILED=1
+          fi
 
           # List generated screenshots
           echo "Generated screenshots:"
           ls -la screenshot_*.png || echo "No screenshots found"
 
           # Verify all required screenshots exist
-          REQUIRED_SCREENSHOTS="screenshot_01.png screenshot_02.png screenshot_03.png screenshot_04.png screenshot_05.png screenshot_06.png screenshot_07.png"
+          REQUIRED_SCREENSHOTS="screenshot_01.png screenshot_02.png screenshot_03.png screenshot_04.png screenshot_05.png screenshot_06.png screenshot_07.png screenshot_08.png"
           for screenshot in $REQUIRED_SCREENSHOTS; do
             if [ ! -f "$screenshot" ]; then
               echo "::error::Missing required screenshot: $screenshot"
