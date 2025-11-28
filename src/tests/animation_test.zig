@@ -428,6 +428,84 @@ pub const SpriteNameTests = struct {
     }
 };
 
+// ============================================================================
+// Nested Animation Path Tests
+// ============================================================================
+
+/// Test enum with nested paths in toSpriteName (e.g., wizard/drink, thief/attack)
+const NestedAnim = enum {
+    wizard_drink,
+    wizard_cast,
+    thief_attack,
+    thief_sneak,
+
+    pub fn toSpriteName(self: @This()) []const u8 {
+        return switch (self) {
+            .wizard_drink => "wizard/drink",
+            .wizard_cast => "wizard/cast",
+            .thief_attack => "thief/attack",
+            .thief_sneak => "thief/sneak",
+        };
+    }
+};
+
+const NestedAnimation = gfx.Animation(NestedAnim);
+const NestedAnimPlayer = gfx.AnimationPlayer(NestedAnim);
+
+pub const NestedPathTests = struct {
+    test "nested path - generateSpriteNameNoPrefix produces wizard/drink_0001" {
+        var buffer: [64]u8 = undefined;
+        const name = gfx.animation.generateSpriteNameNoPrefix(&buffer, NestedAnim.wizard_drink, 0);
+        try expect.toBeTrue(std.mem.eql(u8, name, "wizard/drink_0001"));
+    }
+
+    test "nested path - generateSpriteNameNoPrefix with frame 10 produces wizard/drink_0011" {
+        var buffer: [64]u8 = undefined;
+        const name = gfx.animation.generateSpriteNameNoPrefix(&buffer, NestedAnim.wizard_drink, 10);
+        try expect.toBeTrue(std.mem.eql(u8, name, "wizard/drink_0011"));
+    }
+
+    test "nested path - thief/attack frame range" {
+        var buffer: [64]u8 = undefined;
+
+        const frame0 = gfx.animation.generateSpriteNameNoPrefix(&buffer, NestedAnim.thief_attack, 0);
+        try expect.toBeTrue(std.mem.eql(u8, frame0, "thief/attack_0001"));
+
+        const frame7 = gfx.animation.generateSpriteNameNoPrefix(&buffer, NestedAnim.thief_attack, 7);
+        try expect.toBeTrue(std.mem.eql(u8, frame7, "thief/attack_0008"));
+    }
+
+    test "nested path - Animation component getSpriteName returns nested path" {
+        const anim = NestedAnimation{
+            .anim_type = .wizard_cast,
+            .total_frames = 6,
+        };
+        try expect.toBeTrue(std.mem.eql(u8, anim.getSpriteName(), "wizard/cast"));
+    }
+
+    test "nested path - AnimationPlayer with nested paths" {
+        var player = NestedAnimPlayer.init(std.testing.allocator);
+        defer player.deinit();
+
+        try player.registerAnimation(.wizard_drink, 11);
+        try player.registerAnimation(.thief_attack, 8);
+
+        try expect.equal(player.getFrameCount(.wizard_drink), 11);
+        try expect.equal(player.getFrameCount(.thief_attack), 8);
+
+        const anim = player.createAnimation(.wizard_drink);
+        try expect.equal(anim.anim_type, .wizard_drink);
+        try expect.equal(anim.total_frames, 11);
+    }
+
+    test "nested path - generateSpriteName with prefix adds extra level" {
+        var buffer: [64]u8 = undefined;
+        // Note: using prefix with nested path creates "characters/wizard/drink_0001"
+        const name = gfx.animation.generateSpriteName(&buffer, "characters", NestedAnim.wizard_drink, 0);
+        try expect.toBeTrue(std.mem.eql(u8, name, "characters/wizard/drink_0001"));
+    }
+};
+
 // Entry point for zspec
 comptime {
     _ = zspec.runAll(@This());

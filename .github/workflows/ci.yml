@@ -73,38 +73,85 @@ jobs:
           export DISPLAY=:99
           sleep 2
 
-          # Run each example with CI_TEST mode
+          # Track failures
+          FAILED=0
+
+          # Run each example with CI_TEST mode - fail on any error
           echo "Running example 01..."
-          CI_TEST=1 zig build run-01_basic_sprite || echo "Example 01 failed"
+          if ! CI_TEST=1 zig build run-01_basic_sprite; then
+            echo "::error::Example 01 failed to run"
+            FAILED=1
+          fi
 
           echo "Running example 02..."
-          CI_TEST=1 zig build run-02_animation || echo "Example 02 failed"
+          if ! CI_TEST=1 zig build run-02_animation; then
+            echo "::error::Example 02 failed to run"
+            FAILED=1
+          fi
 
           echo "Running example 03..."
-          CI_TEST=1 zig build run-03_sprite_atlas || echo "Example 03 failed"
+          if ! CI_TEST=1 zig build run-03_sprite_atlas; then
+            echo "::error::Example 03 failed to run"
+            FAILED=1
+          fi
 
           echo "Running example 04..."
-          CI_TEST=1 zig build run-04_camera || echo "Example 04 failed"
+          if ! CI_TEST=1 zig build run-04_camera; then
+            echo "::error::Example 04 failed to run"
+            FAILED=1
+          fi
 
           echo "Running example 05..."
-          CI_TEST=1 zig build run-05_ecs_rendering || echo "Example 05 failed"
+          if ! CI_TEST=1 zig build run-05_ecs_rendering; then
+            echo "::error::Example 05 failed to run"
+            FAILED=1
+          fi
 
           echo "Running example 06..."
-          CI_TEST=1 zig build run-06_effects || echo "Example 06 failed"
+          if ! CI_TEST=1 zig build run-06_effects; then
+            echo "::error::Example 06 failed to run"
+            FAILED=1
+          fi
 
           echo "Running example 07..."
-          CI_TEST=1 zig build run-07_with_fixtures || echo "Example 07 failed"
+          if ! CI_TEST=1 zig build run-07_with_fixtures; then
+            echo "::error::Example 07 failed to run"
+            FAILED=1
+          fi
+
+          echo "Running example 08..."
+          if ! CI_TEST=1 zig build run-08_nested_animations; then
+            echo "::error::Example 08 failed to run"
+            FAILED=1
+          fi
 
           # List generated screenshots
           echo "Generated screenshots:"
           ls -la screenshot_*.png || echo "No screenshots found"
+
+          # Verify all required screenshots exist
+          REQUIRED_SCREENSHOTS="screenshot_01.png screenshot_02.png screenshot_03.png screenshot_04.png screenshot_05.png screenshot_06.png screenshot_07.png screenshot_08.png"
+          for screenshot in $REQUIRED_SCREENSHOTS; do
+            if [ ! -f "$screenshot" ]; then
+              echo "::error::Missing required screenshot: $screenshot"
+              FAILED=1
+            fi
+          done
+
+          # Exit with failure if any screenshot is missing or example failed
+          if [ $FAILED -eq 1 ]; then
+            echo "::error::One or more screenshots could not be generated"
+            exit 1
+          fi
+
+          echo "All screenshots generated successfully!"
 
       - name: Upload screenshots as artifacts
         uses: actions/upload-artifact@v4
         with:
           name: example-screenshots
           path: screenshot_*.png
-          if-no-files-found: warn
+          if-no-files-found: error
 
   # Post screenshots to PR comment
   post-screenshots:
@@ -121,7 +168,7 @@ jobs:
           name: example-screenshots
           path: screenshots
 
-      - name: Upload screenshots to GitHub and create comment
+      - name: Create PR comment with screenshot status
         uses: actions/github-script@v7
         with:
           script: |
@@ -129,9 +176,6 @@ jobs:
             const path = require('path');
 
             const screenshotsDir = 'screenshots';
-            let comment = '## 📸 Example Screenshots\n\n';
-            comment += 'Visual verification of all examples from this PR:\n\n';
-
             const examples = [
               { file: 'screenshot_01.png', name: '01 - Basic Sprite' },
               { file: 'screenshot_02.png', name: '02 - Animation' },
@@ -140,27 +184,40 @@ jobs:
               { file: 'screenshot_05.png', name: '05 - ECS Rendering' },
               { file: 'screenshot_06.png', name: '06 - Effects' },
               { file: 'screenshot_07.png', name: '07 - TexturePacker Fixtures' },
+              { file: 'screenshot_08.png', name: '08 - Nested Animation Paths' },
             ];
+
+            let comment = '## 📸 Example Screenshots\n\n';
+            comment += 'Visual verification of all examples from this PR:\n\n';
+
+            let allFound = true;
+            let foundCount = 0;
+
+            // Check each screenshot exists
+            comment += '| Example | Status |\n';
+            comment += '|---------|--------|\n';
 
             for (const example of examples) {
               const filePath = path.join(screenshotsDir, example.file);
               if (fs.existsSync(filePath)) {
-                // Read the file and encode as base64
-                const fileContent = fs.readFileSync(filePath);
-                const base64 = fileContent.toString('base64');
-
-                // Upload as a gist or use artifact URL
-                comment += `### ${example.name}\n`;
-                comment += `✅ Screenshot captured successfully\n\n`;
+                comment += `| ${example.name} | ✅ Captured |\n`;
+                foundCount++;
               } else {
-                comment += `### ${example.name}\n`;
-                comment += `❌ Screenshot not found\n\n`;
+                comment += `| ${example.name} | ❌ Missing |\n`;
+                allFound = false;
               }
             }
 
-            comment += '\n---\n';
-            comment += '📦 [Download all screenshots](../actions/runs/' + context.runId + ')\n';
-            comment += '\n_Generated by CI workflow_';
+            comment += '\n';
+
+            if (allFound) {
+              comment += `✅ **All ${foundCount} screenshots generated successfully!**\n\n`;
+            } else {
+              comment += `⚠️ **${foundCount}/${examples.length} screenshots generated.** Some are missing - check the workflow logs.\n\n`;
+            }
+
+            comment += `📦 **[Download screenshots](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})**\n\n`;
+            comment += '_Generated by CI workflow_';
 
             // Find existing comment or create new one
             const { data: comments } = await github.rest.issues.listComments({
@@ -181,6 +238,7 @@ jobs:
                 comment_id: botComment.id,
                 body: comment,
               });
+              console.log('Updated existing PR comment');
             } else {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
@@ -188,4 +246,5 @@ jobs:
                 issue_number: context.issue.number,
                 body: comment,
               });
+              console.log('Created new PR comment');
             }

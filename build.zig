@@ -61,6 +61,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "05_ecs_rendering", .path = "examples/05_ecs_rendering/main.zig", .desc = "ECS render systems" },
         .{ .name = "06_effects", .path = "examples/06_effects/main.zig", .desc = "Visual effects" },
         .{ .name = "07_with_fixtures", .path = "examples/07_with_fixtures/main.zig", .desc = "TexturePacker fixtures demo" },
+        .{ .name = "08_nested_animations", .path = "examples/08_nested_animations/main.zig", .desc = "Nested animation paths" },
     };
 
     for (examples) |example| {

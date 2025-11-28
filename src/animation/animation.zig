@@ -1,6 +1,29 @@
 //! Animation player and utilities
 //!
 //! Generic animation player that works with user-defined animation enum types.
+//!
+//! ## Nested Animation Paths
+//!
+//! For sprite sheets with nested folder structures (e.g., `wizard/drink_0001`),
+//! define your enum's `toSpriteName` to return the full path:
+//!
+//! ```zig
+//! const CharacterAnim = enum {
+//!     wizard_drink,
+//!     wizard_cast,
+//!     thief_attack,
+//!
+//!     pub fn toSpriteName(self: @This()) []const u8 {
+//!         return switch (self) {
+//!             .wizard_drink => "wizard/drink",
+//!             .wizard_cast => "wizard/cast",
+//!             .thief_attack => "thief/attack",
+//!         };
+//!     }
+//! };
+//! ```
+//!
+//! This produces sprite names like `wizard/drink_0001`, `thief/attack_0001`.
 
 const std = @import("std");
 const components = @import("../components/components.zig");
@@ -87,9 +110,18 @@ pub fn AnimationPlayer(comptime AnimType: type) type {
 /// Convenience alias for AnimationPlayer with default animation types
 pub const DefaultAnimationPlayer = AnimationPlayer(components.DefaultAnimationType);
 
-/// Generate sprite name for current animation frame
+/// Generate sprite name for current animation frame.
+///
 /// Format: "{prefix}/{anim_name}_{frame:04}"
-/// Works with any enum type that has a toSpriteName method or uses @tagName
+///
+/// Works with any enum type that has a toSpriteName method or uses @tagName.
+/// The anim_name can include nested paths (e.g., "wizard/drink") for sprite sheets
+/// organized in subdirectories.
+///
+/// Examples:
+/// - prefix="player", anim=.idle, frame=0 -> "player/idle_0001"
+/// - prefix="", anim=.wizard_drink (toSpriteName="wizard/drink"), frame=10 -> "/wizard/drink_0011"
+/// - Use generateSpriteNameNoPrefix for nested paths without additional prefix
 pub fn generateSpriteName(
     buffer: []u8,
     prefix: []const u8,
@@ -110,8 +142,15 @@ pub fn generateSpriteName(
     return result;
 }
 
-/// Generate sprite name without prefix
+/// Generate sprite name without prefix.
+///
 /// Format: "{anim_name}_{frame:04}"
+///
+/// Useful for nested animation paths where toSpriteName already includes the full path.
+///
+/// Examples:
+/// - anim=.idle, frame=0 -> "idle_0001"
+/// - anim=.wizard_drink (toSpriteName="wizard/drink"), frame=10 -> "wizard/drink_0011"
 pub fn generateSpriteNameNoPrefix(
     buffer: []u8,
     anim_type: anytype,

@@ -1,4 +1,4 @@
-.PHONY: all build test clean help run-01 run-02 run-03 run-04 run-05 run-06 run-07 run-basic-sprite run-animation run-sprite-atlas run-camera run-ecs-rendering run-effects run-with-fixtures run-all
+.PHONY: all build test clean help run-01 run-02 run-03 run-04 run-05 run-06 run-07 run-08 run-basic-sprite run-animation run-sprite-atlas run-camera run-ecs-rendering run-effects run-with-fixtures run-nested-animations run-all
 
 all: build
 
@@ -32,6 +32,9 @@ run-06:
 run-07:
 	zig build run-07_with_fixtures
 
+run-08:
+	zig build run-08_nested_animations
+
 run-basic-sprite: run-01
 run-animation: run-02
 run-sprite-atlas: run-03
@@ -39,8 +42,9 @@ run-camera: run-04
 run-ecs-rendering: run-05
 run-effects: run-06
 run-with-fixtures: run-07
+run-nested-animations: run-08
 
-run-all: run-01 run-02 run-03 run-04 run-05 run-06 run-07
+run-all: run-01 run-02 run-03 run-04 run-05 run-06 run-07 run-08
 
 help:
 	@echo "raylib-ecs-gfx Makefile"
@@ -58,5 +62,6 @@ help:
 	@echo "  make run-05             - ECS render systems"
 	@echo "  make run-06             - Visual effects"
 	@echo "  make run-07             - TexturePacker fixtures demo"
+	@echo "  make run-08             - Nested animation paths"
 	@echo ""
 	@echo "  make run-all            - Run all examples sequentially"
