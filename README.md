@@ -1,5 +1,10 @@
 # raylib-ecs-gfx
 
+[![CI](https://github.com/Flying-Platform/raylib-ecs-gfx/actions/workflows/ci.yml/badge.svg)](https://github.com/Flying-Platform/raylib-ecs-gfx/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/apotema/GIST_ID/raw/test-badge.json)](https://github.com/Flying-Platform/raylib-ecs-gfx/actions/workflows/ci.yml)
+[![Zig](https://img.shields.io/badge/zig-0.15.2-orange)](https://ziglang.org/)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 A 2D graphics library for Zig games combining [raylib](https://www.raylib.com/) rendering with [zig-ecs](https://github.com/prime31/zig-ecs) entity component system.
 
 ## Features
