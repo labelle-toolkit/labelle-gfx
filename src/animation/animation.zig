@@ -1,74 +1,107 @@
 //! Animation player and utilities
+//!
+//! Generic animation player that works with user-defined animation enum types.
 
 const std = @import("std");
 const components = @import("../components/components.zig");
-const Animation = components.Animation;
-const AnimationType = components.AnimationType;
 
-/// Animation player for managing entity animations
-pub const AnimationPlayer = struct {
-    /// Animation definitions: maps animation type to frame count
-    frame_counts: std.AutoHashMap(AnimationType, u32),
-    /// Default frame duration
-    default_frame_duration: f32,
-    allocator: std.mem.Allocator,
-
-    pub fn init(allocator: std.mem.Allocator) AnimationPlayer {
-        return .{
-            .frame_counts = std.AutoHashMap(AnimationType, u32).init(allocator),
-            .default_frame_duration = 0.1,
-            .allocator = allocator,
-        };
+/// Generic animation player for managing entity animations.
+/// Takes a comptime enum type parameter matching the Animation component.
+///
+/// Example usage:
+/// ```zig
+/// const WizardAnim = enum { meditate, cast_fireball, teleport };
+/// const WizardPlayer = gfx.AnimationPlayer(WizardAnim);
+///
+/// var player = WizardPlayer.init(allocator);
+/// try player.registerAnimation(.cast_fireball, 6);
+/// var anim = player.createAnimation(.cast_fireball);
+/// ```
+pub fn AnimationPlayer(comptime AnimType: type) type {
+    // Validate that AnimType is an enum
+    if (@typeInfo(AnimType) != .@"enum") {
+        @compileError("AnimationPlayer type parameter must be an enum");
     }
 
-    pub fn deinit(self: *AnimationPlayer) void {
-        self.frame_counts.deinit();
-    }
+    const AnimationT = components.Animation(AnimType);
 
-    /// Register an animation type with its frame count
-    pub fn registerAnimation(self: *AnimationPlayer, anim_type: AnimationType, frame_count: u32) !void {
-        try self.frame_counts.put(anim_type, frame_count);
-    }
+    return struct {
+        const Self = @This();
+        pub const AnimationEnumType = AnimType;
+        pub const AnimationComponentType = AnimationT;
 
-    /// Get frame count for an animation type
-    pub fn getFrameCount(self: *AnimationPlayer, anim_type: AnimationType) u32 {
-        return self.frame_counts.get(anim_type) orelse 1;
-    }
+        /// Animation definitions: maps animation type to frame count
+        frame_counts: std.AutoHashMap(AnimType, u32),
+        /// Default frame duration
+        default_frame_duration: f32,
+        allocator: std.mem.Allocator,
 
-    /// Create a new Animation component for a given type
-    pub fn createAnimation(self: *AnimationPlayer, anim_type: AnimationType) Animation {
-        return .{
-            .frame = 0,
-            .total_frames = self.getFrameCount(anim_type),
-            .frame_duration = self.default_frame_duration,
-            .elapsed_time = 0,
-            .anim_type = anim_type,
-            .looping = true,
-            .playing = true,
-        };
-    }
-
-    /// Transition an animation to a new type
-    pub fn transitionTo(self: *AnimationPlayer, anim: *Animation, new_type: AnimationType) void {
-        if (anim.anim_type != new_type) {
-            anim.anim_type = new_type;
-            anim.total_frames = self.getFrameCount(new_type);
-            anim.frame = 0;
-            anim.elapsed_time = 0;
-            anim.playing = true;
+        pub fn init(allocator: std.mem.Allocator) Self {
+            return .{
+                .frame_counts = std.AutoHashMap(AnimType, u32).init(allocator),
+                .default_frame_duration = 0.1,
+                .allocator = allocator,
+            };
         }
-    }
-};
+
+        pub fn deinit(self: *Self) void {
+            self.frame_counts.deinit();
+        }
+
+        /// Register an animation type with its frame count
+        pub fn registerAnimation(self: *Self, anim_type: AnimType, frame_count: u32) !void {
+            try self.frame_counts.put(anim_type, frame_count);
+        }
+
+        /// Get frame count for an animation type
+        pub fn getFrameCount(self: *Self, anim_type: AnimType) u32 {
+            return self.frame_counts.get(anim_type) orelse 1;
+        }
+
+        /// Create a new Animation component for a given type
+        pub fn createAnimation(self: *Self, anim_type: AnimType) AnimationT {
+            return .{
+                .frame = 0,
+                .total_frames = self.getFrameCount(anim_type),
+                .frame_duration = self.default_frame_duration,
+                .elapsed_time = 0,
+                .anim_type = anim_type,
+                .looping = true,
+                .playing = true,
+            };
+        }
+
+        /// Transition an animation to a new type
+        pub fn transitionTo(self: *Self, anim: *AnimationT, new_type: AnimType) void {
+            if (anim.anim_type != new_type) {
+                anim.anim_type = new_type;
+                anim.total_frames = self.getFrameCount(new_type);
+                anim.frame = 0;
+                anim.elapsed_time = 0;
+                anim.playing = true;
+            }
+        }
+    };
+}
+
+/// Convenience alias for AnimationPlayer with default animation types
+pub const DefaultAnimationPlayer = AnimationPlayer(components.DefaultAnimationType);
 
 /// Generate sprite name for current animation frame
-/// Format: "{prefix}/{anim_type}_{frame:04}"
+/// Format: "{prefix}/{anim_name}_{frame:04}"
+/// Works with any enum type that has a toSpriteName method or uses @tagName
 pub fn generateSpriteName(
     buffer: []u8,
     prefix: []const u8,
-    anim_type: AnimationType,
+    anim_type: anytype,
     frame: u32,
 ) []const u8 {
-    const anim_name = anim_type.toSpriteName();
+    const AnimType = @TypeOf(anim_type);
+    const anim_name = if (@hasDecl(AnimType, "toSpriteName"))
+        anim_type.toSpriteName()
+    else
+        @tagName(anim_type);
+
     const result = std.fmt.bufPrint(buffer, "{s}/{s}_{d:0>4}", .{
         prefix,
         anim_name,
@@ -77,44 +110,24 @@ pub fn generateSpriteName(
     return result;
 }
 
-test "animation update" {
-    var anim = Animation{
-        .frame = 0,
-        .total_frames = 4,
-        .frame_duration = 0.1,
-        .elapsed_time = 0,
-        .anim_type = .walk,
-        .looping = true,
-        .playing = true,
-    };
+/// Generate sprite name without prefix
+/// Format: "{anim_name}_{frame:04}"
+pub fn generateSpriteNameNoPrefix(
+    buffer: []u8,
+    anim_type: anytype,
+    frame: u32,
+) []const u8 {
+    const AnimType = @TypeOf(anim_type);
+    const anim_name = if (@hasDecl(AnimType, "toSpriteName"))
+        anim_type.toSpriteName()
+    else
+        @tagName(anim_type);
 
-    // Update less than frame duration
-    anim.update(0.05);
-    try std.testing.expectEqual(@as(u32, 0), anim.frame);
-
-    // Update past frame duration
-    anim.update(0.06);
-    try std.testing.expectEqual(@as(u32, 1), anim.frame);
-
-    // Update to wrap around
-    anim.frame = 3;
-    anim.elapsed_time = 0.09;
-    anim.update(0.02);
-    try std.testing.expectEqual(@as(u32, 0), anim.frame);
+    const result = std.fmt.bufPrint(buffer, "{s}_{d:0>4}", .{
+        anim_name,
+        frame + 1,
+    }) catch return "";
+    return result;
 }
 
-test "animation non-looping" {
-    var anim = Animation{
-        .frame = 3,
-        .total_frames = 4,
-        .frame_duration = 0.1,
-        .elapsed_time = 0.09,
-        .anim_type = .die,
-        .looping = false,
-        .playing = true,
-    };
-
-    anim.update(0.02);
-    try std.testing.expectEqual(@as(u32, 3), anim.frame);
-    try std.testing.expectEqual(false, anim.playing);
-}
+// Tests moved to src/tests/animation_test.zig

@@ -1,4 +1,4 @@
-// Component tests (Render, SpriteData)
+// Component tests (Render, SpriteData, AnimationsArray)
 
 const std = @import("std");
 const zspec = @import("zspec");
@@ -35,6 +35,23 @@ pub const RenderTests = struct {
         try expect.equal(render.scale, 2.0);
         try expect.equal(render.rotation, 45.0);
         try expect.toBeTrue(render.flip_x);
+    }
+
+    test "default offset values" {
+        const render = gfx.Render{};
+
+        try expect.equal(render.offset_x, 0);
+        try expect.equal(render.offset_y, 0);
+    }
+
+    test "custom offset values" {
+        const render = gfx.Render{
+            .offset_x = 10,
+            .offset_y = -5,
+        };
+
+        try expect.equal(render.offset_x, 10);
+        try expect.equal(render.offset_y, -5);
     }
 };
 
@@ -79,6 +96,78 @@ pub const SpriteDataTests = struct {
 
         try expect.equal(sprite.getWidth(), 32);
         try expect.equal(sprite.getHeight(), 64);
+    }
+};
+
+// ============================================================================
+// SpriteLocation Tests
+// ============================================================================
+
+pub const SpriteLocationTests = struct {
+    test "default texture index is zero" {
+        const loc = gfx.SpriteLocation{
+            .x = 0,
+            .y = 0,
+            .width = 32,
+            .height = 32,
+        };
+
+        try expect.equal(loc.texture_index, 0);
+    }
+
+    test "custom values" {
+        const loc = gfx.SpriteLocation{
+            .x = 64,
+            .y = 128,
+            .width = 16,
+            .height = 24,
+            .texture_index = 2,
+        };
+
+        try expect.equal(loc.x, 64);
+        try expect.equal(loc.y, 128);
+        try expect.equal(loc.width, 16);
+        try expect.equal(loc.height, 24);
+        try expect.equal(loc.texture_index, 2);
+    }
+};
+
+// ============================================================================
+// AnimationsArray Tests (comptime generics)
+// ============================================================================
+
+const TestAnim = enum {
+    idle,
+    walk,
+
+    pub fn toSpriteName(self: @This()) []const u8 {
+        return @tagName(self);
+    }
+};
+
+const TestAnimArray = gfx.components.AnimationsArray(TestAnim);
+
+pub const AnimationsArrayTests = struct {
+    test "default state" {
+        var arr = TestAnimArray{};
+
+        try expect.equal(arr.active_index, 0);
+        try expect.toBeTrue(arr.getActive() == null);
+    }
+
+    test "setActive changes index" {
+        var arr = TestAnimArray{};
+        arr.setActive(3);
+
+        try expect.equal(arr.active_index, 3);
+    }
+
+    test "setActive bounds check" {
+        var arr = TestAnimArray{};
+        arr.setActive(100); // Out of bounds
+
+        // Should not change to invalid index
+        try expect.equal(arr.active_index, 0);
     }
 };
 

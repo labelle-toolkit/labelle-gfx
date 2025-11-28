@@ -1,4 +1,6 @@
 //! ECS Systems for rendering entities
+//!
+//! These systems work with generic Animation types.
 
 const std = @import("std");
 const rl = @import("raylib");
@@ -6,7 +8,6 @@ const ecs = @import("ecs");
 
 const components = @import("../components/components.zig");
 const Render = components.Render;
-const Animation = components.Animation;
 
 const Renderer = @import("../renderer/renderer.zig").Renderer;
 const animation_mod = @import("../animation/animation.zig");
@@ -73,16 +74,18 @@ pub fn spriteRenderSystem(
     }
 }
 
-/// Update all animations
+/// Update all animations of a specific type
+/// Takes the Animation component type as a comptime parameter
 pub fn animationUpdateSystem(
+    comptime AnimationType: type,
     registry: *ecs.Registry,
     dt: f32,
 ) void {
-    var view = registry.view(.{Animation}, .{});
+    var view = registry.view(.{AnimationType}, .{});
     var iter = view.iterator();
 
     while (iter.next()) |entity| {
-        var anim = view.get(Animation, entity);
+        var anim = view.get(AnimationType, entity);
         anim.update(dt);
     }
 }
@@ -90,15 +93,16 @@ pub fn animationUpdateSystem(
 /// Update animation sprites based on current frame
 /// This system updates the Render component's sprite_name based on Animation state
 pub fn animationSpriteUpdateSystem(
+    comptime AnimationType: type,
     comptime sprite_prefix_fn: fn (ecs.Registry.Entity, *ecs.Registry) []const u8,
     registry: *ecs.Registry,
     sprite_name_buffer: []u8,
 ) void {
-    var view = registry.view(.{ Animation, Render }, .{});
+    var view = registry.view(.{ AnimationType, Render }, .{});
     var iter = @TypeOf(view).Iterator.init(&view);
 
     while (iter.next()) |entity| {
-        const anim = view.getConst(Animation, entity);
+        const anim = view.getConst(AnimationType, entity);
         var render = view.get(Render, entity);
 
         // Get sprite prefix for this entity (e.g., "characters/player")
@@ -119,12 +123,13 @@ pub fn animationSpriteUpdateSystem(
 /// Simple animation render that combines update and render
 pub fn animatedSpriteRenderSystem(
     comptime PositionType: type,
+    comptime AnimationType: type,
     registry: *ecs.Registry,
     renderer: *Renderer,
     dt: f32,
 ) void {
     // Update animations first
-    animationUpdateSystem(registry, dt);
+    animationUpdateSystem(AnimationType, registry, dt);
 
     // Then render
     spriteRenderSystem(PositionType, registry, renderer);

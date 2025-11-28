@@ -25,6 +25,26 @@ pub const CameraBoundsTests = struct {
         };
         try expect.toBeTrue(bounds.isEnabled());
     }
+
+    test "bounds isEnabled with only X bounds" {
+        const bounds = gfx.Camera.Bounds{
+            .min_x = 0,
+            .min_y = 0,
+            .max_x = 100,
+            .max_y = 0,
+        };
+        try expect.toBeTrue(bounds.isEnabled());
+    }
+
+    test "bounds isEnabled with only Y bounds" {
+        const bounds = gfx.Camera.Bounds{
+            .min_x = 0,
+            .min_y = 0,
+            .max_x = 0,
+            .max_y = 100,
+        };
+        try expect.toBeTrue(bounds.isEnabled());
+    }
 };
 
 // ============================================================================
@@ -39,6 +59,13 @@ pub const CameraTests = struct {
         try expect.equal(camera.y, 0);
         try expect.equal(camera.zoom, 1.0);
         try expect.equal(camera.rotation, 0);
+        try expect.equal(camera.min_zoom, 0.1);
+        try expect.equal(camera.max_zoom, 3.0);
+    }
+
+    test "default bounds are disabled" {
+        const camera = gfx.Camera.init();
+        try expect.toBeFalse(camera.bounds.isEnabled());
     }
 
     test "setZoom clamps to min/max" {
@@ -56,6 +83,18 @@ pub const CameraTests = struct {
         try expect.equal(camera.zoom, 1.5);
     }
 
+    test "setZoom clamps to default min" {
+        var camera = gfx.Camera.init();
+        camera.setZoom(0.01);
+        try expect.equal(camera.zoom, 0.1);
+    }
+
+    test "setZoom clamps to default max" {
+        var camera = gfx.Camera.init();
+        camera.setZoom(10.0);
+        try expect.equal(camera.zoom, 3.0);
+    }
+
     test "zoomBy adjusts zoom with clamping" {
         var camera = gfx.Camera.init();
         camera.min_zoom = 0.5;
@@ -70,6 +109,18 @@ pub const CameraTests = struct {
 
         camera.zoomBy(-2.0);
         try expect.equal(camera.zoom, 0.5); // Clamped to min
+    }
+
+    test "zoomBy positive delta" {
+        var camera = gfx.Camera.init();
+        camera.zoomBy(0.5);
+        try expect.equal(camera.zoom, 1.5);
+    }
+
+    test "zoomBy negative delta" {
+        var camera = gfx.Camera.init();
+        camera.zoomBy(-0.5);
+        try expect.equal(camera.zoom, 0.5);
     }
 
     test "setBounds stores bounds" {

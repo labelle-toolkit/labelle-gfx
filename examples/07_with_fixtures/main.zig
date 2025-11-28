@@ -1,7 +1,7 @@
 //! Example 07: Using TexturePacker Fixtures
 //!
 //! This example demonstrates loading actual TexturePacker atlases
-//! from the fixtures folder and rendering animated sprites.
+//! from the fixtures folder and rendering animated sprites with custom types.
 //!
 //! Run with: zig build run-example-07
 
@@ -14,6 +14,22 @@ const Position = struct {
     x: f32 = 0,
     y: f32 = 0,
 };
+
+// Define animation types for this example
+const AnimType = enum {
+    idle,
+    walk,
+    run,
+    jump,
+
+    pub fn toSpriteName(self: AnimType) []const u8 {
+        return @tagName(self);
+    }
+};
+
+// Create typed animation player and component
+const AnimPlayer = gfx.AnimationPlayer(AnimType);
+const Animation = gfx.Animation(AnimType);
 
 pub fn main() !void {
     // CI test mode - hidden window, auto-screenshot and exit
@@ -75,7 +91,7 @@ pub fn main() !void {
     });
 
     // Create animation player
-    var anim_player = gfx.AnimationPlayer.init(allocator);
+    var anim_player = AnimPlayer.init(allocator);
     defer anim_player.deinit();
 
     // Register animations based on our fixtures
@@ -92,7 +108,7 @@ pub fn main() !void {
         .sprite_name = "idle_0001",
         .scale = 3.0, // Scale up the small sprites
     });
-    registry.add(player, gfx.Animation{
+    registry.add(player, Animation{
         .frame = 0,
         .total_frames = 4,
         .frame_duration = 0.15,
@@ -131,7 +147,7 @@ pub fn main() !void {
         });
     }
 
-    var current_anim: gfx.AnimationType = .idle;
+    var current_anim: AnimType = .idle;
     var flip_x = false;
     var frame_count: u32 = 0;
 
@@ -168,7 +184,7 @@ pub fn main() !void {
         }
 
         // Update animation type
-        var anim = registry.get(gfx.Animation, player);
+        var anim = registry.get(Animation, player);
         var render = registry.get(gfx.Render, player);
         render.flip_x = flip_x;
 

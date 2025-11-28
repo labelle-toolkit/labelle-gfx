@@ -2,7 +2,7 @@
 //!
 //! This example demonstrates:
 //! - Using render components with zig-ecs
-//! - Animation update system
+//! - Animation update system with custom animation types
 //! - Z-index layering
 //!
 //! Run with: zig build run-example-05
@@ -23,6 +23,19 @@ const Velocity = struct {
     dx: f32 = 0,
     dy: f32 = 0,
 };
+
+// Define animation types for this example
+const AnimType = enum {
+    idle,
+    walk,
+
+    pub fn toSpriteName(self: AnimType) []const u8 {
+        return @tagName(self);
+    }
+};
+
+// Create typed animation component
+const Animation = gfx.Animation(AnimType);
 
 pub fn main() !void {
     // CI test mode - hidden window, auto-screenshot and exit
@@ -90,7 +103,7 @@ pub fn main() !void {
         .sprite_name = "player",
         .tint = rl.Color.sky_blue,
     });
-    registry.add(player, gfx.Animation{
+    registry.add(player, Animation{
         .frame = 0,
         .total_frames = 4,
         .frame_duration = 0.2,
@@ -108,7 +121,7 @@ pub fn main() !void {
         .sprite_name = "enemy",
         .tint = rl.Color.red,
     });
-    registry.add(enemy1, gfx.Animation{
+    registry.add(enemy1, Animation{
         .frame = 0,
         .total_frames = 6,
         .frame_duration = 0.15,
@@ -153,7 +166,7 @@ pub fn main() !void {
         }
 
         // Update player animation based on movement
-        var player_anim = registry.get(gfx.Animation, player);
+        var player_anim = registry.get(Animation, player);
         if (player_vel.dx != 0) {
             if (player_anim.anim_type != .walk) {
                 player_anim.setAnimation(.walk, 6);
@@ -184,7 +197,7 @@ pub fn main() !void {
 
         // Update animations (simplified - just update known entities)
         player_anim.update(dt);
-        var enemy_anim = registry.get(gfx.Animation, enemy1);
+        var enemy_anim = registry.get(Animation, enemy1);
         enemy_anim.update(dt);
 
         // Rendering
@@ -218,7 +231,7 @@ pub fn main() !void {
             );
 
             // Show animation frame if entity has Animation
-            if (registry.tryGet(gfx.Animation, entity)) |anim| {
+            if (registry.tryGet(Animation, entity)) |anim| {
                 var frame_buf: [8]u8 = undefined;
                 const frame_str = std.fmt.bufPrintZ(&frame_buf, "{d}", .{anim.frame + 1}) catch "?";
                 rl.drawText(

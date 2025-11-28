@@ -1,7 +1,7 @@
 //! Example 02: Animation System
 //!
 //! This example demonstrates:
-//! - Creating and updating animations
+//! - Creating and updating animations with custom animation types
 //! - Animation types and transitions
 //! - Frame-based sprite animation
 //!
@@ -10,6 +10,22 @@
 const std = @import("std");
 const rl = @import("raylib");
 const gfx = @import("raylib-ecs-gfx");
+
+// Define animation types for this example
+const AnimType = enum {
+    idle,
+    walk,
+    run,
+    jump,
+
+    pub fn toSpriteName(self: AnimType) []const u8 {
+        return @tagName(self);
+    }
+};
+
+// Create typed animation player and component
+const AnimPlayer = gfx.AnimationPlayer(AnimType);
+const Animation = gfx.Animation(AnimType);
 
 pub fn main() !void {
     // CI test mode - hidden window, auto-screenshot and exit
@@ -29,7 +45,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Create animation player
-    var anim_player = gfx.AnimationPlayer.init(allocator);
+    var anim_player = AnimPlayer.init(allocator);
     defer anim_player.deinit();
 
     // Register animation types with their frame counts
@@ -42,7 +58,7 @@ pub fn main() !void {
     var animation = anim_player.createAnimation(.idle);
     animation.frame_duration = 0.15; // 150ms per frame
 
-    var current_type: gfx.AnimationType = .idle;
+    var current_type: AnimType = .idle;
     var sprite_buffer: [256]u8 = undefined;
     var frame_count: u32 = 0;
 
@@ -99,7 +115,6 @@ pub fn main() !void {
             .walk => rl.Color.green,
             .run => rl.Color.orange,
             .jump => rl.Color.yellow,
-            else => rl.Color.white,
         };
 
         rl.drawRectangle(center_x - 32, center_y - 32, 64, 64, frame_color);
@@ -127,7 +142,7 @@ pub fn main() !void {
         }
 
         // Instructions
-        rl.drawText("Animation Example", 10, 10, 20, rl.Color.white);
+        rl.drawText("Animation Example (Custom Types)", 10, 10, 20, rl.Color.white);
         rl.drawText("Press 1-4 to change animation:", 10, 40, 16, rl.Color.light_gray);
         rl.drawText("1: Idle (4 frames)", 10, 60, 16, rl.Color.sky_blue);
         rl.drawText("2: Walk (8 frames)", 10, 80, 16, rl.Color.green);

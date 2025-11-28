@@ -6,7 +6,7 @@
 //! ## Features
 //! - Sprite loading and rendering
 //! - TexturePacker atlas support (JSON format)
-//! - Animation system with customizable animation types
+//! - Generic animation system with user-defined animation types
 //! - Z-index based layer management
 //! - Camera abstraction with pan/zoom
 //! - ECS integration via render systems
@@ -16,21 +16,23 @@
 //! ```zig
 //! const gfx = @import("raylib-ecs-gfx");
 //!
-//! // Initialize renderer
-//! var renderer = gfx.Renderer.init(allocator);
-//! defer renderer.deinit();
+//! // Define your game's animation types
+//! const PlayerAnim = enum {
+//!     idle, walk, run, jump,
+//!     pub fn toSpriteName(self: @This()) []const u8 {
+//!         return @tagName(self);
+//!     }
+//! };
 //!
-//! // Load sprite atlas
-//! try renderer.loadAtlas("characters", "resources/characters.json");
+//! // Create typed animation player and component
+//! const PlayerAnimPlayer = gfx.AnimationPlayer(PlayerAnim);
+//! const PlayerAnimation = gfx.Animation(PlayerAnim);
 //!
-//! // Add render component to entity
-//! registry.add(entity, gfx.Render{
-//!     .z_index = 5,
-//!     .sprite_name = "player_idle",
-//! });
+//! var anim_player = PlayerAnimPlayer.init(allocator);
+//! try anim_player.registerAnimation(.idle, 4);
 //!
-//! // In game loop, use the render system
-//! gfx.systems.spriteRenderSystem(registry, &renderer);
+//! // Or use the default animation types
+//! var default_player = gfx.DefaultAnimationPlayer.init(allocator);
 //! ```
 
 const std = @import("std");
@@ -41,13 +43,23 @@ pub const ecs = @import("ecs");
 pub const components = @import("components/components.zig");
 pub const Render = components.Render;
 pub const SpriteLocation = components.SpriteLocation;
+
+// Generic animation types - users provide their own enum
 pub const Animation = components.Animation;
-pub const AnimationType = components.AnimationType;
 pub const AnimationsArray = components.AnimationsArray;
 
-// Animation exports
+// Default animation types for convenience
+pub const DefaultAnimationType = components.DefaultAnimationType;
+pub const DefaultAnimation = components.DefaultAnimation;
+pub const DefaultAnimationsArray = components.DefaultAnimationsArray;
+
+// Legacy alias (deprecated)
+pub const AnimationType = components.AnimationType;
+
+// Animation player exports
 pub const animation = @import("animation/animation.zig");
 pub const AnimationPlayer = animation.AnimationPlayer;
+pub const DefaultAnimationPlayer = animation.DefaultAnimationPlayer;
 
 // Renderer exports
 pub const renderer = @import("renderer/renderer.zig");
