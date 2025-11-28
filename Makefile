@@ -47,7 +47,7 @@ run-nested-animations: run-08
 run-all: run-01 run-02 run-03 run-04 run-05 run-06 run-07 run-08
 
 help:
-	@echo "raylib-ecs-gfx Makefile"
+	@echo "labelle Makefile"
 	@echo ""
 	@echo "Usage:"
 	@echo "  make build              - Build the library"

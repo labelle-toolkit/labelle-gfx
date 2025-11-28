@@ -1,7 +1,7 @@
 .{
-    .name = .raylib_ecs_gfx,
+    .name = .labelle,
     .version = "0.1.0",
-    .fingerprint = 0x6380a64bbf05e307,
+    .fingerprint = 0x48858534228fb5d9,
     .minimum_zig_version = "0.15.1",
 
     .dependencies = .{

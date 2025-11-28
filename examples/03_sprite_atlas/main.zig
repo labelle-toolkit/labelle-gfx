@@ -9,7 +9,7 @@
 
 const std = @import("std");
 const rl = @import("raylib");
-const gfx = @import("raylib-ecs-gfx");
+const gfx = @import("labelle");
 
 pub fn main() !void {
     // CI test mode - hidden window, auto-screenshot and exit

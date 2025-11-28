@@ -11,10 +11,10 @@ This example demonstrates loading actual TexturePacker sprite atlases and render
 
 ## Running the Example
 
-First, make sure you're in the raylib-ecs-gfx directory:
+First, make sure you're in the labelle directory:
 
 ```bash
-cd raylib-ecs-gfx
+cd labelle
 zig build run-example-07
 ```
 

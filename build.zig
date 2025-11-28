@@ -25,7 +25,7 @@ pub fn build(b: *std.Build) void {
     const zspec = zspec_dep.module("zspec");
 
     // Main library module
-    const lib_mod = b.addModule("raylib-ecs-gfx", .{
+    const lib_mod = b.addModule("labelle", .{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
@@ -38,7 +38,7 @@ pub fn build(b: *std.Build) void {
     // Static library for linking
     const lib = b.addLibrary(.{
         .linkage = .static,
-        .name = "raylib-ecs-gfx",
+        .name = "labelle",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/lib.zig"),
             .target = target,
@@ -72,7 +72,7 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "raylib-ecs-gfx", .module = lib_mod },
+                    .{ .name = "labelle", .module = lib_mod },
                     .{ .name = "raylib", .module = raylib },
                     .{ .name = "ecs", .module = ecs },
                 },
@@ -98,7 +98,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "raylib-ecs-gfx", .module = lib_mod },
+                .{ .name = "labelle", .module = lib_mod },
                 .{ .name = "raylib", .module = raylib },
                 .{ .name = "ecs", .module = ecs },
                 .{ .name = "zspec", .module = zspec },

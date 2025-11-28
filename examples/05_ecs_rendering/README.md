@@ -31,7 +31,7 @@ const player = registry.create();
 // Position (your game component)
 registry.add(player, Position{ .x = 400, .y = 300 });
 
-// Render component from raylib-ecs-gfx
+// Render component from labelle
 registry.add(player, gfx.Render{
     .z_index = gfx.ZIndex.characters,
     .sprite_name = "player_idle",
@@ -95,7 +95,7 @@ render.flip_x = moving_left;
 ## Architecture
 
 ```
-Game Code                    raylib-ecs-gfx
+Game Code                    labelle
 ─────────────────           ─────────────────
 Position component    ──►   Render component
 Velocity component          Animation component

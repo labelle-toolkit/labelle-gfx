@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const zspec = @import("zspec");
-const gfx = @import("raylib-ecs-gfx");
+const gfx = @import("labelle");
 
 const expect = zspec.expect;
 

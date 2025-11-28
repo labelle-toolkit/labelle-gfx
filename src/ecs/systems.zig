@@ -8,16 +8,10 @@ const ecs = @import("ecs");
 
 const components = @import("../components/components.zig");
 const Render = components.Render;
+const Position = components.Position;
 
 const Renderer = @import("../renderer/renderer.zig").Renderer;
 const animation_mod = @import("../animation/animation.zig");
-
-/// Position component (expected from game code)
-/// Games should define their own Position component with at least x, y fields
-pub const Position = struct {
-    x: f32 = 0,
-    y: f32 = 0,
-};
 
 /// Render all entities with Position and Render components
 /// Sorts by z_index for proper layering
@@ -30,24 +24,25 @@ pub fn spriteRenderSystem(
     var view = registry.view(.{ PositionType, Render }, .{});
 
     // Collect entities for sorting
-    var entities = std.ArrayList(struct {
-        entity: ecs.Registry.Entity,
+    const EntitySort = struct {
+        entity: ecs.Entity,
         z_index: u8,
-    }).init(renderer.allocator);
-    defer entities.deinit();
+    };
+    var entities: std.ArrayList(EntitySort) = .empty;
+    defer entities.deinit(renderer.allocator);
 
     var iter = @TypeOf(view).Iterator.init(&view);
     while (iter.next()) |entity| {
         const render = view.getConst(Render, entity);
-        entities.append(.{
+        entities.append(renderer.allocator, .{
             .entity = entity,
             .z_index = render.z_index,
         }) catch continue;
     }
 
     // Sort by z_index
-    std.mem.sort(@TypeOf(entities.items[0]), entities.items, {}, struct {
-        fn lessThan(_: void, a: anytype, b: anytype) bool {
+    std.mem.sort(EntitySort, entities.items, {}, struct {
+        fn lessThan(_: void, a: EntitySort, b: EntitySort) bool {
             return a.z_index < b.z_index;
         }
     }.lessThan);
@@ -82,7 +77,7 @@ pub fn animationUpdateSystem(
     dt: f32,
 ) void {
     var view = registry.view(.{AnimationType}, .{});
-    var iter = view.iterator();
+    var iter = @TypeOf(view).Iterator.init(&view);
 
     while (iter.next()) |entity| {
         var anim = view.get(AnimationType, entity);
@@ -94,7 +89,7 @@ pub fn animationUpdateSystem(
 /// This system updates the Render component's sprite_name based on Animation state
 pub fn animationSpriteUpdateSystem(
     comptime AnimationType: type,
-    comptime sprite_prefix_fn: fn (ecs.Registry.Entity, *ecs.Registry) []const u8,
+    comptime sprite_prefix_fn: fn (ecs.Entity, *ecs.Registry) []const u8,
     registry: *ecs.Registry,
     sprite_name_buffer: []u8,
 ) void {

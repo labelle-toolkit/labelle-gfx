@@ -1,6 +1,6 @@
 # Example 01: Basic Sprite Rendering
 
-This example demonstrates the fundamentals of sprite rendering with raylib-ecs-gfx.
+This example demonstrates the fundamentals of sprite rendering with labelle.
 
 ## What You'll Learn
 

@@ -1,21 +1,17 @@
-//! Example 06: Visual Effects
+//! Example 06: Visual Effects with Engine API
 //!
 //! This example demonstrates:
 //! - Fade effects (fade in/out)
 //! - Temporal fade (time-of-day)
 //! - Flash effects
+//! - Using Engine API for effect management
 //!
 //! Run with: zig build run-example-06
 
 const std = @import("std");
 const rl = @import("raylib");
 const ecs = @import("ecs");
-const gfx = @import("raylib-ecs-gfx");
-
-const Position = struct {
-    x: f32 = 0,
-    y: f32 = 0,
-};
+const gfx = @import("labelle");
 
 pub fn main() !void {
     // CI test mode - hidden window, auto-screenshot and exit
@@ -25,7 +21,7 @@ pub fn main() !void {
     }
 
     // Initialize raylib
-    rl.initWindow(800, 600, "Example 06: Visual Effects");
+    rl.initWindow(800, 600, "Example 06: Visual Effects with Engine");
     defer rl.closeWindow();
     rl.setTargetFPS(60);
 
@@ -38,14 +34,18 @@ pub fn main() !void {
     var registry = ecs.Registry.init(allocator);
     defer registry.deinit();
 
-    // Create entities for different effects
+    // Initialize Engine
+    var engine = try gfx.Engine.init(allocator, &registry, .{});
+    defer engine.deinit();
+
+    // Create entities for different effects using gfx.Position and gfx.Sprite
 
     // 1. Fade In entity
     const fade_in_entity = registry.create();
-    registry.add(fade_in_entity, Position{ .x = 150, .y = 200 });
-    registry.add(fade_in_entity, gfx.Render{
+    registry.add(fade_in_entity, gfx.Position{ .x = 150, .y = 200 });
+    registry.add(fade_in_entity, gfx.Sprite{
+        .name = "fade_in",
         .z_index = 10,
-        .sprite_name = "fade_in",
         .tint = rl.Color{ .r = 100, .g = 200, .b = 100, .a = 0 },
     });
     registry.add(fade_in_entity, gfx.effects.Fade{
@@ -56,10 +56,10 @@ pub fn main() !void {
 
     // 2. Fade Out entity
     const fade_out_entity = registry.create();
-    registry.add(fade_out_entity, Position{ .x = 350, .y = 200 });
-    registry.add(fade_out_entity, gfx.Render{
+    registry.add(fade_out_entity, gfx.Position{ .x = 350, .y = 200 });
+    registry.add(fade_out_entity, gfx.Sprite{
+        .name = "fade_out",
         .z_index = 10,
-        .sprite_name = "fade_out",
         .tint = rl.Color{ .r = 200, .g = 100, .b = 100, .a = 255 },
     });
     registry.add(fade_out_entity, gfx.effects.Fade{
@@ -70,10 +70,10 @@ pub fn main() !void {
 
     // 3. Temporal fade entity (day/night cycle)
     const temporal_entity = registry.create();
-    registry.add(temporal_entity, Position{ .x = 550, .y = 200 });
-    registry.add(temporal_entity, gfx.Render{
+    registry.add(temporal_entity, gfx.Position{ .x = 550, .y = 200 });
+    registry.add(temporal_entity, gfx.Sprite{
+        .name = "temporal",
         .z_index = 10,
-        .sprite_name = "temporal",
         .tint = rl.Color.yellow,
     });
     registry.add(temporal_entity, gfx.effects.TemporalFade{
@@ -84,10 +84,10 @@ pub fn main() !void {
 
     // 4. Flash entity
     const flash_entity = registry.create();
-    registry.add(flash_entity, Position{ .x = 400, .y = 400 });
-    registry.add(flash_entity, gfx.Render{
+    registry.add(flash_entity, gfx.Position{ .x = 400, .y = 400 });
+    registry.add(flash_entity, gfx.Sprite{
+        .name = "flash",
         .z_index = 10,
-        .sprite_name = "flash",
         .tint = rl.Color.blue,
     });
 
@@ -110,6 +110,9 @@ pub fn main() !void {
         game_hour += time_speed * dt;
         if (game_hour >= 24.0) game_hour -= 24.0;
 
+        // Set engine's game hour for temporal effects
+        engine.setGameHour(game_hour);
+
         // Time controls
         if (rl.isKeyDown(rl.KeyboardKey.up)) {
             time_speed = @min(10.0, time_speed + 1.0 * dt);
@@ -125,8 +128,8 @@ pub fn main() !void {
                 fade.alpha = 0;
                 fade.target_alpha = 1.0;
             }
-            if (registry.tryGet(gfx.Render, fade_in_entity)) |render| {
-                render.tint.a = 0;
+            if (registry.tryGet(gfx.Sprite, fade_in_entity)) |sprite| {
+                sprite.tint.a = 0;
             }
 
             // Reset fade out
@@ -134,15 +137,15 @@ pub fn main() !void {
                 fade.alpha = 1.0;
                 fade.target_alpha = 0.0;
             }
-            if (registry.tryGet(gfx.Render, fade_out_entity)) |render| {
-                render.tint.a = 255;
+            if (registry.tryGet(gfx.Sprite, fade_out_entity)) |sprite| {
+                sprite.tint.a = 255;
             }
         }
 
         // Trigger flash with F
         if (rl.isKeyPressed(rl.KeyboardKey.f)) {
             // Store original tint
-            const original = if (registry.tryGet(gfx.Render, flash_entity)) |r| r.tint else rl.Color.blue;
+            const original = if (registry.tryGet(gfx.Sprite, flash_entity)) |s| s.tint else rl.Color.blue;
 
             // Add or reset flash component
             if (registry.has(gfx.effects.Flash, flash_entity)) {
@@ -156,31 +159,29 @@ pub fn main() !void {
             });
         }
 
-        // Update effect systems
-        gfx.effects.fadeUpdateSystem(&registry, dt);
-        gfx.effects.temporalFadeSystem(&registry, game_hour);
-        gfx.effects.flashUpdateSystem(&registry, dt);
-
         // Rendering
         rl.beginDrawing();
         defer rl.endDrawing();
 
         rl.clearBackground(rl.Color.dark_gray);
 
-        // Draw entities (placeholder rectangles)
+        // Engine handles all rendering and effect updates
+        engine.render(dt);
+
+        // Draw placeholder rectangles (since we don't have actual textures)
         {
-            var view = registry.view(.{ Position, gfx.Render }, .{});
+            var view = registry.view(.{ gfx.Position, gfx.Sprite }, .{});
             var iter = @TypeOf(view).Iterator.init(&view);
             while (iter.next()) |entity| {
-                const pos = view.getConst(Position, entity);
-                const render = view.getConst(gfx.Render, entity);
+                const pos = view.getConst(gfx.Position, entity);
+                const sprite = view.getConst(gfx.Sprite, entity);
 
                 rl.drawRectangle(
                     @intFromFloat(pos.x - 40),
                     @intFromFloat(pos.y - 40),
                     80,
                     80,
-                    render.tint,
+                    sprite.tint,
                 );
                 rl.drawRectangleLines(
                     @intFromFloat(pos.x - 40),
@@ -211,7 +212,7 @@ pub fn main() !void {
         }
 
         // UI
-        rl.drawText("Visual Effects Example", 10, 10, 20, rl.Color.white);
+        rl.drawText("Visual Effects with Engine API", 10, 10, 20, rl.Color.white);
         rl.drawText("R: Reset fades | F: Trigger flash | Up/Down: Time speed", 10, 40, 14, rl.Color.light_gray);
 
         // Time display

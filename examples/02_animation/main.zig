@@ -9,22 +9,25 @@
 
 const std = @import("std");
 const rl = @import("raylib");
-const gfx = @import("raylib-ecs-gfx");
+const gfx = @import("labelle");
 
-// Define animation types for this example
+// Define animation types for this example with config
 const AnimType = enum {
     idle,
     walk,
     run,
     jump,
 
-    pub fn toSpriteName(self: AnimType) []const u8 {
-        return @tagName(self);
+    pub fn config(self: AnimType) gfx.AnimConfig {
+        return switch (self) {
+            .idle => .{ .frames = 4, .frame_duration = 0.15 },
+            .walk => .{ .frames = 8, .frame_duration = 0.1 },
+            .run => .{ .frames = 6, .frame_duration = 0.08 },
+            .jump => .{ .frames = 4, .frame_duration = 0.12, .looping = false },
+        };
     }
 };
 
-// Create typed animation player and component
-const AnimPlayer = gfx.AnimationPlayer(AnimType);
 const Animation = gfx.Animation(AnimType);
 
 pub fn main() !void {
@@ -39,24 +42,8 @@ pub fn main() !void {
     defer rl.closeWindow();
     rl.setTargetFPS(60);
 
-    // Initialize allocator
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    // Create animation player
-    var anim_player = AnimPlayer.init(allocator);
-    defer anim_player.deinit();
-
-    // Register animation types with their frame counts
-    try anim_player.registerAnimation(.idle, 4);
-    try anim_player.registerAnimation(.walk, 8);
-    try anim_player.registerAnimation(.run, 6);
-    try anim_player.registerAnimation(.jump, 4);
-
-    // Create an animation
-    var animation = anim_player.createAnimation(.idle);
-    animation.frame_duration = 0.15; // 150ms per frame
+    // Create an animation (config comes from enum - no AnimPlayer needed)
+    var animation = Animation.init(.idle);
 
     var current_type: AnimType = .idle;
     var sprite_buffer: [256]u8 = undefined;
@@ -74,31 +61,26 @@ pub fn main() !void {
         // Handle input for animation switching
         if (rl.isKeyPressed(rl.KeyboardKey.one)) {
             current_type = .idle;
-            anim_player.transitionTo(&animation, .idle);
+            animation.play(.idle);
         }
         if (rl.isKeyPressed(rl.KeyboardKey.two)) {
             current_type = .walk;
-            anim_player.transitionTo(&animation, .walk);
+            animation.play(.walk);
         }
         if (rl.isKeyPressed(rl.KeyboardKey.three)) {
             current_type = .run;
-            anim_player.transitionTo(&animation, .run);
+            animation.play(.run);
         }
         if (rl.isKeyPressed(rl.KeyboardKey.four)) {
             current_type = .jump;
-            anim_player.transitionTo(&animation, .jump);
+            animation.play(.jump);
         }
 
         // Update animation
         animation.update(dt);
 
         // Generate sprite name
-        const sprite_name = gfx.animation.generateSpriteName(
-            &sprite_buffer,
-            "player",
-            animation.anim_type,
-            animation.frame,
-        );
+        const sprite_name = animation.getSpriteName("player", &sprite_buffer);
 
         rl.beginDrawing();
         defer rl.endDrawing();
@@ -122,9 +104,10 @@ pub fn main() !void {
 
         // Draw frame number
         var frame_text: [32]u8 = undefined;
+        const cfg = animation.getConfig();
         const frame_str = std.fmt.bufPrintZ(&frame_text, "Frame: {d}/{d}", .{
             animation.frame + 1,
-            animation.total_frames,
+            cfg.frames,
         }) catch "?";
         rl.drawText(frame_str, center_x - 40, center_y + 50, 20, rl.Color.white);
 
@@ -134,8 +117,8 @@ pub fn main() !void {
         rl.drawText(sprite_z, center_x - 60, center_y + 80, 16, rl.Color.light_gray);
 
         // Draw frame indicators
-        const indicator_start_x = center_x - @as(i32, @intCast(animation.total_frames)) * 10;
-        for (0..animation.total_frames) |i| {
+        const indicator_start_x = center_x - @as(i32, @intCast(cfg.frames)) * 10;
+        for (0..cfg.frames) |i| {
             const x = indicator_start_x + @as(i32, @intCast(i)) * 20;
             const color = if (i == animation.frame) rl.Color.white else rl.Color.gray;
             rl.drawRectangle(x, center_y + 120, 16, 16, color);
@@ -153,7 +136,7 @@ pub fn main() !void {
         // Current animation info
         var anim_text: [64]u8 = undefined;
         const anim_str = std.fmt.bufPrintZ(&anim_text, "Current: {s}", .{
-            current_type.toSpriteName(),
+            @tagName(current_type),
         }) catch "?";
         rl.drawText(anim_str, 10, 180, 16, rl.Color.white);
     }

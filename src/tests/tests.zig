@@ -1,4 +1,4 @@
-//! Test entry point for raylib-ecs-gfx
+//! Test entry point for labelle
 //!
 //! Run tests with: zig build test
 
