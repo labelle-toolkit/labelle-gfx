@@ -129,7 +129,8 @@ pub fn main() !void {
     while (!rl.windowShouldClose()) {
         frame_count += 1;
         if (ci_test) {
-            if (frame_count == 30) rl.takeScreenshot("screenshot_08.png");
+            // INTENTIONAL: Skip screenshot to test CI failure detection
+            // if (frame_count == 30) rl.takeScreenshot("screenshot_08.png");
             if (frame_count == 35) break;
         }
         const dt = rl.getFrameTime();
