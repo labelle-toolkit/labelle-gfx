@@ -137,22 +137,22 @@ pub fn main() !void {
         // Keyboard input to switch animations
         if (rl.isKeyPressed(rl.KeyboardKey.one)) {
             wizard_anim = .wizard_drink;
-            var anim = registry.get(Animation, wizard);
+            const anim = registry.get(Animation, wizard);
             anim_player.transitionTo(anim, wizard_anim);
         }
         if (rl.isKeyPressed(rl.KeyboardKey.two)) {
             wizard_anim = .wizard_cast;
-            var anim = registry.get(Animation, wizard);
+            const anim = registry.get(Animation, wizard);
             anim_player.transitionTo(anim, wizard_anim);
         }
         if (rl.isKeyPressed(rl.KeyboardKey.three)) {
             thief_anim = .thief_attack;
-            var anim = registry.get(Animation, thief);
+            const anim = registry.get(Animation, thief);
             anim_player.transitionTo(anim, thief_anim);
         }
         if (rl.isKeyPressed(rl.KeyboardKey.four)) {
             thief_anim = .thief_sneak;
-            var anim = registry.get(Animation, thief);
+            const anim = registry.get(Animation, thief);
             anim_player.transitionTo(anim, thief_anim);
         }
 
