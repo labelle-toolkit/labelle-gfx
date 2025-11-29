@@ -60,10 +60,8 @@ pub const ColorHelpers = struct {
 };
 
 /// Position component for entity world position
-pub const Position = struct {
-    x: f32 = 0,
-    y: f32 = 0,
-};
+/// Uses Vector2 from zig-utils for rich vector math operations
+pub const Position = @import("zig_utils").Vector2;
 
 /// Animation configuration - defines frame count and timing
 pub const AnimConfig = struct {

@@ -5,6 +5,9 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // Dependencies
+    const zig_utils_dep = b.dependency("zig_utils", .{});
+    const zig_utils = zig_utils_dep.module("zig_utils");
+
     const raylib_dep = b.dependency("raylib_zig", .{
         .target = target,
         .optimize = optimize,
@@ -37,6 +40,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "zig_utils", .module = zig_utils },
             .{ .name = "raylib", .module = raylib },
             .{ .name = "ecs", .module = ecs },
             .{ .name = "sokol", .module = sokol },
@@ -52,6 +56,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
+                .{ .name = "zig_utils", .module = zig_utils },
                 .{ .name = "raylib", .module = raylib },
                 .{ .name = "ecs", .module = ecs },
                 .{ .name = "sokol", .module = sokol },
