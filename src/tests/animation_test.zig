@@ -409,6 +409,94 @@ pub const InitTests = struct {
     }
 };
 
+// ============================================================================
+// Sprite Variant Tests
+// ============================================================================
+
+pub const SpriteVariantTests = struct {
+    test "initWithVariant sets sprite_variant" {
+        const anim = TestAnimation.initWithVariant(.spell_cast, "m_bald");
+
+        try expect.equal(anim.anim_type, .spell_cast);
+        try expect.toBeTrue(std.mem.eql(u8, anim.sprite_variant, "m_bald"));
+        try expect.toBeTrue(anim.playing);
+    }
+
+    test "default sprite_variant is empty" {
+        const anim = TestAnimation.init(.spell_cast);
+        try expect.toBeTrue(std.mem.eql(u8, anim.sprite_variant, ""));
+    }
+
+    test "getSpriteNameWithVariant uses entity variant" {
+        var anim = TestAnimation.initWithVariant(.spell_cast, "m_bald");
+        anim.frame = 0;
+
+        var buffer: [64]u8 = undefined;
+        const name = anim.getSpriteNameWithVariant(&buffer, struct {
+            pub fn format(anim_name: []const u8, variant: []const u8, frame: u32, buf: []u8) []const u8 {
+                return std.fmt.bufPrint(buf, "{s}/{s}_{d:0>4}.png", .{
+                    anim_name,
+                    variant,
+                    frame,
+                }) catch return "";
+            }
+        }.format);
+        try expect.toBeTrue(std.mem.eql(u8, name, "spell_cast/m_bald_0001.png"));
+    }
+
+    test "getSpriteNameWithVariant with different variants" {
+        var buffer: [64]u8 = undefined;
+
+        // Player variant
+        var player_anim = gfx.DefaultAnimation.initWithVariant(.walk, "m_bald");
+        player_anim.frame = 2;
+        const player_name = player_anim.getSpriteNameWithVariant(&buffer, struct {
+            pub fn format(anim_name: []const u8, variant: []const u8, frame: u32, buf: []u8) []const u8 {
+                return std.fmt.bufPrint(buf, "{s}/{s}_{d:0>4}.png", .{
+                    anim_name,
+                    variant,
+                    frame,
+                }) catch return "";
+            }
+        }.format);
+        try expect.toBeTrue(std.mem.eql(u8, player_name, "walk/m_bald_0003.png"));
+
+        // NPC variant
+        var npc_anim = gfx.DefaultAnimation.initWithVariant(.walk, "w_blonde");
+        npc_anim.frame = 2;
+        const npc_name = npc_anim.getSpriteNameWithVariant(&buffer, struct {
+            pub fn format(anim_name: []const u8, variant: []const u8, frame: u32, buf: []u8) []const u8 {
+                return std.fmt.bufPrint(buf, "{s}/{s}_{d:0>4}.png", .{
+                    anim_name,
+                    variant,
+                    frame,
+                }) catch return "";
+            }
+        }.format);
+        try expect.toBeTrue(std.mem.eql(u8, npc_name, "walk/w_blonde_0003.png"));
+    }
+
+    test "sprite_variant can be changed at runtime" {
+        var anim = TestAnimation.initWithVariant(.spell_cast, "m_bald");
+        try expect.toBeTrue(std.mem.eql(u8, anim.sprite_variant, "m_bald"));
+
+        anim.sprite_variant = "thief";
+        try expect.toBeTrue(std.mem.eql(u8, anim.sprite_variant, "thief"));
+
+        var buffer: [64]u8 = undefined;
+        const name = anim.getSpriteNameWithVariant(&buffer, struct {
+            pub fn format(anim_name: []const u8, variant: []const u8, frame: u32, buf: []u8) []const u8 {
+                return std.fmt.bufPrint(buf, "{s}/{s}_{d:0>4}.png", .{
+                    anim_name,
+                    variant,
+                    frame,
+                }) catch return "";
+            }
+        }.format);
+        try expect.toBeTrue(std.mem.eql(u8, name, "spell_cast/thief_0001.png"));
+    }
+};
+
 // Entry point for zspec
 comptime {
     _ = zspec.runAll(@This());
