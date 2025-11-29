@@ -9,7 +9,6 @@
 //! Run with: zig build run-example-08
 
 const std = @import("std");
-const rl = @import("raylib");
 const ecs = @import("ecs");
 const gfx = @import("labelle");
 
@@ -54,14 +53,6 @@ const Animation = gfx.Animation(PartyAnim);
 pub fn main() !void {
     // CI test mode - hidden window, auto-screenshot and exit
     const ci_test = std.posix.getenv("CI_TEST") != null;
-    if (ci_test) {
-        rl.setConfigFlags(.{ .window_hidden = true });
-    }
-
-    // Initialize raylib
-    rl.initWindow(800, 600, "Example 08: Nested Animations with Engine");
-    defer rl.closeWindow();
-    rl.setTargetFPS(60);
 
     // Initialize allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -72,8 +63,16 @@ pub fn main() !void {
     var registry = ecs.Registry.init(allocator);
     defer registry.deinit();
 
-    // Initialize Engine with party atlas
+    // Initialize Engine with window management and party atlas
     var engine = gfx.Engine.init(allocator, &registry, .{
+        .window = .{
+            .width = 800,
+            .height = 600,
+            .title = "Example 08: Nested Animations with Engine",
+            .target_fps = 60,
+            .flags = .{ .window_hidden = ci_test },
+        },
+        .clear_color = gfx.Color.rgba(30, 35, 45, 255),
         .atlases = &.{
             .{ .name = "party", .json = "fixtures/output/party.json", .texture = "fixtures/output/party.png" },
         },
@@ -109,41 +108,39 @@ pub fn main() !void {
     var frame_count: u32 = 0;
 
     // Main loop
-    while (!rl.windowShouldClose()) {
+    while (engine.isRunning()) {
         frame_count += 1;
         if (ci_test) {
-            if (frame_count == 30) rl.takeScreenshot("screenshot_08.png");
+            if (frame_count == 30) engine.takeScreenshot("screenshot_08.png");
             if (frame_count == 35) break;
         }
-        const dt = rl.getFrameTime();
+        const dt = engine.getDeltaTime();
 
-        // Keyboard input to switch animations
-        if (rl.isKeyPressed(rl.KeyboardKey.one)) {
+        // Keyboard input to switch animations using engine.input
+        if (gfx.Engine.Input.isPressed(.one)) {
             wizard_anim_type = .wizard_drink;
             var anim = registry.get(Animation, wizard);
             anim.play(wizard_anim_type);
         }
-        if (rl.isKeyPressed(rl.KeyboardKey.two)) {
+        if (gfx.Engine.Input.isPressed(.two)) {
             wizard_anim_type = .wizard_cast;
             var anim = registry.get(Animation, wizard);
             anim.play(wizard_anim_type);
         }
-        if (rl.isKeyPressed(rl.KeyboardKey.three)) {
+        if (gfx.Engine.Input.isPressed(.three)) {
             thief_anim_type = .thief_attack;
             var anim = registry.get(Animation, thief);
             anim.play(thief_anim_type);
         }
-        if (rl.isKeyPressed(rl.KeyboardKey.four)) {
+        if (gfx.Engine.Input.isPressed(.four)) {
             thief_anim_type = .thief_sneak;
             var anim = registry.get(Animation, thief);
             anim.play(thief_anim_type);
         }
 
         // Rendering
-        rl.beginDrawing();
-        defer rl.endDrawing();
-
-        rl.clearBackground(rl.Color{ .r = 30, .g = 35, .b = 45, .a = 255 });
+        engine.beginFrame();
+        defer engine.endFrame();
 
         // Engine handles static sprites, effects, and camera
         engine.render(dt);
@@ -176,49 +173,49 @@ pub fn main() !void {
         }
 
         // UI - Title
-        rl.drawText("Nested Animations with Engine API", 10, 10, 24, rl.Color.white);
-        rl.drawText("Sprite paths like 'wizard/drink_0001', 'thief/attack_0003'", 10, 40, 16, rl.Color.light_gray);
+        gfx.Engine.UI.text("Nested Animations with Engine API", .{ .x = 10, .y = 10, .size = 24, .color = gfx.Color.white });
+        gfx.Engine.UI.text("Sprite paths like 'wizard/drink_0001', 'thief/attack_0003'", .{ .x = 10, .y = 40, .size = 16, .color = gfx.Color.light_gray });
 
         // Instructions
-        rl.drawText("Press 1-4 to change animations:", 10, 80, 18, rl.Color.sky_blue);
-        rl.drawText("1: Wizard Drink (11 frames)", 30, 105, 14, rl.Color.white);
-        rl.drawText("2: Wizard Cast (4 frames)", 30, 125, 14, rl.Color.white);
-        rl.drawText("3: Thief Attack (8 frames)", 30, 145, 14, rl.Color.white);
-        rl.drawText("4: Thief Sneak (6 frames)", 30, 165, 14, rl.Color.white);
+        gfx.Engine.UI.text("Press 1-4 to change animations:", .{ .x = 10, .y = 80, .size = 18, .color = gfx.Color.sky_blue });
+        gfx.Engine.UI.text("1: Wizard Drink (11 frames)", .{ .x = 30, .y = 105, .size = 14, .color = gfx.Color.white });
+        gfx.Engine.UI.text("2: Wizard Cast (4 frames)", .{ .x = 30, .y = 125, .size = 14, .color = gfx.Color.white });
+        gfx.Engine.UI.text("3: Thief Attack (8 frames)", .{ .x = 30, .y = 145, .size = 14, .color = gfx.Color.white });
+        gfx.Engine.UI.text("4: Thief Sneak (6 frames)", .{ .x = 30, .y = 165, .size = 14, .color = gfx.Color.white });
 
         // Character labels
-        rl.drawText("WIZARD", 210, 200, 20, rl.Color{ .r = 100, .g = 100, .b = 255, .a = 255 });
-        rl.drawText("THIEF", 520, 200, 20, rl.Color{ .r = 100, .g = 255, .b = 100, .a = 255 });
+        gfx.Engine.UI.text("WIZARD", .{ .x = 210, .y = 200, .size = 20, .color = gfx.Color.rgba(100, 100, 255, 255) });
+        gfx.Engine.UI.text("THIEF", .{ .x = 520, .y = 200, .size = 20, .color = gfx.Color.rgba(100, 255, 100, 255) });
 
         // Current animation info
         const wizard_a = registry.getConst(Animation, wizard);
         const thief_a = registry.getConst(Animation, thief);
 
-        var wizard_buf: [64:0]u8 = undefined;
+        var wizard_buf: [64]u8 = undefined;
         const wizard_cfg = wizard_a.getConfig();
-        _ = std.fmt.bufPrintZ(&wizard_buf, "{s}: {d}/{d}", .{
+        const wizard_str = std.fmt.bufPrintZ(&wizard_buf, "{s}: {d}/{d}", .{
             wizard_anim_type.displayName(),
             wizard_a.frame + 1,
             wizard_cfg.frames,
         }) catch "?";
-        rl.drawText(&wizard_buf, 180, 420, 14, rl.Color.white);
+        gfx.Engine.UI.text(wizard_str, .{ .x = 180, .y = 420, .size = 14, .color = gfx.Color.white });
 
-        var thief_buf: [64:0]u8 = undefined;
+        var thief_buf: [64]u8 = undefined;
         const thief_cfg = thief_a.getConfig();
-        _ = std.fmt.bufPrintZ(&thief_buf, "{s}: {d}/{d}", .{
+        const thief_str = std.fmt.bufPrintZ(&thief_buf, "{s}: {d}/{d}", .{
             thief_anim_type.displayName(),
             thief_a.frame + 1,
             thief_cfg.frames,
         }) catch "?";
-        rl.drawText(&thief_buf, 480, 420, 14, rl.Color.white);
+        gfx.Engine.UI.text(thief_str, .{ .x = 480, .y = 420, .size = 14, .color = gfx.Color.white });
 
         // Code example
-        rl.drawText("Code:", 10, 480, 16, rl.Color.yellow);
-        rl.drawText("pub fn toSpritePath(self) []const u8 {", 10, 500, 12, rl.Color.light_gray);
-        rl.drawText("    .wizard_drink => \"wizard/drink\",", 10, 515, 12, rl.Color.light_gray);
-        rl.drawText("    .thief_attack => \"thief/attack\",", 10, 530, 12, rl.Color.light_gray);
-        rl.drawText("}", 10, 545, 12, rl.Color.light_gray);
+        gfx.Engine.UI.text("Code:", .{ .x = 10, .y = 480, .size = 16, .color = gfx.Color.yellow });
+        gfx.Engine.UI.text("pub fn toSpritePath(self) []const u8 {", .{ .x = 10, .y = 500, .size = 12, .color = gfx.Color.light_gray });
+        gfx.Engine.UI.text("    .wizard_drink => \"wizard/drink\",", .{ .x = 10, .y = 515, .size = 12, .color = gfx.Color.light_gray });
+        gfx.Engine.UI.text("    .thief_attack => \"thief/attack\",", .{ .x = 10, .y = 530, .size = 12, .color = gfx.Color.light_gray });
+        gfx.Engine.UI.text("}", .{ .x = 10, .y = 545, .size = 12, .color = gfx.Color.light_gray });
 
-        rl.drawText("ESC: Exit", 10, 580, 14, rl.Color.dark_gray);
+        gfx.Engine.UI.text("ESC: Exit", .{ .x = 10, .y = 580, .size = 14, .color = gfx.Color.dark_gray });
     }
 }

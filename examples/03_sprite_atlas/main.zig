@@ -1,6 +1,7 @@
 //! Example 03: Sprite Atlas Loading
 //!
 //! This example demonstrates:
+//! - Using Engine with window management
 //! - Loading TexturePacker JSON atlases
 //! - Managing multiple atlases
 //! - Querying sprite data
@@ -8,43 +9,42 @@
 //! Run with: zig build run-example-03
 
 const std = @import("std");
-const rl = @import("raylib");
+const ecs = @import("ecs");
 const gfx = @import("labelle");
 
 pub fn main() !void {
     // CI test mode - hidden window, auto-screenshot and exit
     const ci_test = std.posix.getenv("CI_TEST") != null;
-    if (ci_test) {
-        rl.setConfigFlags(.{ .window_hidden = true });
-    }
-
-    // Initialize raylib
-    rl.initWindow(800, 600, "Example 03: Sprite Atlas");
-    defer rl.closeWindow();
-    rl.setTargetFPS(60);
 
     // Initialize allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Initialize texture manager
-    var texture_manager = gfx.TextureManager.init(allocator);
-    defer texture_manager.deinit();
+    // Initialize ECS registry (required by Engine)
+    var registry = ecs.Registry.init(allocator);
+    defer registry.deinit();
+
+    // Initialize Engine with window management
+    var engine = try gfx.Engine.init(allocator, &registry, .{
+        .window = .{
+            .width = 800,
+            .height = 600,
+            .title = "Example 03: Sprite Atlas",
+            .target_fps = 60,
+            .flags = .{ .window_hidden = ci_test },
+        },
+        .clear_color = gfx.Color.dark_gray,
+    });
+    defer engine.deinit();
 
     // Demo: Show how atlas loading would work
     // In a real game, you would load actual atlas files:
     //
-    // try texture_manager.loadAtlas(
+    // try engine.getRenderer().loadAtlas(
     //     "characters",
     //     "assets/characters.json",
     //     "assets/characters.png"
-    // );
-    //
-    // try texture_manager.loadAtlas(
-    //     "tiles",
-    //     "assets/tiles.json",
-    //     "assets/tiles.png"
     // );
 
     var selected_atlas: usize = 0;
@@ -59,88 +59,95 @@ pub fn main() !void {
     var frame_count: u32 = 0;
 
     // Main loop
-    while (!rl.windowShouldClose()) {
+    while (engine.isRunning()) {
         frame_count += 1;
         if (ci_test) {
-            if (frame_count == 30) rl.takeScreenshot("screenshot_03.png");
+            if (frame_count == 30) engine.takeScreenshot("screenshot_03.png");
             if (frame_count == 35) break;
         }
+
         // Handle input
-        if (rl.isKeyPressed(rl.KeyboardKey.left)) {
+        if (gfx.Engine.Input.isPressed(.left)) {
             if (selected_atlas > 0) selected_atlas -= 1;
         }
-        if (rl.isKeyPressed(rl.KeyboardKey.right)) {
+        if (gfx.Engine.Input.isPressed(.right)) {
             if (selected_atlas < demo_atlases.len - 1) selected_atlas += 1;
         }
 
-        rl.beginDrawing();
-        defer rl.endDrawing();
-
-        rl.clearBackground(rl.Color.dark_gray);
+        engine.beginFrame();
+        defer engine.endFrame();
 
         // Title
-        rl.drawText("Sprite Atlas Example", 10, 10, 20, rl.Color.white);
-        rl.drawText("Use LEFT/RIGHT arrows to browse atlases", 10, 40, 16, rl.Color.light_gray);
+        gfx.Engine.UI.text("Sprite Atlas Example", .{ .x = 10, .y = 10, .size = 20, .color = gfx.Color.white });
+        gfx.Engine.UI.text("Use LEFT/RIGHT arrows to browse atlases", .{ .x = 10, .y = 40, .size = 16, .color = gfx.Color.light_gray });
 
         // Draw atlas tabs
         for (demo_atlases, 0..) |atlas_name, i| {
             const x: i32 = 50 + @as(i32, @intCast(i)) * 150;
-            const color = if (i == selected_atlas) rl.Color.sky_blue else rl.Color.gray;
-            rl.drawRectangle(x, 100, 140, 40, color);
-            rl.drawRectangleLines(x, 100, 140, 40, rl.Color.white);
-            rl.drawText(@ptrCast(atlas_name), x + 10, 110, 16, rl.Color.white);
+            const color = if (i == selected_atlas) gfx.Color.sky_blue else gfx.Color.gray;
+            gfx.Engine.UI.rect(.{ .x = x, .y = 100, .width = 140, .height = 40, .color = color });
+            gfx.Engine.UI.rect(.{ .x = x, .y = 100, .width = 140, .height = 40, .color = gfx.Color.white, .outline = true });
+
+            var name_buf: [32]u8 = undefined;
+            const name_z = std.fmt.bufPrintZ(&name_buf, "{s}", .{atlas_name}) catch "?";
+            gfx.Engine.UI.text(name_z, .{ .x = x + 10, .y = 110, .size = 16, .color = gfx.Color.white });
         }
 
         // Show atlas info
         const current_atlas = demo_atlases[selected_atlas];
         const current_sprite = demo_sprites[selected_atlas];
 
-        rl.drawText("Selected Atlas:", 50, 180, 18, rl.Color.white);
-        rl.drawText(@ptrCast(current_atlas), 200, 180, 18, rl.Color.sky_blue);
+        gfx.Engine.UI.text("Selected Atlas:", .{ .x = 50, .y = 180, .size = 18, .color = gfx.Color.white });
+
+        var atlas_buf: [64]u8 = undefined;
+        const atlas_z = std.fmt.bufPrintZ(&atlas_buf, "{s}", .{current_atlas}) catch "?";
+        gfx.Engine.UI.text(atlas_z, .{ .x = 200, .y = 180, .size = 18, .color = gfx.Color.sky_blue });
 
         // Draw placeholder for sprite preview
-        rl.drawRectangle(50, 220, 200, 200, rl.Color.dark_blue);
-        rl.drawRectangleLines(50, 220, 200, 200, rl.Color.white);
-        rl.drawText("Sprite Preview", 90, 310, 16, rl.Color.light_gray);
+        gfx.Engine.UI.rect(.{ .x = 50, .y = 220, .width = 200, .height = 200, .color = gfx.Color.dark_blue });
+        gfx.Engine.UI.rect(.{ .x = 50, .y = 220, .width = 200, .height = 200, .color = gfx.Color.white, .outline = true });
+        gfx.Engine.UI.text("Sprite Preview", .{ .x = 90, .y = 310, .size = 16, .color = gfx.Color.light_gray });
 
         // Sprite info panel
-        rl.drawText("Sprite Info:", 300, 220, 18, rl.Color.white);
-        rl.drawText("Name:", 300, 250, 14, rl.Color.light_gray);
-        rl.drawText(@ptrCast(current_sprite), 360, 250, 14, rl.Color.white);
+        gfx.Engine.UI.text("Sprite Info:", .{ .x = 300, .y = 220, .size = 18, .color = gfx.Color.white });
+        gfx.Engine.UI.text("Name:", .{ .x = 300, .y = 250, .size = 14, .color = gfx.Color.light_gray });
 
-        rl.drawText("Position:", 300, 280, 14, rl.Color.light_gray);
-        rl.drawText("x: 0, y: 0", 380, 280, 14, rl.Color.white);
+        var sprite_buf: [64]u8 = undefined;
+        const sprite_z = std.fmt.bufPrintZ(&sprite_buf, "{s}", .{current_sprite}) catch "?";
+        gfx.Engine.UI.text(sprite_z, .{ .x = 360, .y = 250, .size = 14, .color = gfx.Color.white });
 
-        rl.drawText("Size:", 300, 310, 14, rl.Color.light_gray);
-        rl.drawText("32x32", 360, 310, 14, rl.Color.white);
+        gfx.Engine.UI.text("Position:", .{ .x = 300, .y = 280, .size = 14, .color = gfx.Color.light_gray });
+        gfx.Engine.UI.text("x: 0, y: 0", .{ .x = 380, .y = 280, .size = 14, .color = gfx.Color.white });
+
+        gfx.Engine.UI.text("Size:", .{ .x = 300, .y = 310, .size = 14, .color = gfx.Color.light_gray });
+        gfx.Engine.UI.text("32x32", .{ .x = 360, .y = 310, .size = 14, .color = gfx.Color.white });
 
         // Code example
-        rl.drawText("Code Example:", 50, 450, 18, rl.Color.white);
+        gfx.Engine.UI.text("Code Example:", .{ .x = 50, .y = 450, .size = 18, .color = gfx.Color.white });
 
         const code_lines = [_][]const u8{
-            "// Load atlas",
-            "try texture_manager.loadAtlas(",
-            "    \"characters\",",
-            "    \"assets/characters.json\",",
-            "    \"assets/characters.png\"",
-            ");",
+            "// Load atlas via Engine config",
+            "var engine = try gfx.Engine.init(allocator, &registry, .{",
+            "    .atlases = &.{",
+            "        .{ .name = \"chars\", .json = \"chars.json\", .texture = \"chars.png\" },",
+            "    },",
+            "});",
             "",
-            "// Find sprite in any atlas",
-            "if (texture_manager.findSprite(\"player_idle\")) |result| {",
-            "    // result.atlas and result.rect available",
-            "}",
+            "// Or load manually",
+            "try engine.getRenderer().loadAtlas(\"chars\", \"chars.json\", \"chars.png\");",
         };
 
         for (code_lines, 0..) |line, i| {
-            rl.drawText(
-                @ptrCast(line),
-                60,
-                480 + @as(i32, @intCast(i)) * 14,
-                12,
-                rl.Color.green,
-            );
+            var line_buf: [128]u8 = undefined;
+            const line_z = std.fmt.bufPrintZ(&line_buf, "{s}", .{line}) catch "?";
+            gfx.Engine.UI.text(line_z, .{
+                .x = 60,
+                .y = 480 + @as(i32, @intCast(i)) * 14,
+                .size = 12,
+                .color = gfx.Color.green,
+            });
         }
 
-        rl.drawText("Press ESC to exit", 10, 580, 14, rl.Color.light_gray);
+        gfx.Engine.UI.text("Press ESC to exit", .{ .x = 10, .y = 580, .size = 14, .color = gfx.Color.light_gray });
     }
 }

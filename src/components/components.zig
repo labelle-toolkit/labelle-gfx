@@ -16,6 +16,49 @@ pub const DefaultBackend = backend_mod.Backend(raylib_backend.RaylibBackend);
 /// Default Color type (raylib) for backwards compatibility
 pub const Color = DefaultBackend.Color;
 
+/// Color helper functions for creating colors
+pub const ColorHelpers = struct {
+    /// Create a color from RGB values (alpha defaults to 255)
+    pub fn rgb(r: u8, g: u8, b: u8) Color {
+        return .{ .r = r, .g = g, .b = b, .a = 255 };
+    }
+
+    /// Create a color from RGBA values
+    pub fn rgba(r: u8, g: u8, b: u8, a: u8) Color {
+        return .{ .r = r, .g = g, .b = b, .a = a };
+    }
+
+    // Common color constants
+    pub const white = Color{ .r = 255, .g = 255, .b = 255, .a = 255 };
+    pub const black = Color{ .r = 0, .g = 0, .b = 0, .a = 255 };
+    pub const transparent = Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+
+    // Primary colors
+    pub const red = Color{ .r = 255, .g = 0, .b = 0, .a = 255 };
+    pub const green = Color{ .r = 0, .g = 255, .b = 0, .a = 255 };
+    pub const blue = Color{ .r = 0, .g = 0, .b = 255, .a = 255 };
+
+    // Secondary colors
+    pub const yellow = Color{ .r = 255, .g = 255, .b = 0, .a = 255 };
+    pub const magenta = Color{ .r = 255, .g = 0, .b = 255, .a = 255 };
+    pub const cyan = Color{ .r = 0, .g = 255, .b = 255, .a = 255 };
+
+    // Grays
+    pub const light_gray = Color{ .r = 200, .g = 200, .b = 200, .a = 255 };
+    pub const gray = Color{ .r = 130, .g = 130, .b = 130, .a = 255 };
+    pub const dark_gray = Color{ .r = 80, .g = 80, .b = 80, .a = 255 };
+
+    // Game-friendly colors
+    pub const orange = Color{ .r = 255, .g = 161, .b = 0, .a = 255 };
+    pub const pink = Color{ .r = 255, .g = 109, .b = 194, .a = 255 };
+    pub const purple = Color{ .r = 200, .g = 122, .b = 255, .a = 255 };
+    pub const gold = Color{ .r = 255, .g = 203, .b = 0, .a = 255 };
+    pub const brown = Color{ .r = 127, .g = 106, .b = 79, .a = 255 };
+    pub const sky_blue = Color{ .r = 102, .g = 191, .b = 255, .a = 255 };
+    pub const dark_blue = Color{ .r = 0, .g = 82, .b = 172, .a = 255 };
+    pub const dark_green = Color{ .r = 0, .g = 117, .b = 44, .a = 255 };
+};
+
 /// Position component for entity world position
 pub const Position = struct {
     x: f32 = 0,

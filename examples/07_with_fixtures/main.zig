@@ -6,7 +6,6 @@
 //! Run with: zig build run-example-07
 
 const std = @import("std");
-const rl = @import("raylib");
 const ecs = @import("ecs");
 const gfx = @import("labelle");
 
@@ -32,14 +31,6 @@ const Animation = gfx.Animation(AnimType);
 pub fn main() !void {
     // CI test mode - hidden window, auto-screenshot and exit
     const ci_test = std.posix.getenv("CI_TEST") != null;
-    if (ci_test) {
-        rl.setConfigFlags(.{ .window_hidden = true });
-    }
-
-    // Initialize raylib
-    rl.initWindow(800, 600, "Example 07: TexturePacker with Engine");
-    defer rl.closeWindow();
-    rl.setTargetFPS(60);
 
     // Initialize allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -50,8 +41,16 @@ pub fn main() !void {
     var registry = ecs.Registry.init(allocator);
     defer registry.deinit();
 
-    // Initialize Engine with atlases
+    // Initialize Engine with window management and atlases
     var engine = gfx.Engine.init(allocator, &registry, .{
+        .window = .{
+            .width = 800,
+            .height = 600,
+            .title = "Example 07: TexturePacker with Engine",
+            .target_fps = 60,
+            .flags = .{ .window_hidden = ci_test },
+        },
+        .clear_color = gfx.Color.rgba(40, 44, 52, 255),
         .atlases = &.{
             .{ .name = "characters", .json = "fixtures/output/characters.json", .texture = "fixtures/output/characters.png" },
             .{ .name = "items", .json = "fixtures/output/items.json", .texture = "fixtures/output/items.png" },
@@ -112,34 +111,34 @@ pub fn main() !void {
     var frame_count: u32 = 0;
 
     // Main loop
-    while (!rl.windowShouldClose()) {
+    while (engine.isRunning()) {
         frame_count += 1;
         if (ci_test) {
-            if (frame_count == 30) rl.takeScreenshot("screenshot_07.png");
+            if (frame_count == 30) engine.takeScreenshot("screenshot_07.png");
             if (frame_count == 35) break;
         }
-        const dt = rl.getFrameTime();
+        const dt = engine.getDeltaTime();
 
-        // Player input for animation changes
+        // Player input for animation changes using engine.input
         var moving = false;
 
-        if (rl.isKeyDown(rl.KeyboardKey.left) or rl.isKeyDown(rl.KeyboardKey.a)) {
+        if (gfx.Engine.Input.isDown(.left) or gfx.Engine.Input.isDown(.a)) {
             moving = true;
             flip_x = true;
             var pos = registry.get(gfx.Position, player);
             pos.x -= 150 * dt;
         }
-        if (rl.isKeyDown(rl.KeyboardKey.right) or rl.isKeyDown(rl.KeyboardKey.d)) {
+        if (gfx.Engine.Input.isDown(.right) or gfx.Engine.Input.isDown(.d)) {
             moving = true;
             flip_x = false;
             var pos = registry.get(gfx.Position, player);
             pos.x += 150 * dt;
         }
-        if (rl.isKeyDown(rl.KeyboardKey.left_shift)) {
+        if (gfx.Engine.Input.isDown(.left_shift)) {
             moving = true;
             current_anim = .run;
         }
-        if (rl.isKeyPressed(rl.KeyboardKey.space)) {
+        if (gfx.Engine.Input.isPressed(.space)) {
             current_anim = .jump;
         }
 
@@ -162,10 +161,8 @@ pub fn main() !void {
         }
 
         // Rendering
-        rl.beginDrawing();
-        defer rl.endDrawing();
-
-        rl.clearBackground(rl.Color{ .r = 40, .g = 44, .b = 52, .a = 255 });
+        engine.beginFrame();
+        defer engine.endFrame();
 
         // Engine handles static sprites, effects, and camera
         engine.render(dt);
@@ -174,21 +171,21 @@ pub fn main() !void {
         engine.renderAnimations(AnimType, "", dt);
 
         // UI
-        rl.drawText("TexturePacker with Engine API", 10, 10, 20, rl.Color.white);
-        rl.drawText("A/D: Walk | Shift: Run | Space: Jump", 10, 40, 16, rl.Color.light_gray);
+        gfx.Engine.UI.text("TexturePacker with Engine API", .{ .x = 10, .y = 10, .size = 20, .color = gfx.Color.white });
+        gfx.Engine.UI.text("A/D: Walk | Shift: Run | Space: Jump", .{ .x = 10, .y = 40, .size = 16, .color = gfx.Color.light_gray });
 
-        var anim_buf: [64:0]u8 = undefined;
+        var anim_buf: [64]u8 = undefined;
         const cfg = anim.getConfig();
-        _ = std.fmt.bufPrintZ(&anim_buf, "Animation: {s} Frame: {d}/{d}", .{
+        const anim_str = std.fmt.bufPrintZ(&anim_buf, "Animation: {s} Frame: {d}/{d}", .{
             @tagName(current_anim),
             anim.frame + 1,
             cfg.frames,
         }) catch "?";
-        rl.drawText(&anim_buf, 10, 70, 16, rl.Color.sky_blue);
+        gfx.Engine.UI.text(anim_str, .{ .x = 10, .y = 70, .size = 16, .color = gfx.Color.sky_blue });
 
-        rl.drawText("Items:", 100, 460, 14, rl.Color.white);
-        rl.drawText("Tiles:", 100, 520, 14, rl.Color.white);
+        gfx.Engine.UI.text("Items:", .{ .x = 100, .y = 460, .size = 14, .color = gfx.Color.white });
+        gfx.Engine.UI.text("Tiles:", .{ .x = 100, .y = 520, .size = 14, .color = gfx.Color.white });
 
-        rl.drawText("ESC: Exit", 10, 580, 14, rl.Color.light_gray);
+        gfx.Engine.UI.text("ESC: Exit", .{ .x = 10, .y = 580, .size = 14, .color = gfx.Color.light_gray });
     }
 }

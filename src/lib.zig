@@ -74,6 +74,9 @@ pub const ecs = @import("ecs");
 pub const backend = @import("backend/backend.zig");
 pub const Backend = backend.Backend;
 pub const BackendError = backend.BackendError;
+pub const KeyboardKey = backend.KeyboardKey;
+pub const MouseButton = backend.MouseButton;
+pub const ConfigFlags = backend.ConfigFlags;
 
 // Backend implementations
 pub const raylib_backend = @import("backend/raylib_backend.zig");
@@ -81,18 +84,17 @@ pub const RaylibBackend = raylib_backend.RaylibBackend;
 pub const mock_backend = @import("backend/mock_backend.zig");
 pub const MockBackend = mock_backend.MockBackend;
 
-// Default backend (raylib) for backwards compatibility
+// Default backend (raylib)
 pub const DefaultBackend = Backend(RaylibBackend);
-
-/// Re-export raylib for direct access (backwards compatibility)
-pub const rl = @import("raylib");
 
 // Engine API (recommended)
 const engine_mod = @import("engine/engine.zig");
 pub const Engine = engine_mod.Engine;
+pub const EngineWith = engine_mod.EngineWith;
 pub const AtlasConfig = engine_mod.AtlasConfig;
 pub const CameraConfig = engine_mod.CameraConfig;
 pub const EngineConfig = engine_mod.EngineConfig;
+pub const WindowConfig = engine_mod.WindowConfig;
 
 // Component exports
 pub const components = @import("components/components.zig");
@@ -103,7 +105,7 @@ pub const AnimConfig = components.AnimConfig;
 pub const Render = components.Render;
 pub const RenderWith = components.RenderWith;
 pub const SpriteLocation = components.SpriteLocation;
-pub const Color = components.Color;
+pub const Color = components.ColorHelpers;
 
 // Generic animation types - users provide their own enum with config()
 pub const Animation = components.Animation;
