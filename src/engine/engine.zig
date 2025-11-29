@@ -282,4 +282,62 @@ pub const Engine = struct {
             );
         }
     }
+
+    /// Render animations with a custom sprite name formatter.
+    /// Use this when your sprite atlas uses a different naming convention.
+    ///
+    /// The formatter function receives:
+    /// - anim_name: The animation type name (e.g., "walk", "idle")
+    /// - frame: The 1-based frame number
+    /// - buffer: A buffer to write the result into
+    ///
+    /// Example usage for "{anim}/{character}_{frame}.png" format:
+    /// ```zig
+    /// engine.renderAnimationsCustom(PlayerAnim, dt, struct {
+    ///     pub fn format(anim_name: []const u8, frame: u32, buf: []u8) []const u8 {
+    ///         return std.fmt.bufPrint(buf, "{s}/m_bald_{d:0>4}.png", .{
+    ///             anim_name,
+    ///             frame,
+    ///         }) catch return "";
+    ///     }
+    /// }.format);
+    /// ```
+    pub fn renderAnimationsCustom(
+        self: *Engine,
+        comptime AnimationType: type,
+        dt: f32,
+        formatter: *const fn (anim_name: []const u8, frame: u32, buf: []u8) []const u8,
+    ) void {
+        const AnimComp = components.Animation(AnimationType);
+
+        var view = self.registry.view(.{ Position, AnimComp }, .{});
+        var iter = @TypeOf(view).Iterator.init(&view);
+
+        while (iter.next()) |entity| {
+            var anim = view.get(AnimComp, entity);
+            const pos = view.getConst(Position, entity);
+
+            // Update animation
+            anim.update(dt);
+
+            // Get sprite name using custom formatter
+            const sprite_name = anim.getSpriteNameCustom(&self.sprite_name_buffer, formatter);
+
+            // Draw
+            self.renderer.drawSprite(
+                sprite_name,
+                pos.x,
+                pos.y,
+                .{
+                    .offset_x = anim.offset_x,
+                    .offset_y = anim.offset_y,
+                    .scale = anim.scale,
+                    .rotation = anim.rotation,
+                    .tint = anim.tint,
+                    .flip_x = anim.flip_x,
+                    .flip_y = anim.flip_y,
+                },
+            );
+        }
+    }
 };

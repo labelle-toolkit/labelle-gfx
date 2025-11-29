@@ -275,6 +275,44 @@ pub fn Animation(comptime AnimType: type) type {
 
             return result;
         }
+
+        /// Get the sprite name using a custom formatter function.
+        /// This allows full control over the sprite name format.
+        ///
+        /// The formatter receives:
+        /// - anim_name: The animation type name (e.g., "walk", "idle")
+        /// - frame: The 1-based frame number
+        /// - buffer: A buffer to write the result into
+        ///
+        /// Example usage for "walk/m_bald_0001.png" format:
+        /// ```zig
+        /// const sprite_name = anim.getSpriteNameCustom(&buffer, struct {
+        ///     pub fn format(anim_name: []const u8, frame: u32, buf: []u8) []const u8 {
+        ///         return std.fmt.bufPrint(buf, "{s}/m_bald_{d:0>4}.png", .{
+        ///             anim_name,
+        ///             frame,
+        ///         }) catch return "";
+        ///     }
+        /// }.format);
+        /// ```
+        pub fn getSpriteNameCustom(
+            self: *const Self,
+            buffer: []u8,
+            formatter: *const fn (anim_name: []const u8, frame: u32, buf: []u8) []const u8,
+        ) []const u8 {
+            const anim_name = @tagName(self.anim_type);
+            return formatter(anim_name, self.frame + 1, buffer);
+        }
+
+        /// Get animation name as string
+        pub fn getAnimationName(self: *const Self) []const u8 {
+            return @tagName(self.anim_type);
+        }
+
+        /// Get current frame number (1-based, for sprite lookup)
+        pub fn getFrameNumber(self: *const Self) u32 {
+            return self.frame + 1;
+        }
     };
 }
 

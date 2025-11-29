@@ -299,6 +299,95 @@ pub const AnimationControlTests = struct {
 };
 
 // ============================================================================
+// Custom Sprite Name Formatter Tests
+// ============================================================================
+
+pub const CustomFormatterTests = struct {
+    test "getSpriteNameCustom uses custom formatter" {
+        var anim = TestAnimation.init(.spell_cast);
+        anim.frame = 2;
+
+        var buffer: [64]u8 = undefined;
+        const name = anim.getSpriteNameCustom(&buffer, struct {
+            pub fn format(anim_name: []const u8, frame: u32, buf: []u8) []const u8 {
+                return std.fmt.bufPrint(buf, "{s}/wizard_{d:0>4}.png", .{
+                    anim_name,
+                    frame,
+                }) catch return "";
+            }
+        }.format);
+        try expect.toBeTrue(std.mem.eql(u8, name, "spell_cast/wizard_0003.png"));
+    }
+
+    test "getSpriteNameCustom with different naming convention" {
+        var anim = gfx.DefaultAnimation.init(.walk);
+        anim.frame = 5;
+
+        var buffer: [64]u8 = undefined;
+        const name = anim.getSpriteNameCustom(&buffer, struct {
+            pub fn format(anim_name: []const u8, frame: u32, buf: []u8) []const u8 {
+                return std.fmt.bufPrint(buf, "characters/{s}_{d}.png", .{
+                    anim_name,
+                    frame,
+                }) catch return "";
+            }
+        }.format);
+        try expect.toBeTrue(std.mem.eql(u8, name, "characters/walk_6.png"));
+    }
+
+    test "getSpriteNameCustom frame is 1-based" {
+        var anim = TestAnimation.init(.teleport);
+        anim.frame = 0; // Internal frame 0 should become 1 in formatter
+
+        var buffer: [64]u8 = undefined;
+        const name = anim.getSpriteNameCustom(&buffer, struct {
+            pub fn format(_: []const u8, frame: u32, buf: []u8) []const u8 {
+                return std.fmt.bufPrint(buf, "frame_{d}", .{frame}) catch return "";
+            }
+        }.format);
+        try expect.toBeTrue(std.mem.eql(u8, name, "frame_1"));
+    }
+
+    test "getAnimationName returns enum tag name" {
+        const anim = TestAnimation.init(.potion_drink);
+        try expect.toBeTrue(std.mem.eql(u8, anim.getAnimationName(), "potion_drink"));
+    }
+
+    test "getAnimationName with default animation" {
+        const anim = gfx.DefaultAnimation.init(.idle);
+        try expect.toBeTrue(std.mem.eql(u8, anim.getAnimationName(), "idle"));
+    }
+
+    test "getFrameNumber returns 1-based frame" {
+        var anim = TestAnimation.init(.spell_cast);
+        try expect.equal(anim.getFrameNumber(), 1);
+
+        anim.frame = 3;
+        try expect.equal(anim.getFrameNumber(), 4);
+
+        anim.frame = 0;
+        try expect.equal(anim.getFrameNumber(), 1);
+    }
+
+    test "getSpriteNameCustom with complex format" {
+        var anim = TestAnimation.init(.spell_cast);
+        anim.frame = 0;
+
+        var buffer: [64]u8 = undefined;
+        const name = anim.getSpriteNameCustom(&buffer, struct {
+            pub fn format(anim_name: []const u8, frame: u32, buf: []u8) []const u8 {
+                // Format like "walk/m_bald_0001.png"
+                return std.fmt.bufPrint(buf, "{s}/m_bald_{d:0>4}.png", .{
+                    anim_name,
+                    frame,
+                }) catch return "";
+            }
+        }.format);
+        try expect.toBeTrue(std.mem.eql(u8, name, "spell_cast/m_bald_0001.png"));
+    }
+};
+
+// ============================================================================
 // Init with Z-Index Tests
 // ============================================================================
 
