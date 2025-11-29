@@ -1,40 +1,45 @@
 //! Example 01: Basic Sprite Rendering
 //!
 //! This example demonstrates:
-//! - Initializing raylib window
+//! - Using Engine with window management (new API)
 //! - Loading a sprite atlas
 //! - Drawing sprites at positions
+//! - Using the UI helper for text
 //!
 //! Run with: zig build run-example-01
 
 const std = @import("std");
-const rl = @import("raylib");
+const ecs = @import("ecs");
 const gfx = @import("labelle");
 
 pub fn main() !void {
     // CI test mode - hidden window, auto-screenshot and exit
     const ci_test = std.posix.getenv("CI_TEST") != null;
-    if (ci_test) {
-        rl.setConfigFlags(.{ .window_hidden = true });
-    }
 
-    // Initialize raylib
-    rl.initWindow(800, 600, "Example 01: Basic Sprite");
-    defer rl.closeWindow();
-    rl.setTargetFPS(60);
-
-    // Initialize renderer
+    // Initialize allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var renderer = gfx.Renderer.init(allocator);
-    defer renderer.deinit();
+    // Initialize ECS registry (required by Engine)
+    var registry = ecs.Registry.init(allocator);
+    defer registry.deinit();
+
+    // Initialize Engine with window management
+    var engine = try gfx.Engine.init(allocator, &registry, .{
+        .window = .{
+            .width = 800,
+            .height = 600,
+            .title = "Example 01: Basic Sprite",
+            .target_fps = 60,
+            .flags = .{ .window_hidden = ci_test },
+        },
+        .clear_color = gfx.Color.dark_gray,
+    });
+    defer engine.deinit();
 
     // Load sprite atlas (you would replace with your own atlas)
-    // renderer.loadAtlas("sprites", "assets/sprites.json", "assets/sprites.png") catch {
-    //     std.debug.print("Note: No sprite atlas found. Using placeholder.\n", .{});
-    // };
+    // try engine.getRenderer().loadAtlas("sprites", "assets/sprites.json", "assets/sprites.png");
 
     // Sprite positions
     const positions = [_]struct { x: f32, y: f32 }{
@@ -46,43 +51,43 @@ pub fn main() !void {
 
     var frame_count: u32 = 0;
 
-    // Main loop
-    while (!rl.windowShouldClose()) {
+    // Main loop - using new Engine API
+    while (engine.isRunning()) {
         frame_count += 1;
         if (ci_test) {
-            if (frame_count == 30) rl.takeScreenshot("screenshot_01.png");
+            if (frame_count == 30) engine.takeScreenshot("screenshot_01.png");
             if (frame_count == 35) break;
         }
-        rl.beginDrawing();
-        defer rl.endDrawing();
 
-        rl.clearBackground(rl.Color.dark_gray);
+        engine.beginFrame();
+        defer engine.endFrame();
 
-        // Draw sprites at each position
+        // Draw sprites at each position using UI helper
         for (positions) |pos| {
             // If you have a loaded atlas:
-            // renderer.drawSprite("player_idle", pos.x, pos.y, .{});
+            // engine.getRenderer().drawSprite("player_idle", pos.x, pos.y, .{});
 
-            // Placeholder: draw colored rectangles
-            rl.drawRectangle(
-                @intFromFloat(pos.x - 16),
-                @intFromFloat(pos.y - 16),
-                32,
-                32,
-                rl.Color.sky_blue,
-            );
-            rl.drawRectangleLines(
-                @intFromFloat(pos.x - 16),
-                @intFromFloat(pos.y - 16),
-                32,
-                32,
-                rl.Color.white,
-            );
+            // Placeholder: draw colored rectangles using UI helper
+            gfx.Engine.UI.rect(.{
+                .x = @intFromFloat(pos.x - 16),
+                .y = @intFromFloat(pos.y - 16),
+                .width = 32,
+                .height = 32,
+                .color = gfx.Color.sky_blue,
+            });
+            gfx.Engine.UI.rect(.{
+                .x = @intFromFloat(pos.x - 16),
+                .y = @intFromFloat(pos.y - 16),
+                .width = 32,
+                .height = 32,
+                .color = gfx.Color.white,
+                .outline = true,
+            });
         }
 
-        // Instructions
-        rl.drawText("Basic Sprite Example", 10, 10, 20, rl.Color.white);
-        rl.drawText("Replace atlas paths with your own sprites", 10, 40, 16, rl.Color.light_gray);
-        rl.drawText("Press ESC to exit", 10, 60, 16, rl.Color.light_gray);
+        // Instructions using UI helper
+        gfx.Engine.UI.text("Basic Sprite Example", .{ .x = 10, .y = 10, .size = 20, .color = gfx.Color.white });
+        gfx.Engine.UI.text("Replace atlas paths with your own sprites", .{ .x = 10, .y = 40, .size = 16, .color = gfx.Color.light_gray });
+        gfx.Engine.UI.text("Press ESC to exit", .{ .x = 10, .y = 60, .size = 16, .color = gfx.Color.light_gray });
     }
 }

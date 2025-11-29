@@ -127,6 +127,16 @@ pub fn CameraWith(comptime BackendType: type) type {
             const screen_pos = BackendType.worldToScreen(.{ .x = world_x, .y = world_y }, backend_camera);
             return .{ .x = screen_pos.x, .y = screen_pos.y };
         }
+
+        /// Begin camera mode for world-space rendering
+        pub fn begin(self: *const Self) void {
+            BackendType.beginMode2D(self.toBackend());
+        }
+
+        /// End camera mode, return to screen-space rendering
+        pub fn end(_: *const Self) void {
+            BackendType.endMode2D();
+        }
     };
 }
 

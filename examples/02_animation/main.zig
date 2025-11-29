@@ -1,14 +1,16 @@
 //! Example 02: Animation System
 //!
 //! This example demonstrates:
+//! - Using Engine with window management
 //! - Creating and updating animations with custom animation types
 //! - Animation types and transitions
 //! - Frame-based sprite animation
+//! - Using engine.input for keyboard handling
 //!
 //! Run with: zig build run-example-02
 
 const std = @import("std");
-const rl = @import("raylib");
+const ecs = @import("ecs");
 const gfx = @import("labelle");
 
 // Define animation types for this example with config
@@ -33,14 +35,28 @@ const Animation = gfx.Animation(AnimType);
 pub fn main() !void {
     // CI test mode - hidden window, auto-screenshot and exit
     const ci_test = std.posix.getenv("CI_TEST") != null;
-    if (ci_test) {
-        rl.setConfigFlags(.{ .window_hidden = true });
-    }
 
-    // Initialize raylib
-    rl.initWindow(800, 600, "Example 02: Animation");
-    defer rl.closeWindow();
-    rl.setTargetFPS(60);
+    // Initialize allocator
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Initialize ECS registry (required by Engine)
+    var registry = ecs.Registry.init(allocator);
+    defer registry.deinit();
+
+    // Initialize Engine with window management
+    var engine = try gfx.Engine.init(allocator, &registry, .{
+        .window = .{
+            .width = 800,
+            .height = 600,
+            .title = "Example 02: Animation",
+            .target_fps = 60,
+            .flags = .{ .window_hidden = ci_test },
+        },
+        .clear_color = gfx.Color.dark_gray,
+    });
+    defer engine.deinit();
 
     // Create an animation (config comes from enum - no AnimPlayer needed)
     var animation = Animation.init(.idle);
@@ -50,28 +66,28 @@ pub fn main() !void {
     var frame_count: u32 = 0;
 
     // Main loop
-    while (!rl.windowShouldClose()) {
+    while (engine.isRunning()) {
         frame_count += 1;
         if (ci_test) {
-            if (frame_count == 30) rl.takeScreenshot("screenshot_02.png");
+            if (frame_count == 30) engine.takeScreenshot("screenshot_02.png");
             if (frame_count == 35) break;
         }
-        const dt = rl.getFrameTime();
+        const dt = engine.getDeltaTime();
 
-        // Handle input for animation switching
-        if (rl.isKeyPressed(rl.KeyboardKey.one)) {
+        // Handle input for animation switching using engine.input
+        if (gfx.Engine.Input.isPressed(.one)) {
             current_type = .idle;
             animation.play(.idle);
         }
-        if (rl.isKeyPressed(rl.KeyboardKey.two)) {
+        if (gfx.Engine.Input.isPressed(.two)) {
             current_type = .walk;
             animation.play(.walk);
         }
-        if (rl.isKeyPressed(rl.KeyboardKey.three)) {
+        if (gfx.Engine.Input.isPressed(.three)) {
             current_type = .run;
             animation.play(.run);
         }
-        if (rl.isKeyPressed(rl.KeyboardKey.four)) {
+        if (gfx.Engine.Input.isPressed(.four)) {
             current_type = .jump;
             animation.play(.jump);
         }
@@ -82,10 +98,8 @@ pub fn main() !void {
         // Generate sprite name
         const sprite_name = animation.getSpriteName("player", &sprite_buffer);
 
-        rl.beginDrawing();
-        defer rl.endDrawing();
-
-        rl.clearBackground(rl.Color.dark_gray);
+        engine.beginFrame();
+        defer engine.endFrame();
 
         // Draw animation visualization
         const center_x: i32 = 400;
@@ -93,14 +107,14 @@ pub fn main() !void {
 
         // Draw placeholder for current frame
         const frame_color = switch (current_type) {
-            .idle => rl.Color.sky_blue,
-            .walk => rl.Color.green,
-            .run => rl.Color.orange,
-            .jump => rl.Color.yellow,
+            .idle => gfx.Color.sky_blue,
+            .walk => gfx.Color.green,
+            .run => gfx.Color.orange,
+            .jump => gfx.Color.yellow,
         };
 
-        rl.drawRectangle(center_x - 32, center_y - 32, 64, 64, frame_color);
-        rl.drawRectangleLines(center_x - 32, center_y - 32, 64, 64, rl.Color.white);
+        gfx.Engine.UI.rect(.{ .x = center_x - 32, .y = center_y - 32, .width = 64, .height = 64, .color = frame_color });
+        gfx.Engine.UI.rect(.{ .x = center_x - 32, .y = center_y - 32, .width = 64, .height = 64, .color = gfx.Color.white, .outline = true });
 
         // Draw frame number
         var frame_text: [32]u8 = undefined;
@@ -109,35 +123,35 @@ pub fn main() !void {
             animation.frame + 1,
             cfg.frames,
         }) catch "?";
-        rl.drawText(frame_str, center_x - 40, center_y + 50, 20, rl.Color.white);
+        gfx.Engine.UI.text(frame_str, .{ .x = center_x - 40, .y = center_y + 50, .size = 20, .color = gfx.Color.white });
 
         // Draw sprite name (null-terminate it)
         var sprite_name_z: [256]u8 = undefined;
         const sprite_z = std.fmt.bufPrintZ(&sprite_name_z, "{s}", .{sprite_name}) catch "?";
-        rl.drawText(sprite_z, center_x - 60, center_y + 80, 16, rl.Color.light_gray);
+        gfx.Engine.UI.text(sprite_z, .{ .x = center_x - 60, .y = center_y + 80, .size = 16, .color = gfx.Color.light_gray });
 
         // Draw frame indicators
         const indicator_start_x = center_x - @as(i32, @intCast(cfg.frames)) * 10;
         for (0..cfg.frames) |i| {
             const x = indicator_start_x + @as(i32, @intCast(i)) * 20;
-            const color = if (i == animation.frame) rl.Color.white else rl.Color.gray;
-            rl.drawRectangle(x, center_y + 120, 16, 16, color);
+            const color = if (i == animation.frame) gfx.Color.white else gfx.Color.gray;
+            gfx.Engine.UI.rect(.{ .x = x, .y = center_y + 120, .width = 16, .height = 16, .color = color });
         }
 
         // Instructions
-        rl.drawText("Animation Example (Custom Types)", 10, 10, 20, rl.Color.white);
-        rl.drawText("Press 1-4 to change animation:", 10, 40, 16, rl.Color.light_gray);
-        rl.drawText("1: Idle (4 frames)", 10, 60, 16, rl.Color.sky_blue);
-        rl.drawText("2: Walk (8 frames)", 10, 80, 16, rl.Color.green);
-        rl.drawText("3: Run (6 frames)", 10, 100, 16, rl.Color.orange);
-        rl.drawText("4: Jump (4 frames)", 10, 120, 16, rl.Color.yellow);
-        rl.drawText("Press ESC to exit", 10, 150, 16, rl.Color.light_gray);
+        gfx.Engine.UI.text("Animation Example (Custom Types)", .{ .x = 10, .y = 10, .size = 20, .color = gfx.Color.white });
+        gfx.Engine.UI.text("Press 1-4 to change animation:", .{ .x = 10, .y = 40, .size = 16, .color = gfx.Color.light_gray });
+        gfx.Engine.UI.text("1: Idle (4 frames)", .{ .x = 10, .y = 60, .size = 16, .color = gfx.Color.sky_blue });
+        gfx.Engine.UI.text("2: Walk (8 frames)", .{ .x = 10, .y = 80, .size = 16, .color = gfx.Color.green });
+        gfx.Engine.UI.text("3: Run (6 frames)", .{ .x = 10, .y = 100, .size = 16, .color = gfx.Color.orange });
+        gfx.Engine.UI.text("4: Jump (4 frames)", .{ .x = 10, .y = 120, .size = 16, .color = gfx.Color.yellow });
+        gfx.Engine.UI.text("Press ESC to exit", .{ .x = 10, .y = 150, .size = 16, .color = gfx.Color.light_gray });
 
         // Current animation info
         var anim_text: [64]u8 = undefined;
         const anim_str = std.fmt.bufPrintZ(&anim_text, "Current: {s}", .{
             @tagName(current_type),
         }) catch "?";
-        rl.drawText(anim_str, 10, 180, 16, rl.Color.white);
+        gfx.Engine.UI.text(anim_str, .{ .x = 10, .y = 180, .size = 16, .color = gfx.Color.white });
     }
 }

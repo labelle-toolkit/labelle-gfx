@@ -1,7 +1,9 @@
 //! Example 05: ECS Rendering with Engine API
 //!
 //! This example demonstrates:
-//! - Using the Engine API for simplified rendering
+//! - Using the Engine API with window management
+//! - Using engine.input for keyboard input
+//! - Using engine.ui for UI elements
 //! - Static sprites with Position and Sprite components
 //! - Animated sprites with custom animation types
 //! - Z-index layering
@@ -9,7 +11,6 @@
 //! Run with: zig build run-example-05
 
 const std = @import("std");
-const rl = @import("raylib");
 const ecs = @import("ecs");
 const gfx = @import("labelle");
 
@@ -38,14 +39,6 @@ const Animation = gfx.Animation(AnimType);
 pub fn main() !void {
     // CI test mode - hidden window, auto-screenshot and exit
     const ci_test = std.posix.getenv("CI_TEST") != null;
-    if (ci_test) {
-        rl.setConfigFlags(.{ .window_hidden = true });
-    }
-
-    // Initialize raylib
-    rl.initWindow(800, 600, "Example 05: ECS Rendering with Engine");
-    defer rl.closeWindow();
-    rl.setTargetFPS(60);
 
     // Initialize allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -56,8 +49,17 @@ pub fn main() !void {
     var registry = ecs.Registry.init(allocator);
     defer registry.deinit();
 
-    // Initialize Engine (no atlases for this placeholder demo)
-    var engine = try gfx.Engine.init(allocator, &registry, .{});
+    // Initialize Engine with window management
+    var engine = try gfx.Engine.init(allocator, &registry, .{
+        .window = .{
+            .width = 800,
+            .height = 600,
+            .title = "Example 05: ECS Rendering with Engine",
+            .target_fps = 60,
+            .flags = .{ .window_hidden = ci_test },
+        },
+        .clear_color = gfx.Color.dark_gray,
+    });
     defer engine.deinit();
 
     // Create entities with different z-indices using gfx.Position and gfx.Sprite
@@ -68,7 +70,7 @@ pub fn main() !void {
     registry.add(bg_entity, gfx.Sprite{
         .name = "background",
         .z_index = gfx.ZIndex.background,
-        .tint = rl.Color.dark_blue,
+        .tint = gfx.Color.dark_blue,
         .scale = 10.0,
     });
 
@@ -82,7 +84,7 @@ pub fn main() !void {
         registry.add(tile, gfx.Sprite{
             .name = "tile",
             .z_index = gfx.ZIndex.floor,
-            .tint = rl.Color.brown,
+            .tint = gfx.Color.brown,
         });
     }
 
@@ -92,7 +94,7 @@ pub fn main() !void {
     registry.add(item1, gfx.Sprite{
         .name = "item",
         .z_index = gfx.ZIndex.items,
-        .tint = rl.Color.gold,
+        .tint = gfx.Color.gold,
         .scale = 0.5,
     });
 
@@ -102,7 +104,7 @@ pub fn main() !void {
     registry.add(player, Velocity{ .dx = 0, .dy = 0 });
     var player_anim = Animation.init(.idle);
     player_anim.z_index = gfx.ZIndex.characters;
-    player_anim.tint = rl.Color.sky_blue;
+    player_anim.tint = gfx.Color.sky_blue;
     registry.add(player, player_anim);
 
     // Enemy character (z=40) with animation
@@ -111,7 +113,7 @@ pub fn main() !void {
     registry.add(enemy1, Velocity{ .dx = -50, .dy = 0 });
     var enemy_anim = Animation.init(.walk);
     enemy_anim.z_index = gfx.ZIndex.characters;
-    enemy_anim.tint = rl.Color.red;
+    enemy_anim.tint = gfx.Color.red;
     registry.add(enemy1, enemy_anim);
 
     // UI overlay (z=70) - static sprite
@@ -120,30 +122,30 @@ pub fn main() !void {
     registry.add(ui_element, gfx.Sprite{
         .name = "ui_panel",
         .z_index = gfx.ZIndex.ui,
-        .tint = rl.Color{ .r = 255, .g = 255, .b = 255, .a = 200 },
+        .tint = gfx.Color.rgba(255, 255, 255, 200),
     });
 
     var frame_count: u32 = 0;
 
-    // Main loop
-    while (!rl.windowShouldClose()) {
+    // Main loop - using Engine API
+    while (engine.isRunning()) {
         frame_count += 1;
         if (ci_test) {
-            if (frame_count == 30) rl.takeScreenshot("screenshot_05.png");
+            if (frame_count == 30) engine.takeScreenshot("screenshot_05.png");
             if (frame_count == 35) break;
         }
-        const dt = rl.getFrameTime();
+        const dt = engine.getDeltaTime();
 
-        // Player movement
+        // Player movement using engine.input
         var player_vel = registry.get(Velocity, player);
         player_vel.dx = 0;
 
-        if (rl.isKeyDown(rl.KeyboardKey.left) or rl.isKeyDown(rl.KeyboardKey.a)) {
+        if (gfx.Engine.Input.isDown(.left) or gfx.Engine.Input.isDown(.a)) {
             player_vel.dx = -200;
             var anim = registry.get(Animation, player);
             anim.flip_x = true;
         }
-        if (rl.isKeyDown(rl.KeyboardKey.right) or rl.isKeyDown(rl.KeyboardKey.d)) {
+        if (gfx.Engine.Input.isDown(.right) or gfx.Engine.Input.isDown(.d)) {
             player_vel.dx = 200;
             var anim = registry.get(Animation, player);
             anim.flip_x = false;
@@ -179,11 +181,9 @@ pub fn main() !void {
         var enemy_pos_mut = registry.get(gfx.Position, enemy1);
         enemy_pos_mut.x += enemy_vel.dx * dt;
 
-        // Rendering with Engine API
-        rl.beginDrawing();
-        defer rl.endDrawing();
-
-        rl.clearBackground(rl.Color.dark_gray);
+        // Rendering with Engine API - using beginFrame/endFrame
+        engine.beginFrame();
+        defer engine.endFrame();
 
         // Engine handles static sprite rendering and effects
         engine.render(dt);
@@ -207,13 +207,13 @@ pub fn main() !void {
                 x = pos.x + size / 2 - sprite.offset_x;
             }
 
-            rl.drawRectangle(
-                @intFromFloat(x),
-                @intFromFloat(y),
-                @intFromFloat(size),
-                @intFromFloat(size),
-                sprite.tint,
-            );
+            gfx.Engine.UI.rect(.{
+                .x = @intFromFloat(x),
+                .y = @intFromFloat(y),
+                .width = @intFromFloat(size),
+                .height = @intFromFloat(size),
+                .color = sprite.tint,
+            });
         }
 
         // Draw animated entities as rectangles with frame numbers
@@ -231,40 +231,39 @@ pub fn main() !void {
                 x = pos.x + size / 2 - anim.offset_x;
             }
 
-            rl.drawRectangle(
-                @intFromFloat(x),
-                @intFromFloat(y),
-                @intFromFloat(size),
-                @intFromFloat(size),
-                anim.tint,
-            );
+            gfx.Engine.UI.rect(.{
+                .x = @intFromFloat(x),
+                .y = @intFromFloat(y),
+                .width = @intFromFloat(size),
+                .height = @intFromFloat(size),
+                .color = anim.tint,
+            });
 
             // Show animation frame
             var frame_buf: [8]u8 = undefined;
             const frame_str = std.fmt.bufPrintZ(&frame_buf, "{d}", .{anim.frame + 1}) catch "?";
-            rl.drawText(
-                frame_str,
-                @intFromFloat(x + size / 2 - 4),
-                @intFromFloat(y + size / 2 - 8),
-                16,
-                rl.Color.white,
-            );
+            gfx.Engine.UI.text(frame_str, .{
+                .x = @intFromFloat(x + size / 2 - 4),
+                .y = @intFromFloat(y + size / 2 - 8),
+                .size = 16,
+                .color = gfx.Color.white,
+            });
         }
 
-        // UI
-        rl.drawText("ECS Rendering with Engine API", 10, 10, 20, rl.Color.white);
-        rl.drawText("A/D or Left/Right: Move player", 10, 40, 14, rl.Color.light_gray);
-        rl.drawText("ESC: Exit", 10, 60, 14, rl.Color.light_gray);
+        // UI - using engine.ui helper
+        gfx.Engine.UI.text("ECS Rendering with Engine API", .{ .x = 10, .y = 10, .size = 20, .color = gfx.Color.white });
+        gfx.Engine.UI.text("A/D or Left/Right: Move player", .{ .x = 10, .y = 40, .size = 14, .color = gfx.Color.light_gray });
+        gfx.Engine.UI.text("ESC: Exit", .{ .x = 10, .y = 60, .size = 14, .color = gfx.Color.light_gray });
 
         // Z-index legend
-        rl.drawText("Z-Index Layers:", 600, 10, 14, rl.Color.white);
-        rl.drawText("Background: 0", 600, 30, 12, rl.Color.dark_blue);
-        rl.drawText("Floor: 10", 600, 45, 12, rl.Color.brown);
-        rl.drawText("Items: 30", 600, 60, 12, rl.Color.gold);
-        rl.drawText("Characters: 40", 600, 75, 12, rl.Color.sky_blue);
-        rl.drawText("UI: 70", 600, 90, 12, rl.Color.white);
+        gfx.Engine.UI.text("Z-Index Layers:", .{ .x = 600, .y = 10, .size = 14, .color = gfx.Color.white });
+        gfx.Engine.UI.text("Background: 0", .{ .x = 600, .y = 30, .size = 12, .color = gfx.Color.dark_blue });
+        gfx.Engine.UI.text("Floor: 10", .{ .x = 600, .y = 45, .size = 12, .color = gfx.Color.brown });
+        gfx.Engine.UI.text("Items: 30", .{ .x = 600, .y = 60, .size = 12, .color = gfx.Color.gold });
+        gfx.Engine.UI.text("Characters: 40", .{ .x = 600, .y = 75, .size = 12, .color = gfx.Color.sky_blue });
+        gfx.Engine.UI.text("UI: 70", .{ .x = 600, .y = 90, .size = 12, .color = gfx.Color.white });
 
         // Entity count
-        rl.drawText("Entities: 10", 10, 580, 14, rl.Color.light_gray);
+        gfx.Engine.UI.text("Entities: 10", .{ .x = 10, .y = 580, .size = 14, .color = gfx.Color.light_gray });
     }
 }

@@ -1,33 +1,53 @@
 //! High-level Engine API
 //!
 //! Provides a simplified interface for initializing and rendering with labelle.
+//! Optionally manages window creation, input handling, and frame management.
 //!
-//! Example usage:
+//! Example usage (with window management):
 //! ```zig
 //! const gfx = @import("labelle");
 //!
-//! const Animations = struct {
-//!     const Player = enum {
-//!         idle, walk, attack,
-//!         pub fn config(self: @This()) gfx.AnimConfig {
-//!             return switch (self) {
-//!                 .idle => .{ .frames = 4, .frame_duration = 0.2 },
-//!                 .walk => .{ .frames = 6, .frame_duration = 0.1 },
-//!                 .attack => .{ .frames = 5, .frame_duration = 0.08 },
-//!             };
-//!         }
-//!     };
-//! };
-//!
 //! var engine = try gfx.Engine.init(allocator, &registry, .{
+//!     .window = .{ .width = 800, .height = 600, .title = "My Game", .target_fps = 60 },
 //!     .atlases = &.{
 //!         .{ .name = "sprites", .json = "assets/sprites.json", .texture = "assets/sprites.png" },
 //!     },
+//!     .clear_color = gfx.Color.rgb(60, 70, 90),
 //! });
 //! defer engine.deinit();
 //!
-//! // Game loop
-//! engine.render(dt);
+//! while (engine.isRunning()) {
+//!     const dt = engine.getDeltaTime();
+//!
+//!     if (engine.input.isDown(.w)) { /* move up */ }
+//!     if (engine.input.isPressed(.space)) { /* jump */ }
+//!
+//!     engine.beginFrame();
+//!     defer engine.endFrame();
+//!
+//!     engine.render(dt);
+//!
+//!     engine.ui.text("Score: 100", .{ .x = 10, .y = 10 });
+//!     engine.ui.progressBar(.{ .x = 10, .y = 40, .value = 0.75 });
+//! }
+//! ```
+//!
+//! Example usage (without window management - backwards compatible):
+//! ```zig
+//! const gfx = @import("labelle");
+//! const rl = gfx.rl;
+//!
+//! rl.initWindow(800, 600, "Game");
+//! defer rl.closeWindow();
+//!
+//! var engine = try gfx.Engine.init(allocator, &registry, .{
+//!     .atlases = &.{ ... },
+//! });
+//! defer engine.deinit();
+//!
+//! while (!rl.windowShouldClose()) {
+//!     engine.render(rl.getFrameTime());
+//! }
 //! ```
 
 const std = @import("std");
@@ -67,10 +87,23 @@ pub const CameraConfig = struct {
     };
 };
 
+/// Window configuration (optional - for Engine-managed windows)
+pub const WindowConfig = struct {
+    width: i32 = 800,
+    height: i32 = 600,
+    title: [:0]const u8 = "labelle",
+    target_fps: i32 = 60,
+    flags: backend_mod.ConfigFlags = .{},
+};
+
 /// Engine configuration
 pub const EngineConfig = struct {
     atlases: []const AtlasConfig = &.{},
     camera: CameraConfig = .{},
+    /// Optional window configuration. If provided, Engine manages window lifecycle.
+    window: ?WindowConfig = null,
+    /// Default clear color for beginFrame()
+    clear_color: ?raylib_backend.RaylibBackend.Color = null,
 };
 
 /// High-level engine with custom backend support
@@ -83,10 +116,124 @@ pub fn EngineWith(comptime BackendType: type) type {
         const Self = @This();
         pub const Backend = BackendType;
 
+        /// Input helper for keyboard and mouse input
+        pub const Input = struct {
+            /// Check if a key is currently held down
+            pub fn isDown(key: backend_mod.KeyboardKey) bool {
+                return BackendType.isKeyDown(key);
+            }
+
+            /// Check if a key was pressed this frame
+            pub fn isPressed(key: backend_mod.KeyboardKey) bool {
+                return BackendType.isKeyPressed(key);
+            }
+
+            /// Check if a key was released this frame
+            pub fn isReleased(key: backend_mod.KeyboardKey) bool {
+                return BackendType.isKeyReleased(key);
+            }
+
+            /// Check if a mouse button is currently held down
+            pub fn isMouseDown(button: backend_mod.MouseButton) bool {
+                return BackendType.isMouseButtonDown(button);
+            }
+
+            /// Check if a mouse button was pressed this frame
+            pub fn isMousePressed(button: backend_mod.MouseButton) bool {
+                return BackendType.isMouseButtonPressed(button);
+            }
+
+            /// Get the current mouse position
+            pub fn getMousePosition() BackendType.Vector2 {
+                return BackendType.getMousePosition();
+            }
+
+            /// Get mouse wheel movement this frame
+            pub fn getMouseWheel() f32 {
+                return BackendType.getMouseWheelMove();
+            }
+        };
+
+        /// UI helper for drawing text, rectangles, and progress bars
+        pub const UI = struct {
+            /// Text drawing options
+            pub const TextOptions = struct {
+                x: i32 = 0,
+                y: i32 = 0,
+                size: i32 = 20,
+                color: BackendType.Color = BackendType.white,
+            };
+
+            /// Rectangle drawing options
+            pub const RectOptions = struct {
+                x: i32 = 0,
+                y: i32 = 0,
+                width: i32 = 100,
+                height: i32 = 100,
+                color: BackendType.Color = BackendType.white,
+                outline: bool = false,
+            };
+
+            /// Progress bar options
+            pub const ProgressBarOptions = struct {
+                x: i32 = 0,
+                y: i32 = 0,
+                width: i32 = 200,
+                height: i32 = 20,
+                value: f32 = 1.0, // 0.0 to 1.0
+                bg_color: BackendType.Color = BackendType.color(60, 60, 60, 255),
+                fill_color: BackendType.Color = BackendType.green,
+                border_color: ?BackendType.Color = null,
+            };
+
+            /// Draw text at position
+            pub fn text(str: [*:0]const u8, opts: TextOptions) void {
+                BackendType.drawText(str, opts.x, opts.y, opts.size, opts.color);
+            }
+
+            /// Draw a rectangle
+            pub fn rect(opts: RectOptions) void {
+                if (opts.outline) {
+                    BackendType.drawRectangleLines(opts.x, opts.y, opts.width, opts.height, opts.color);
+                } else {
+                    BackendType.drawRectangle(opts.x, opts.y, opts.width, opts.height, opts.color);
+                }
+            }
+
+            /// Draw a progress bar
+            pub fn progressBar(opts: ProgressBarOptions) void {
+                // Draw background
+                BackendType.drawRectangle(opts.x, opts.y, opts.width, opts.height, opts.bg_color);
+
+                // Draw fill
+                const fill_width: i32 = @intFromFloat(@as(f32, @floatFromInt(opts.width)) * @max(0.0, @min(1.0, opts.value)));
+                if (fill_width > 0) {
+                    BackendType.drawRectangle(opts.x, opts.y, fill_width, opts.height, opts.fill_color);
+                }
+
+                // Draw border if specified
+                if (opts.border_color) |border| {
+                    BackendType.drawRectangleLines(opts.x, opts.y, opts.width, opts.height, border);
+                }
+            }
+        };
+
         renderer: Renderer,
         registry: *ecs.Registry,
         allocator: std.mem.Allocator,
         game_hour: f32 = 12.0,
+
+        /// Whether the engine manages the window lifecycle
+        owns_window: bool = false,
+
+        /// Default clear color for beginFrame()
+        clear_color: BackendType.Color = BackendType.color(40, 40, 40, 255),
+
+        /// Input helper instance
+        input: Input = .{},
+
+        /// UI helper instance
+        ui: UI = .{},
 
         /// Temporary buffer for sprite name generation
         sprite_name_buffer: [256]u8 = undefined,
@@ -96,11 +243,32 @@ pub fn EngineWith(comptime BackendType: type) type {
             registry: *ecs.Registry,
             config: EngineConfig,
         ) !Self {
+            // Initialize window if configured
+            var owns_window = false;
+            if (config.window) |window_config| {
+                if (window_config.flags.window_hidden or
+                    window_config.flags.fullscreen_mode or
+                    window_config.flags.window_resizable or
+                    window_config.flags.vsync_hint)
+                {
+                    BackendType.setConfigFlags(window_config.flags);
+                }
+                BackendType.initWindow(window_config.width, window_config.height, window_config.title.ptr);
+                BackendType.setTargetFPS(window_config.target_fps);
+                owns_window = true;
+            }
+
             var engine = Self{
                 .renderer = Renderer.init(allocator),
                 .registry = registry,
                 .allocator = allocator,
+                .owns_window = owns_window,
             };
+
+            // Set clear color if provided
+            if (config.clear_color) |color| {
+                engine.clear_color = color;
+            }
 
             // Configure camera
             engine.renderer.camera.x = config.camera.initial_x;
@@ -126,6 +294,37 @@ pub fn EngineWith(comptime BackendType: type) type {
 
         pub fn deinit(self: *Self) void {
             self.renderer.deinit();
+            if (self.owns_window) {
+                BackendType.closeWindow();
+            }
+        }
+
+        // Window/loop management methods
+
+        /// Check if the engine should continue running (window not closed)
+        pub fn isRunning(_: *const Self) bool {
+            return !BackendType.windowShouldClose();
+        }
+
+        /// Get the delta time (time since last frame)
+        pub fn getDeltaTime(_: *const Self) f32 {
+            return BackendType.getFrameTime();
+        }
+
+        /// Begin a new frame (call beginDrawing and clear background)
+        pub fn beginFrame(self: *const Self) void {
+            BackendType.beginDrawing();
+            BackendType.clearBackground(self.clear_color);
+        }
+
+        /// End the current frame (call endDrawing)
+        pub fn endFrame(_: *const Self) void {
+            BackendType.endDrawing();
+        }
+
+        /// Take a screenshot (useful for CI testing)
+        pub fn takeScreenshot(_: *const Self, filename: [*:0]const u8) void {
+            BackendType.takeScreenshot(filename);
         }
 
         /// Set the current game hour for temporal effects (0.0 - 24.0)

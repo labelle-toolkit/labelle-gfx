@@ -5,6 +5,147 @@
 
 const std = @import("std");
 
+/// Keyboard key codes (compatible with raylib)
+pub const KeyboardKey = enum(c_int) {
+    null = 0,
+    // Alphanumeric keys
+    apostrophe = 39,
+    comma = 44,
+    minus = 45,
+    period = 46,
+    slash = 47,
+    zero = 48,
+    one = 49,
+    two = 50,
+    three = 51,
+    four = 52,
+    five = 53,
+    six = 54,
+    seven = 55,
+    eight = 56,
+    nine = 57,
+    semicolon = 59,
+    equal = 61,
+    a = 65,
+    b = 66,
+    c = 67,
+    d = 68,
+    e = 69,
+    f = 70,
+    g = 71,
+    h = 72,
+    i = 73,
+    j = 74,
+    k = 75,
+    l = 76,
+    m = 77,
+    n = 78,
+    o = 79,
+    p = 80,
+    q = 81,
+    r = 82,
+    s = 83,
+    t = 84,
+    u = 85,
+    v = 86,
+    w = 87,
+    x = 88,
+    y = 89,
+    z = 90,
+    // Function keys
+    space = 32,
+    escape = 256,
+    enter = 257,
+    tab = 258,
+    backspace = 259,
+    insert = 260,
+    delete = 261,
+    right = 262,
+    left = 263,
+    down = 264,
+    up = 265,
+    page_up = 266,
+    page_down = 267,
+    home = 268,
+    end = 269,
+    caps_lock = 280,
+    scroll_lock = 281,
+    num_lock = 282,
+    print_screen = 283,
+    pause = 284,
+    f1 = 290,
+    f2 = 291,
+    f3 = 292,
+    f4 = 293,
+    f5 = 294,
+    f6 = 295,
+    f7 = 296,
+    f8 = 297,
+    f9 = 298,
+    f10 = 299,
+    f11 = 300,
+    f12 = 301,
+    left_shift = 340,
+    left_control = 341,
+    left_alt = 342,
+    left_super = 343,
+    right_shift = 344,
+    right_control = 345,
+    right_alt = 346,
+    right_super = 347,
+    kb_menu = 348,
+    // Keypad keys
+    kp_0 = 320,
+    kp_1 = 321,
+    kp_2 = 322,
+    kp_3 = 323,
+    kp_4 = 324,
+    kp_5 = 325,
+    kp_6 = 326,
+    kp_7 = 327,
+    kp_8 = 328,
+    kp_9 = 329,
+    kp_decimal = 330,
+    kp_divide = 331,
+    kp_multiply = 332,
+    kp_subtract = 333,
+    kp_add = 334,
+    kp_enter = 335,
+    kp_equal = 336,
+};
+
+/// Mouse button codes
+pub const MouseButton = enum(c_int) {
+    left = 0,
+    right = 1,
+    middle = 2,
+    side = 3,
+    extra = 4,
+    forward = 5,
+    back = 6,
+};
+
+/// Window configuration flags
+pub const ConfigFlags = packed struct(c_int) {
+    vsync_hint: bool = false,
+    fullscreen_mode: bool = false,
+    window_resizable: bool = false,
+    window_undecorated: bool = false,
+    window_hidden: bool = false,
+    window_minimized: bool = false,
+    window_maximized: bool = false,
+    window_unfocused: bool = false,
+    window_topmost: bool = false,
+    window_always_run: bool = false,
+    window_transparent: bool = false,
+    window_highdpi: bool = false,
+    window_mouse_passthrough: bool = false,
+    borderless_windowed_mode: bool = false,
+    msaa_4x_hint: bool = false,
+    interlaced_hint: bool = false,
+    _padding: u16 = 0,
+};
+
 /// Creates a validated backend interface from an implementation type.
 /// The implementation must provide all required types and functions.
 ///
@@ -162,6 +303,178 @@ pub fn Backend(comptime Impl: type) type {
                 return texture.id != 0;
             } else {
                 return true;
+            }
+        }
+
+        // Window management (optional - for Engine integration)
+
+        /// Initialize window
+        pub inline fn initWindow(width: i32, height: i32, title: [*:0]const u8) void {
+            if (@hasDecl(Impl, "initWindow")) {
+                Impl.initWindow(width, height, title);
+            }
+        }
+
+        /// Close window
+        pub inline fn closeWindow() void {
+            if (@hasDecl(Impl, "closeWindow")) {
+                Impl.closeWindow();
+            }
+        }
+
+        /// Check if window should close
+        pub inline fn windowShouldClose() bool {
+            if (@hasDecl(Impl, "windowShouldClose")) {
+                return Impl.windowShouldClose();
+            }
+            return false;
+        }
+
+        /// Set target FPS
+        pub inline fn setTargetFPS(fps: i32) void {
+            if (@hasDecl(Impl, "setTargetFPS")) {
+                Impl.setTargetFPS(fps);
+            }
+        }
+
+        /// Get frame time (delta time)
+        pub inline fn getFrameTime() f32 {
+            if (@hasDecl(Impl, "getFrameTime")) {
+                return Impl.getFrameTime();
+            }
+            return 1.0 / 60.0; // Default to 60 FPS
+        }
+
+        /// Set config flags (before window init)
+        pub inline fn setConfigFlags(flags: ConfigFlags) void {
+            if (@hasDecl(Impl, "setConfigFlags")) {
+                Impl.setConfigFlags(flags);
+            }
+        }
+
+        /// Take screenshot
+        pub inline fn takeScreenshot(filename: [*:0]const u8) void {
+            if (@hasDecl(Impl, "takeScreenshot")) {
+                Impl.takeScreenshot(filename);
+            }
+        }
+
+        // Frame management (optional)
+
+        /// Begin drawing frame
+        pub inline fn beginDrawing() void {
+            if (@hasDecl(Impl, "beginDrawing")) {
+                Impl.beginDrawing();
+            }
+        }
+
+        /// End drawing frame
+        pub inline fn endDrawing() void {
+            if (@hasDecl(Impl, "endDrawing")) {
+                Impl.endDrawing();
+            }
+        }
+
+        /// Clear background with color
+        pub inline fn clearBackground(col: Color) void {
+            if (@hasDecl(Impl, "clearBackground")) {
+                Impl.clearBackground(col);
+            }
+        }
+
+        // Input functions (optional)
+
+        /// Check if key is currently pressed down
+        pub inline fn isKeyDown(key: KeyboardKey) bool {
+            if (@hasDecl(Impl, "isKeyDown")) {
+                return Impl.isKeyDown(key);
+            }
+            return false;
+        }
+
+        /// Check if key was pressed this frame
+        pub inline fn isKeyPressed(key: KeyboardKey) bool {
+            if (@hasDecl(Impl, "isKeyPressed")) {
+                return Impl.isKeyPressed(key);
+            }
+            return false;
+        }
+
+        /// Check if key was released this frame
+        pub inline fn isKeyReleased(key: KeyboardKey) bool {
+            if (@hasDecl(Impl, "isKeyReleased")) {
+                return Impl.isKeyReleased(key);
+            }
+            return false;
+        }
+
+        /// Check if mouse button is down
+        pub inline fn isMouseButtonDown(button: MouseButton) bool {
+            if (@hasDecl(Impl, "isMouseButtonDown")) {
+                return Impl.isMouseButtonDown(button);
+            }
+            return false;
+        }
+
+        /// Check if mouse button was pressed this frame
+        pub inline fn isMouseButtonPressed(button: MouseButton) bool {
+            if (@hasDecl(Impl, "isMouseButtonPressed")) {
+                return Impl.isMouseButtonPressed(button);
+            }
+            return false;
+        }
+
+        /// Get mouse position
+        pub inline fn getMousePosition() Vector2 {
+            if (@hasDecl(Impl, "getMousePosition")) {
+                return Impl.getMousePosition();
+            }
+            return .{ .x = 0, .y = 0 };
+        }
+
+        /// Get mouse wheel movement
+        pub inline fn getMouseWheelMove() f32 {
+            if (@hasDecl(Impl, "getMouseWheelMove")) {
+                return Impl.getMouseWheelMove();
+            }
+            return 0;
+        }
+
+        // UI/Drawing functions (optional)
+
+        /// Draw text
+        pub inline fn drawText(text: [*:0]const u8, x: i32, y: i32, font_size: i32, col: Color) void {
+            if (@hasDecl(Impl, "drawText")) {
+                Impl.drawText(text, x, y, font_size, col);
+            }
+        }
+
+        /// Draw rectangle
+        pub inline fn drawRectangle(x: i32, y: i32, width: i32, height: i32, col: Color) void {
+            if (@hasDecl(Impl, "drawRectangle")) {
+                Impl.drawRectangle(x, y, width, height, col);
+            }
+        }
+
+        /// Draw rectangle lines (outline)
+        pub inline fn drawRectangleLines(x: i32, y: i32, width: i32, height: i32, col: Color) void {
+            if (@hasDecl(Impl, "drawRectangleLines")) {
+                Impl.drawRectangleLines(x, y, width, height, col);
+            }
+        }
+
+        /// Draw rectangle with Rectangle struct
+        pub inline fn drawRectangleRec(rec: Rectangle, col: Color) void {
+            if (@hasDecl(Impl, "drawRectangleRec")) {
+                Impl.drawRectangleRec(rec, col);
+            } else if (@hasDecl(Impl, "drawRectangle")) {
+                Impl.drawRectangle(
+                    @intFromFloat(rec.x),
+                    @intFromFloat(rec.y),
+                    @intFromFloat(rec.width),
+                    @intFromFloat(rec.height),
+                    col,
+                );
             }
         }
     };

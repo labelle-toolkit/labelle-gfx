@@ -2,7 +2,9 @@
 //!
 //! Implements the backend interface using raylib-zig bindings.
 
+const std = @import("std");
 const rl = @import("raylib");
+const backend = @import("backend.zig");
 
 /// Raylib backend implementation
 pub const RaylibBackend = struct {
@@ -103,5 +105,119 @@ pub const RaylibBackend = struct {
     /// Check if texture is valid
     pub fn isTextureValid(texture: Texture) bool {
         return texture.id != 0;
+    }
+
+    // Window management
+
+    /// Initialize window
+    pub fn initWindow(width: i32, height: i32, title: [*:0]const u8) void {
+        rl.initWindow(width, height, std.mem.span(title));
+    }
+
+    /// Close window
+    pub fn closeWindow() void {
+        rl.closeWindow();
+    }
+
+    /// Check if window should close
+    pub fn windowShouldClose() bool {
+        return rl.windowShouldClose();
+    }
+
+    /// Set target FPS
+    pub fn setTargetFPS(fps: i32) void {
+        rl.setTargetFPS(fps);
+    }
+
+    /// Get frame time (delta time)
+    pub fn getFrameTime() f32 {
+        return rl.getFrameTime();
+    }
+
+    /// Set config flags
+    pub fn setConfigFlags(flags: backend.ConfigFlags) void {
+        // Convert our ConfigFlags to raylib's ConfigFlags
+        rl.setConfigFlags(@bitCast(flags));
+    }
+
+    /// Take screenshot
+    pub fn takeScreenshot(filename: [*:0]const u8) void {
+        rl.takeScreenshot(std.mem.span(filename));
+    }
+
+    // Frame management
+
+    /// Begin drawing frame
+    pub fn beginDrawing() void {
+        rl.beginDrawing();
+    }
+
+    /// End drawing frame
+    pub fn endDrawing() void {
+        rl.endDrawing();
+    }
+
+    /// Clear background
+    pub fn clearBackground(col: Color) void {
+        rl.clearBackground(col);
+    }
+
+    // Input functions
+
+    /// Check if key is down
+    pub fn isKeyDown(key: backend.KeyboardKey) bool {
+        return rl.isKeyDown(@enumFromInt(@intFromEnum(key)));
+    }
+
+    /// Check if key was pressed this frame
+    pub fn isKeyPressed(key: backend.KeyboardKey) bool {
+        return rl.isKeyPressed(@enumFromInt(@intFromEnum(key)));
+    }
+
+    /// Check if key was released this frame
+    pub fn isKeyReleased(key: backend.KeyboardKey) bool {
+        return rl.isKeyReleased(@enumFromInt(@intFromEnum(key)));
+    }
+
+    /// Check if mouse button is down
+    pub fn isMouseButtonDown(button: backend.MouseButton) bool {
+        return rl.isMouseButtonDown(@enumFromInt(@intFromEnum(button)));
+    }
+
+    /// Check if mouse button was pressed
+    pub fn isMouseButtonPressed(button: backend.MouseButton) bool {
+        return rl.isMouseButtonPressed(@enumFromInt(@intFromEnum(button)));
+    }
+
+    /// Get mouse position
+    pub fn getMousePosition() Vector2 {
+        return rl.getMousePosition();
+    }
+
+    /// Get mouse wheel movement
+    pub fn getMouseWheelMove() f32 {
+        return rl.getMouseWheelMove();
+    }
+
+    // UI/Drawing functions
+
+    /// Draw text
+    pub fn drawText(text: [*:0]const u8, x: i32, y: i32, font_size: i32, col: Color) void {
+        rl.drawText(std.mem.span(text), x, y, font_size, col);
+    }
+
+    /// Draw rectangle
+    pub fn drawRectangle(x: i32, y: i32, width: i32, height: i32, col: Color) void {
+        rl.drawRectangle(x, y, width, height, col);
+    }
+
+    /// Draw rectangle lines
+    pub fn drawRectangleLines(x: i32, y: i32, width: i32, height: i32, col: Color) void {
+        rl.drawRectangleLines(x, y, width, height, col);
+    }
+
+    /// Draw rectangle with Rectangle struct
+    pub fn drawRectangleRec(rec: Rectangle, col: Color) void {
+        rl.drawRectangleRec(rec, col);
     }
 };
