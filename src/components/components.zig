@@ -176,6 +176,9 @@ pub fn AnimationWith(comptime AnimType: type, comptime BackendType: type) type {
         offset_y: f32 = 0,
         /// Callback when animation completes (for non-looping)
         on_complete: ?*const fn () void = null,
+        /// Entity-specific sprite variant (e.g., "m_bald", "w_blonde", "thief")
+        /// Used by getSpriteNameWithVariant for entity-specific sprite names
+        sprite_variant: []const u8 = "",
 
         /// Initialize animation with a starting type
         pub fn init(anim_type: AnimType) Self {
@@ -184,6 +187,17 @@ pub fn AnimationWith(comptime AnimType: type, comptime BackendType: type) type {
                 .frame = 0,
                 .elapsed_time = 0,
                 .playing = true,
+            };
+        }
+
+        /// Initialize animation with a starting type and sprite variant
+        pub fn initWithVariant(anim_type: AnimType, variant: []const u8) Self {
+            return .{
+                .anim_type = anim_type,
+                .frame = 0,
+                .elapsed_time = 0,
+                .playing = true,
+                .sprite_variant = variant,
             };
         }
 
@@ -312,6 +326,38 @@ pub fn AnimationWith(comptime AnimType: type, comptime BackendType: type) type {
         /// Get current frame number (1-based, for sprite lookup)
         pub fn getFrameNumber(self: *const Self) u32 {
             return self.frame + 1;
+        }
+
+        /// Get the sprite name using the entity's sprite_variant field.
+        /// This allows entity-specific sprite names without needing custom queries.
+        ///
+        /// The formatter receives:
+        /// - anim_name: The animation type name (e.g., "walk", "idle")
+        /// - variant: The entity's sprite_variant (e.g., "m_bald", "w_blonde")
+        /// - frame: The 1-based frame number
+        /// - buffer: A buffer to write the result into
+        ///
+        /// Example usage for "walk/m_bald_0001.png" format:
+        /// ```zig
+        /// var anim = Animation.initWithVariant(.walk, "m_bald");
+        /// const sprite_name = anim.getSpriteNameWithVariant(&buffer, struct {
+        ///     pub fn format(anim_name: []const u8, variant: []const u8, frame: u32, buf: []u8) []const u8 {
+        ///         return std.fmt.bufPrint(buf, "{s}/{s}_{d:0>4}.png", .{
+        ///             anim_name,
+        ///             variant,
+        ///             frame,
+        ///         }) catch return "";
+        ///     }
+        /// }.format);
+        /// // Returns: "walk/m_bald_0001.png"
+        /// ```
+        pub fn getSpriteNameWithVariant(
+            self: *const Self,
+            buffer: []u8,
+            formatter: *const fn (anim_name: []const u8, variant: []const u8, frame: u32, buf: []u8) []const u8,
+        ) []const u8 {
+            const anim_name = @tagName(self.anim_type);
+            return formatter(anim_name, self.sprite_variant, self.frame + 1, buffer);
         }
     };
 }

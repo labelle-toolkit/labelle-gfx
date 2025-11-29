@@ -348,6 +348,75 @@ pub fn EngineWith(comptime BackendType: type) type {
                 );
             }
         }
+
+        /// Render animations with entity-specific sprite variants.
+        /// Use this when each entity needs a different sprite prefix (e.g., different characters).
+        ///
+        /// Each Animation component should have its sprite_variant field set.
+        ///
+        /// The formatter function receives:
+        /// - anim_name: The animation type name (e.g., "walk", "idle")
+        /// - variant: The entity's sprite_variant (e.g., "m_bald", "w_blonde")
+        /// - frame: The 1-based frame number
+        /// - buffer: A buffer to write the result into
+        ///
+        /// Example usage for "{anim}/{variant}_{frame}.png" format:
+        /// ```zig
+        /// // Create entities with different sprite variants
+        /// var player_anim = Animation.initWithVariant(.walk, "m_bald");
+        /// var npc_anim = Animation.initWithVariant(.walk, "w_blonde");
+        ///
+        /// // Render all with same formatter - variant comes from each entity
+        /// engine.renderAnimationsWithVariant(PlayerAnim, dt, struct {
+        ///     pub fn format(anim_name: []const u8, variant: []const u8, frame: u32, buf: []u8) []const u8 {
+        ///         return std.fmt.bufPrint(buf, "{s}/{s}_{d:0>4}.png", .{
+        ///             anim_name,
+        ///             variant,
+        ///             frame,
+        ///         }) catch return "";
+        ///     }
+        /// }.format);
+        /// // Player renders: "walk/m_bald_0001.png"
+        /// // NPC renders: "walk/w_blonde_0001.png"
+        /// ```
+        pub fn renderAnimationsWithVariant(
+            self: *Self,
+            comptime AnimationType: type,
+            dt: f32,
+            formatter: *const fn (anim_name: []const u8, variant: []const u8, frame: u32, buf: []u8) []const u8,
+        ) void {
+            const AnimComp = components.AnimationWith(AnimationType, BackendType);
+
+            var view = self.registry.view(.{ Position, AnimComp }, .{});
+            var iter = @TypeOf(view).Iterator.init(&view);
+
+            while (iter.next()) |entity| {
+                var anim = view.get(AnimComp, entity);
+                const pos = view.getConst(Position, entity);
+
+                // Update animation
+                anim.update(dt);
+
+                // Get sprite name using variant formatter
+                const sprite_name = anim.getSpriteNameWithVariant(&self.sprite_name_buffer, formatter);
+
+                // Draw
+                self.renderer.drawSprite(
+                    sprite_name,
+                    pos.x,
+                    pos.y,
+                    .{
+                        .offset_x = anim.offset_x,
+                        .offset_y = anim.offset_y,
+                        .scale = anim.scale,
+                        .rotation = anim.rotation,
+                        .tint = anim.tint,
+                        .flip_x = anim.flip_x,
+                        .flip_y = anim.flip_y,
+                    },
+                );
+            }
+        }
     };
 }
 
