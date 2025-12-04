@@ -226,4 +226,23 @@ pub fn build(b: *std.Build) void {
     const run_lib_tests = b.addRunArtifact(lib_tests);
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&run_lib_tests.step);
+
+    // Benchmarks
+    const culling_benchmark = b.addExecutable(.{
+        .name = "culling_benchmark",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/culling_benchmark.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "labelle", .module = lib_mod },
+                .{ .name = "raylib", .module = raylib },
+            },
+        }),
+    });
+    culling_benchmark.linkLibrary(raylib_artifact);
+
+    const run_culling_benchmark = b.addRunArtifact(culling_benchmark);
+    const bench_culling_step = b.step("bench-culling", "Run viewport culling benchmark");
+    bench_culling_step.dependOn(&run_culling_benchmark.step);
 }

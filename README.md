@@ -250,6 +250,9 @@ zig build
 # Run tests
 zig build test
 
+# Run benchmarks
+zig build bench-culling
+
 # Run converter tool
 zig build converter -- input.json -o output.zon
 

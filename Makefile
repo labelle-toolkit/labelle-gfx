@@ -1,4 +1,4 @@
-.PHONY: all build test clean help run-01 run-02 run-03 run-04 run-05 run-06 run-07 run-08 run-basic-sprite run-animation run-sprite-atlas run-camera run-ecs-rendering run-effects run-with-fixtures run-nested-animations run-all
+.PHONY: all build test bench clean help run-01 run-02 run-03 run-04 run-05 run-06 run-07 run-08 run-basic-sprite run-animation run-sprite-atlas run-camera run-ecs-rendering run-effects run-with-fixtures run-nested-animations run-all
 
 all: build
 
@@ -7,6 +7,9 @@ build:
 
 test:
 	zig build test
+
+bench:
+	zig build bench-culling
 
 clean:
 	rm -rf zig-out .zig-cache
@@ -52,6 +55,7 @@ help:
 	@echo "Usage:"
 	@echo "  make build              - Build the library"
 	@echo "  make test               - Run tests"
+	@echo "  make bench              - Run performance benchmarks"
 	@echo "  make clean              - Clean build artifacts"
 	@echo ""
 	@echo "Examples:"
