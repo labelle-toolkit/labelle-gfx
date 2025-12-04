@@ -98,8 +98,8 @@ pub const EngineConfigTests = struct {
         const config = gfx.EngineConfig{};
 
         try expect.equal(config.atlases.len, 0);
-        try expect.equal(config.camera.initial_x, 0);
-        try expect.equal(config.camera.initial_y, 0);
+        try expect.toBeTrue(config.camera.initial_x == null);
+        try expect.toBeTrue(config.camera.initial_y == null);
         try expect.equal(config.camera.initial_zoom, 1.0);
         try expect.toBeTrue(config.camera.bounds == null);
     }

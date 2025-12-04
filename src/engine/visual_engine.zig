@@ -42,6 +42,11 @@ pub const SpriteId = sprite_storage.SpriteId;
 pub const Position = sprite_storage.Position;
 pub const ZIndex = sprite_storage.ZIndex;
 
+/// Maximum length for sprite names stored in InternalSpriteData
+pub const max_sprite_name_len: usize = 64;
+/// Maximum length for animation names stored in InternalSpriteData
+pub const max_animation_name_len: usize = 32;
+
 /// Animation playback callback
 pub const OnAnimationComplete = *const fn (id: SpriteId, animation: []const u8) void;
 
@@ -109,7 +114,7 @@ const InternalSpriteData = struct {
     tint_a: u8 = 255,
 
     // Sprite name for rendering
-    sprite_name: [64]u8 = [_]u8{0} ** 64,
+    sprite_name: [max_sprite_name_len]u8 = [_]u8{0} ** max_sprite_name_len,
     sprite_name_len: u8 = 0,
 
     // Animation state
@@ -120,7 +125,7 @@ const InternalSpriteData = struct {
     animation_looping: bool = true,
     animation_duration: f32 = 0.1,
     animation_frame_count: u16 = 1,
-    animation_name: [32]u8 = [_]u8{0} ** 32,
+    animation_name: [max_animation_name_len]u8 = [_]u8{0} ** max_animation_name_len,
     animation_name_len: u8 = 0,
 
     // Generation for handle validation
@@ -197,9 +202,12 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
                 ),
             };
 
-            // Initialize free list
+            // Pre-allocate free list to max capacity - this ensures removeSprite() can never fail
+            try engine.free_list.ensureTotalCapacity(allocator, max_sprites);
+
+            // Initialize free list (using appendAssumeCapacity since we pre-allocated)
             for (0..max_sprites) |i| {
-                try engine.free_list.append(allocator, @intCast(max_sprites - 1 - i));
+                engine.free_list.appendAssumeCapacity(@intCast(max_sprites - 1 - i));
             }
 
             // Load atlases
@@ -275,7 +283,9 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
         pub fn removeSprite(self: *Self, id: SpriteId) bool {
             if (!self.isValid(id)) return false;
             self.sprites[id.index].active = false;
-            self.free_list.append(self.allocator, id.index) catch return false;
+            // Safe to use appendAssumeCapacity since we pre-allocated to max_sprites
+            // and free_list can never exceed max_sprites entries
+            self.free_list.appendAssumeCapacity(id.index);
             self.sprite_count -= 1;
             return true;
         }

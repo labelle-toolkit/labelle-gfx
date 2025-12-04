@@ -111,15 +111,18 @@ pub fn SpriteStorage(comptime max_sprites: usize) type {
         sprite_count: u32 = 0,
         allocator: std.mem.Allocator,
 
-        pub fn init(allocator: std.mem.Allocator) Self {
+        pub fn init(allocator: std.mem.Allocator) !Self {
             var storage = Self{
                 .free_list = .empty,
                 .allocator = allocator,
             };
 
-            // Initialize free list with all indices
+            // Pre-allocate free list to max capacity - this ensures remove() can never fail
+            try storage.free_list.ensureTotalCapacity(allocator, max_sprites);
+
+            // Initialize free list with all indices (using appendAssumeCapacity since we pre-allocated)
             for (0..max_sprites) |i| {
-                storage.free_list.append(allocator, @intCast(max_sprites - 1 - i)) catch {};
+                storage.free_list.appendAssumeCapacity(@intCast(max_sprites - 1 - i));
             }
 
             return storage;
@@ -163,7 +166,9 @@ pub fn SpriteStorage(comptime max_sprites: usize) type {
             if (!self.isValid(id)) return false;
 
             self.sprites[id.index].active = false;
-            self.free_list.append(self.allocator, id.index) catch return false;
+            // Safe to use appendAssumeCapacity since we pre-allocated to max_sprites
+            // and free_list can never exceed max_sprites entries
+            self.free_list.appendAssumeCapacity(id.index);
             self.sprite_count -= 1;
 
             return true;
@@ -303,7 +308,7 @@ pub const DefaultSpriteStorage = SpriteStorage(10000);
 
 // Tests
 test "add and remove sprites" {
-    var storage = DefaultSpriteStorage.init(std.testing.allocator);
+    var storage = try DefaultSpriteStorage.init(std.testing.allocator);
     defer storage.deinit();
 
     const id1 = try storage.add(.{ .x = 10, .y = 20 });
@@ -320,7 +325,7 @@ test "add and remove sprites" {
 }
 
 test "get and set position" {
-    var storage = DefaultSpriteStorage.init(std.testing.allocator);
+    var storage = try DefaultSpriteStorage.init(std.testing.allocator);
     defer storage.deinit();
 
     const id = try storage.add(.{ .x = 100, .y = 200 });
@@ -337,7 +342,7 @@ test "get and set position" {
 }
 
 test "invalid handle returns null" {
-    var storage = DefaultSpriteStorage.init(std.testing.allocator);
+    var storage = try DefaultSpriteStorage.init(std.testing.allocator);
     defer storage.deinit();
 
     const id = try storage.add(.{});
@@ -350,7 +355,7 @@ test "invalid handle returns null" {
 }
 
 test "generation prevents use-after-free" {
-    var storage = DefaultSpriteStorage.init(std.testing.allocator);
+    var storage = try DefaultSpriteStorage.init(std.testing.allocator);
     defer storage.deinit();
 
     const id1 = try storage.add(.{ .x = 10, .y = 20 });
@@ -369,7 +374,7 @@ test "generation prevents use-after-free" {
 }
 
 test "set visibility" {
-    var storage = DefaultSpriteStorage.init(std.testing.allocator);
+    var storage = try DefaultSpriteStorage.init(std.testing.allocator);
     defer storage.deinit();
 
     const id = try storage.add(.{ .visible = true });
@@ -380,7 +385,7 @@ test "set visibility" {
 }
 
 test "set scale and rotation" {
-    var storage = DefaultSpriteStorage.init(std.testing.allocator);
+    var storage = try DefaultSpriteStorage.init(std.testing.allocator);
     defer storage.deinit();
 
     const id = try storage.add(.{});
@@ -394,7 +399,7 @@ test "set scale and rotation" {
 }
 
 test "iterator returns active sprites" {
-    var storage = DefaultSpriteStorage.init(std.testing.allocator);
+    var storage = try DefaultSpriteStorage.init(std.testing.allocator);
     defer storage.deinit();
 
     _ = try storage.add(.{ .x = 1, .y = 1 });

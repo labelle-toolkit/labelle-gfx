@@ -74,8 +74,10 @@ pub const AtlasConfig = struct {
 
 /// Camera configuration
 pub const CameraConfig = struct {
-    initial_x: f32 = 0,
-    initial_y: f32 = 0,
+    /// Initial camera X position. If null, camera auto-centers on screen.
+    initial_x: ?f32 = null,
+    /// Initial camera Y position. If null, camera auto-centers on screen.
+    initial_y: ?f32 = null,
     initial_zoom: f32 = 1.0,
     bounds: ?BoundsConfig = null,
 
@@ -271,12 +273,15 @@ pub fn EngineWith(comptime BackendType: type) type {
             }
 
             // Configure camera - center by default if no explicit position given
-            if (config.camera.initial_x == 0 and config.camera.initial_y == 0) {
+            if (config.camera.initial_x) |x| {
+                engine.renderer.camera.x = x;
+            }
+            if (config.camera.initial_y) |y| {
+                engine.renderer.camera.y = y;
+            }
+            if (config.camera.initial_x == null and config.camera.initial_y == null) {
                 // Default: center camera so world coords = screen coords at zoom 1
                 engine.renderer.camera.centerOnScreen();
-            } else {
-                engine.renderer.camera.x = config.camera.initial_x;
-                engine.renderer.camera.y = config.camera.initial_y;
             }
             engine.renderer.camera.zoom = config.camera.initial_zoom;
 
