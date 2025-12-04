@@ -2,13 +2,14 @@
 //!
 //! This example demonstrates using comptime-loaded .zon files for animation
 //! definitions with the visual engine. Frame data and animations are validated
-//! at compile time.
+//! at compile time, and the engine's animation registry provides a simplified API.
 //!
 //! Features demonstrated:
 //! - Loading frame data from .zon files at comptime
 //! - Loading animation definitions from .zon files at comptime
 //! - Compile-time validation of animation frame references
-//! - Playing animations with the visual engine
+//! - Registering animations with the visual engine
+//! - Playing animations with the simplified engine.play() API
 //!
 //! Run with: zig build run-example-12
 
@@ -27,106 +28,6 @@ const character_anims = @import("characters_animations.zon");
 // Validate at compile time that all animation frames exist
 comptime {
     animation_def.validateAnimationsData(character_frames, character_anims);
-}
-
-// Convert comptime tuples to arrays for runtime indexing
-fn TupleToArray(comptime T: type) type {
-    const info = @typeInfo(T);
-    if (info == .@"struct" and info.@"struct".is_tuple) {
-        return [info.@"struct".fields.len][]const u8;
-    }
-    return [0][]const u8;
-}
-
-fn tupleToArray(comptime tuple: anytype) TupleToArray(@TypeOf(tuple)) {
-    const info = @typeInfo(@TypeOf(tuple));
-    if (info == .@"struct" and info.@"struct".is_tuple) {
-        var result: TupleToArray(@TypeOf(tuple)) = undefined;
-        inline for (0..info.@"struct".fields.len) |i| {
-            result[i] = tuple[i];
-        }
-        return result;
-    }
-    return .{};
-}
-
-// Precomputed animation frame arrays (comptime tuple -> runtime array)
-const idle_frames: TupleToArray(@TypeOf(character_anims.idle.frames)) = tupleToArray(character_anims.idle.frames);
-const walk_frames: TupleToArray(@TypeOf(character_anims.walk.frames)) = tupleToArray(character_anims.walk.frames);
-const run_frames: TupleToArray(@TypeOf(character_anims.run.frames)) = tupleToArray(character_anims.run.frames);
-const jump_frames: TupleToArray(@TypeOf(character_anims.jump.frames)) = tupleToArray(character_anims.jump.frames);
-
-// Animation state structure
-const AnimationState = struct {
-    current_anim: []const u8,
-    current_frame: u16,
-    elapsed: f32,
-    playing: bool,
-    looping: bool,
-    duration: f32,
-    frame_count: u16,
-
-    fn init(comptime anim_name: []const u8) AnimationState {
-        return .{
-            .current_anim = anim_name,
-            .current_frame = 0,
-            .elapsed = 0,
-            .playing = true,
-            .looping = comptime animation_def.isLoopingData(character_anims, anim_name),
-            .duration = comptime animation_def.getDurationData(character_anims, anim_name),
-            .frame_count = @intCast(comptime animation_def.frameCountData(character_anims, anim_name)),
-        };
-    }
-
-    fn play(self: *AnimationState, comptime anim_name: []const u8) void {
-        self.current_anim = anim_name;
-        self.current_frame = 0;
-        self.elapsed = 0;
-        self.playing = true;
-        self.looping = comptime animation_def.isLoopingData(character_anims, anim_name);
-        self.duration = comptime animation_def.getDurationData(character_anims, anim_name);
-        self.frame_count = @intCast(comptime animation_def.frameCountData(character_anims, anim_name));
-    }
-
-    fn update(self: *AnimationState, dt: f32) void {
-        if (!self.playing or self.frame_count <= 1) return;
-
-        self.elapsed += dt;
-        const frame_duration = self.duration / @as(f32, @floatFromInt(self.frame_count));
-
-        while (self.elapsed >= frame_duration) {
-            self.elapsed -= frame_duration;
-            self.current_frame += 1;
-
-            if (self.current_frame >= self.frame_count) {
-                if (self.looping) {
-                    self.current_frame = 0;
-                } else {
-                    self.playing = false;
-                    self.current_frame = self.frame_count - 1;
-                }
-            }
-        }
-    }
-
-    fn getCurrentFrameName(self: *const AnimationState) []const u8 {
-        // Runtime lookup using precomputed arrays
-        return getFrameNameRuntime(self.current_anim, self.current_frame);
-    }
-};
-
-// Runtime frame name lookup using precomputed arrays
-fn getFrameNameRuntime(anim_name: []const u8, frame_index: u16) []const u8 {
-    if (std.mem.eql(u8, anim_name, "idle")) {
-        if (frame_index < idle_frames.len) return idle_frames[frame_index];
-    } else if (std.mem.eql(u8, anim_name, "walk")) {
-        if (frame_index < walk_frames.len) return walk_frames[frame_index];
-    } else if (std.mem.eql(u8, anim_name, "run")) {
-        if (frame_index < run_frames.len) return run_frames[frame_index];
-    } else if (std.mem.eql(u8, anim_name, "jump")) {
-        if (frame_index < jump_frames.len) return jump_frames[frame_index];
-    }
-    return "idle_0001"; // fallback
 }
 
 pub fn main() !void {
@@ -156,8 +57,14 @@ pub fn main() !void {
     });
     defer engine.deinit();
 
+    // Register animation definitions from comptime .zon data
+    // This enables the simplified engine.play(sprite, "anim_name") API
+    const anim_entries = comptime animation_def.animationEntries(character_anims);
+    try engine.registerAnimations(&anim_entries);
+
     std.debug.print("Comptime Animations Demo initialized\n", .{});
     std.debug.print("Animation definitions validated at compile time!\n", .{});
+    std.debug.print("Registered {} animations with the engine\n", .{comptime animation_def.animationCountData(character_anims)});
 
     // Create player sprite
     const player = try engine.addSprite(.{
@@ -168,8 +75,29 @@ pub fn main() !void {
         .scale = 4.0,
     });
 
-    // Animation state using comptime definitions
-    var anim_state = AnimationState.init("idle");
+    // Track current animation name for state management
+    // Using a struct with static variable to share state with callback
+    const AnimState = struct {
+        var current_anim: []const u8 = "idle";
+        var jump_finished: bool = false;
+    };
+
+    // Set up animation complete callback for non-looping animations (like jump)
+    // This callback is invoked when a non-looping animation finishes
+    engine.setOnAnimationComplete(struct {
+        fn callback(id: SpriteId, animation: []const u8) void {
+            _ = id;
+            if (std.mem.eql(u8, animation, "jump")) {
+                // Jump animation finished - signal to return to idle
+                AnimState.jump_finished = true;
+                std.debug.print("Jump animation completed!\n", .{});
+            }
+        }
+    }.callback);
+
+    // Start idle animation using the simplified play() API
+    // No need to specify frame_count, duration, looping - it's looked up from the registry!
+    _ = engine.play(player, "idle");
 
     // Camera setup
     engine.setFollowSmoothing(0.05);
@@ -214,50 +142,64 @@ pub fn main() !void {
             running = true;
         }
 
-        // Switch animation based on state
-        if (jumping and !std.mem.eql(u8, anim_state.current_anim, "jump")) {
-            anim_state.play("jump");
-        } else if (running and !std.mem.eql(u8, anim_state.current_anim, "run")) {
-            anim_state.play("run");
-        } else if (moving and !jumping and !running and !std.mem.eql(u8, anim_state.current_anim, "walk")) {
-            anim_state.play("walk");
-        } else if (!moving and !jumping and !std.mem.eql(u8, anim_state.current_anim, "idle")) {
-            anim_state.play("idle");
+        // Check if jump animation finished (via callback)
+        if (AnimState.jump_finished) {
+            AnimState.jump_finished = false;
+            AnimState.current_anim = "idle";
+            _ = engine.play(player, "idle");
         }
 
-        // Update animation
-        anim_state.update(dt);
+        // Switch animation based on state using simplified play() API
+        if (jumping and !std.mem.eql(u8, AnimState.current_anim, "jump")) {
+            _ = engine.play(player, "jump");
+            AnimState.current_anim = "jump";
+        } else if (running and !std.mem.eql(u8, AnimState.current_anim, "run")) {
+            _ = engine.play(player, "run");
+            AnimState.current_anim = "run";
+        } else if (moving and !jumping and !running and !std.mem.eql(u8, AnimState.current_anim, "walk")) {
+            _ = engine.play(player, "walk");
+            AnimState.current_anim = "walk";
+        } else if (!moving and !jumping and !std.mem.eql(u8, AnimState.current_anim, "idle")) {
+            _ = engine.play(player, "idle");
+            AnimState.current_anim = "idle";
+        }
 
-        // Update sprite
+        // Update sprite position and flip
         _ = engine.setPosition(player, player_x, 300);
         _ = engine.setFlip(player, flip_x, false);
-        _ = engine.setSpriteName(player, anim_state.getCurrentFrameName());
 
         // Begin frame
         engine.beginFrame();
 
-        // Tick (camera updates, internal rendering)
+        // Tick handles animation updates, camera updates, and rendering
+        // The animation system automatically updates sprite names!
         engine.tick(dt);
 
         // Draw UI
         gfx.Engine.UI.text("Comptime Animations Demo", .{ .x = 10, .y = 10, .size = 20, .color = gfx.Color.white });
         gfx.Engine.UI.text("Animation definitions validated at compile time!", .{ .x = 10, .y = 35, .size = 14, .color = gfx.Color.green });
-        gfx.Engine.UI.text("A/D: Walk  |  Shift+A/D: Run  |  Space: Jump", .{ .x = 10, .y = 55, .size = 16, .color = gfx.Color.light_gray });
+        gfx.Engine.UI.text("Using engine.play() - no manual frame_count/duration needed!", .{ .x = 10, .y = 55, .size = 14, .color = gfx.Color.green });
+        gfx.Engine.UI.text("A/D: Walk  |  Shift+A/D: Run  |  Space: Jump", .{ .x = 10, .y = 80, .size = 16, .color = gfx.Color.light_gray });
 
+        // Show current animation info from registry
         var anim_buf: [64]u8 = undefined;
-        const anim_str = std.fmt.bufPrintZ(&anim_buf, "Animation: {s} Frame: {}/{}", .{
-            anim_state.current_anim,
-            anim_state.current_frame + 1,
-            anim_state.frame_count,
+        const current_sprite = engine.getSpriteName(player) orelse "unknown";
+        const anim_str = std.fmt.bufPrintZ(&anim_buf, "Animation: {s}  Sprite: {s}", .{
+            AnimState.current_anim,
+            current_sprite,
         }) catch "?";
-        gfx.Engine.UI.text(anim_str, .{ .x = 10, .y = 80, .size = 16, .color = gfx.Color.sky_blue });
+        gfx.Engine.UI.text(anim_str, .{ .x = 10, .y = 110, .size = 16, .color = gfx.Color.sky_blue });
 
-        var duration_buf: [64]u8 = undefined;
-        const duration_str = std.fmt.bufPrintZ(&duration_buf, "Duration: {d:.2}s  Looping: {}", .{
-            anim_state.duration,
-            anim_state.looping,
-        }) catch "?";
-        gfx.Engine.UI.text(duration_str, .{ .x = 10, .y = 105, .size = 16, .color = gfx.Color.sky_blue });
+        // Show animation info from registry
+        if (engine.getAnimationInfo(AnimState.current_anim)) |info| {
+            var info_buf: [64]u8 = undefined;
+            const info_str = std.fmt.bufPrintZ(&info_buf, "Frames: {}  Duration: {d:.2}s  Looping: {}", .{
+                info.frame_count,
+                info.duration,
+                info.looping,
+            }) catch "?";
+            gfx.Engine.UI.text(info_str, .{ .x = 10, .y = 135, .size = 16, .color = gfx.Color.sky_blue });
+        }
 
         gfx.Engine.UI.text("ESC: Exit", .{ .x = 10, .y = 580, .size = 14, .color = gfx.Color.light_gray });
 

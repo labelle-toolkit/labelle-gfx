@@ -241,3 +241,99 @@ test "get frame data" {
     try std.testing.expectEqual(@as(i32, 64), frame.h);
     try std.testing.expectEqual(true, frame.rotated);
 }
+
+// ==================== Runtime Animation Registry ====================
+
+/// Runtime animation definition for use with VisualEngine
+pub const AnimationInfo = struct {
+    frame_count: u16,
+    duration: f32,
+    looping: bool,
+};
+
+/// Maximum length for animation names in the registry
+pub const max_anim_name_len: usize = 32;
+
+/// Entry type for animation definitions
+pub const AnimationEntry = struct {
+    name: []const u8,
+    info: AnimationInfo,
+};
+
+/// Creates a comptime array of animation entries from a .zon animation definition.
+/// Returns an array of AnimationEntry with .name and .info fields.
+/// Usage:
+/// ```zig
+/// const anims = @import("characters_animations.zon");
+/// const entries = comptime animation_def.animationEntries(anims);
+/// try engine.registerAnimations(&entries);
+/// ```
+pub fn animationEntries(comptime animations: anytype) [animationCountData(animations)]AnimationEntry {
+    const type_info = @typeInfo(@TypeOf(animations));
+    if (type_info != .@"struct") {
+        @compileError("animations must be a struct");
+    }
+
+    var result: [type_info.@"struct".fields.len]AnimationEntry = undefined;
+    inline for (type_info.@"struct".fields, 0..) |field, i| {
+        const anim_def = @field(animations, field.name);
+        const frames_tuple = anim_def.frames;
+        const frames_info = @typeInfo(@TypeOf(frames_tuple));
+
+        const frame_count: u16 = if (frames_info == .@"struct" and frames_info.@"struct".is_tuple)
+            @intCast(frames_info.@"struct".fields.len)
+        else
+            0;
+
+        const AnimDefType = @TypeOf(anim_def);
+        const looping: bool = if (@hasField(AnimDefType, "looping")) anim_def.looping else true;
+
+        result[i] = .{
+            .name = field.name,
+            .info = AnimationInfo{
+                .frame_count = frame_count,
+                .duration = anim_def.duration,
+                .looping = looping,
+            },
+        };
+    }
+    return result;
+}
+
+test "animation entries" {
+    const test_anims = .{
+        .idle = .{
+            .frames = .{ "a", "b", "c", "d" },
+            .duration = 0.6,
+            .looping = true,
+        },
+        .attack = .{
+            .frames = .{ "x", "y" },
+            .duration = 0.3,
+            .looping = false,
+        },
+    };
+
+    const entries = comptime animationEntries(test_anims);
+    try std.testing.expectEqual(@as(usize, 2), entries.len);
+
+    // Find idle entry
+    var found_idle = false;
+    var found_attack = false;
+    for (&entries) |entry| {
+        if (std.mem.eql(u8, entry.name, "idle")) {
+            found_idle = true;
+            try std.testing.expectEqual(@as(u16, 4), entry.info.frame_count);
+            try std.testing.expectEqual(@as(f32, 0.6), entry.info.duration);
+            try std.testing.expectEqual(true, entry.info.looping);
+        }
+        if (std.mem.eql(u8, entry.name, "attack")) {
+            found_attack = true;
+            try std.testing.expectEqual(@as(u16, 2), entry.info.frame_count);
+            try std.testing.expectEqual(@as(f32, 0.3), entry.info.duration);
+            try std.testing.expectEqual(false, entry.info.looping);
+        }
+    }
+    try std.testing.expect(found_idle);
+    try std.testing.expect(found_attack);
+}

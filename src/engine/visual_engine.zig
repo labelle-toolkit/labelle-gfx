@@ -37,10 +37,12 @@ const raylib_backend = @import("../backend/raylib_backend.zig");
 const renderer_mod = @import("../renderer/renderer.zig");
 const texture_manager_mod = @import("../texture/texture_manager.zig");
 const camera_mod = @import("../camera/camera.zig");
+const animation_def = @import("../animation_def.zig");
 
 pub const SpriteId = sprite_storage.SpriteId;
 pub const Position = sprite_storage.Position;
 pub const ZIndex = sprite_storage.ZIndex;
+pub const AnimationInfo = animation_def.AnimationInfo;
 
 /// Maximum length for sprite names stored in InternalSpriteData
 pub const max_sprite_name_len: usize = 64;
@@ -143,6 +145,17 @@ const InternalSpriteData = struct {
     }
 };
 
+/// Key type for animation registry - fixed-size name buffer
+pub const AnimNameKey = [animation_def.max_anim_name_len]u8;
+
+/// Convert a string slice to a fixed-size animation name key
+fn nameToKey(name: []const u8) AnimNameKey {
+    var key: AnimNameKey = [_]u8{0} ** animation_def.max_anim_name_len;
+    const len = @min(name.len, key.len);
+    @memcpy(key[0..len], name[0..len]);
+    return key;
+}
+
 /// Visual rendering engine with raylib backend
 pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize) type {
     const Renderer = renderer_mod.RendererWith(BackendType);
@@ -159,6 +172,9 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
         sprites: [max_sprites]InternalSpriteData = [_]InternalSpriteData{.{}} ** max_sprites,
         free_list: std.ArrayList(u32),
         sprite_count: u32 = 0,
+
+        // Animation registry - maps animation names to their definitions
+        animation_registry: std.AutoArrayHashMapUnmanaged(AnimNameKey, AnimationInfo),
 
         // Camera state
         camera_follow_target: ?SpriteId = null,
@@ -193,6 +209,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
                 .allocator = allocator,
                 .renderer = Renderer.init(allocator),
                 .free_list = .empty,
+                .animation_registry = .empty,
                 .owns_window = owns_window,
                 .clear_color = BackendType.color(
                     config.clear_color_r,
@@ -221,6 +238,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
         pub fn deinit(self: *Self) void {
             self.renderer.deinit();
             self.free_list.deinit(self.allocator);
+            self.animation_registry.deinit(self.allocator);
             if (self.owns_window) {
                 BackendType.closeWindow();
             }
@@ -367,6 +385,35 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
 
         // ==================== Animation ====================
 
+        /// Register animation definitions from comptime .zon data.
+        /// Use with animation_def.animationEntries():
+        /// ```zig
+        /// const anims = @import("characters_animations.zon");
+        /// const entries = comptime animation_def.animationEntries(anims);
+        /// try engine.registerAnimations(&entries);
+        /// ```
+        pub fn registerAnimations(self: *Self, entries: []const animation_def.AnimationEntry) !void {
+            try self.animation_registry.ensureTotalCapacity(self.allocator, self.animation_registry.count() + entries.len);
+            for (entries) |entry| {
+                self.animation_registry.putAssumeCapacity(nameToKey(entry.name), entry.info);
+            }
+        }
+
+        /// Look up a registered animation by name
+        pub fn getAnimationInfo(self: *const Self, name: []const u8) ?AnimationInfo {
+            return self.animation_registry.get(nameToKey(name));
+        }
+
+        /// Play a registered animation by name.
+        /// The animation must have been registered via registerAnimations().
+        /// Returns false if the sprite is invalid or animation not found.
+        pub fn play(self: *Self, id: SpriteId, name: []const u8) bool {
+            const info = self.getAnimationInfo(name) orelse return false;
+            return self.playAnimation(id, name, info.frame_count, info.duration, info.looping);
+        }
+
+        /// Play an animation with explicit parameters (no registry lookup).
+        /// Use this when animation definitions are not registered, or for one-off animations.
         pub fn playAnimation(self: *Self, id: SpriteId, name: []const u8, frame_count: u16, duration: f32, looping: bool) bool {
             if (!self.isValid(id)) return false;
             var sprite = &self.sprites[id.index];
