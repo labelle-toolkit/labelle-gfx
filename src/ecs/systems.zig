@@ -52,6 +52,24 @@ pub fn spriteRenderSystem(
         const pos = view.getConst(PositionType, item.entity);
         const render = view.getConst(Render, item.entity);
 
+        // Viewport culling - skip if sprite is outside camera view
+        if (!renderer.shouldRenderSprite(
+            render.sprite_name,
+            pos.x,
+            pos.y,
+            .{
+                .offset_x = render.offset_x,
+                .offset_y = render.offset_y,
+                .scale = render.scale,
+                .rotation = render.rotation,
+                .tint = render.tint,
+                .flip_x = render.flip_x,
+                .flip_y = render.flip_y,
+            },
+        )) {
+            continue;
+        }
+
         renderer.drawSprite(
             render.sprite_name,
             pos.x,

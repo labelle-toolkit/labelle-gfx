@@ -101,6 +101,7 @@ pub const MockBackend = struct {
             list.deinit();
         }
         draw_calls_list = null;
+        cleanupMockAtlases();
         allocator_ref = null;
     }
 
@@ -271,6 +272,71 @@ pub const MockBackend = struct {
     pub fn drawRectangle(_: i32, _: i32, _: i32, _: i32, _: Color) void {}
 
     pub fn drawRectangleLines(_: i32, _: i32, _: i32, _: i32, _: Color) void {}
+
+    // Test helpers
+
+    /// Mock sprite data for creating test atlases
+    pub const MockSpriteData = struct {
+        name: []const u8,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        source_width: u32 = 0, // defaults to width if 0
+        source_height: u32 = 0, // defaults to height if 0
+        offset_x: i32 = 0,
+        offset_y: i32 = 0,
+        rotated: bool = false,
+        trimmed: bool = false,
+    };
+
+    threadlocal var mock_atlases: ?std.StringHashMap(std.ArrayList(MockSpriteData)) = null;
+
+    /// Create a mock atlas for testing
+    /// This allows tests to query sprites without loading actual files
+    pub fn createMockAtlas(name: []const u8, sprites: []const MockSpriteData) !void {
+        const alloc = allocator_ref orelse return error.NotInitialized;
+        
+        if (mock_atlases == null) {
+            mock_atlases = std.StringHashMap(std.ArrayList(MockSpriteData)).init(alloc);
+        }
+        
+        var sprite_list = std.ArrayList(MockSpriteData).init(alloc);
+        for (sprites) |sprite| {
+            try sprite_list.append(sprite);
+        }
+        
+        const name_copy = try alloc.dupe(u8, name);
+        try mock_atlases.?.put(name_copy, sprite_list);
+    }
+
+    /// Get a mock sprite by name from a mock atlas
+    pub fn getMockSprite(atlas_name: []const u8, sprite_name: []const u8) ?MockSpriteData {
+        const atlases = mock_atlases orelse return null;
+        const sprite_list = atlases.get(atlas_name) orelse return null;
+        
+        for (sprite_list.items) |sprite| {
+            if (std.mem.eql(u8, sprite.name, sprite_name)) {
+                return sprite;
+            }
+        }
+        return null;
+    }
+
+    /// Clean up mock atlases
+    fn cleanupMockAtlases() void {
+        if (mock_atlases) |*atlases| {
+            var iter = atlases.iterator();
+            while (iter.next()) |entry| {
+                if (allocator_ref) |alloc| {
+                    alloc.free(entry.key_ptr.*);
+                }
+                entry.value_ptr.deinit();
+            }
+            atlases.deinit();
+        }
+        mock_atlases = null;
+    }
 };
 
 // Tests for the mock backend itself

@@ -401,35 +401,59 @@ pub fn EngineWith(comptime BackendType: type) type {
             for (items.items) |item| {
                 switch (item.kind) {
                     .sprite => |sprite| {
+                        const draw_opts = .{
+                            .offset_x = sprite.offset_x,
+                            .offset_y = sprite.offset_y,
+                            .scale = sprite.scale,
+                            .rotation = sprite.rotation,
+                            .tint = sprite.tint,
+                            .flip_x = sprite.flip_x,
+                            .flip_y = sprite.flip_y,
+                        };
+
+                        // Viewport culling - skip if sprite is outside camera view
+                        if (!self.renderer.shouldRenderSprite(
+                            sprite.name,
+                            item.x,
+                            item.y,
+                            draw_opts,
+                        )) {
+                            continue;
+                        }
+
                         self.renderer.drawSprite(
                             sprite.name,
                             item.x,
                             item.y,
-                            .{
-                                .offset_x = sprite.offset_x,
-                                .offset_y = sprite.offset_y,
-                                .scale = sprite.scale,
-                                .rotation = sprite.rotation,
-                                .tint = sprite.tint,
-                                .flip_x = sprite.flip_x,
-                                .flip_y = sprite.flip_y,
-                            },
+                            draw_opts,
                         );
                     },
                     .animation => |anim_data| {
+                        const draw_opts = .{
+                            .offset_x = anim_data.offset_x,
+                            .offset_y = anim_data.offset_y,
+                            .scale = anim_data.scale,
+                            .rotation = anim_data.rotation,
+                            .tint = anim_data.tint,
+                            .flip_x = anim_data.flip_x,
+                            .flip_y = anim_data.flip_y,
+                        };
+
+                        // Viewport culling - skip if sprite is outside camera view
+                        if (!self.renderer.shouldRenderSprite(
+                            anim_data.sprite_name,
+                            item.x,
+                            item.y,
+                            draw_opts,
+                        )) {
+                            continue;
+                        }
+
                         self.renderer.drawSprite(
                             anim_data.sprite_name,
                             item.x,
                             item.y,
-                            .{
-                                .offset_x = anim_data.offset_x,
-                                .offset_y = anim_data.offset_y,
-                                .scale = anim_data.scale,
-                                .rotation = anim_data.rotation,
-                                .tint = anim_data.tint,
-                                .flip_x = anim_data.flip_x,
-                                .flip_y = anim_data.flip_y,
-                            },
+                            draw_opts,
                         );
                     },
                 }

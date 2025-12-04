@@ -199,6 +199,57 @@ pub fn RendererWith(comptime BackendType: type) type {
         pub fn getCamera(self: *Self) *Camera {
             return &self.camera;
         }
+
+        /// Check if a sprite should be rendered based on camera viewport
+        /// Returns false if sprite is completely outside viewport (for culling)
+        /// 
+        /// Parameters:
+        ///   - sprite_name: Name of the sprite to check
+        ///   - x, y: World position of sprite center
+        ///   - options: Draw options (scale affects sprite bounds)
+        pub fn shouldRenderSprite(
+            self: *Self,
+            sprite_name: []const u8,
+            x: f32,
+            y: f32,
+            options: DrawOptions,
+        ) bool {
+            // Get sprite data to determine dimensions
+            const found = self.texture_manager.findSprite(sprite_name) orelse return true; // Render if sprite not found (error handling)
+            const sprite = found.sprite;
+
+            // Calculate actual sprite dimensions accounting for scale and rotation
+            var width: f32 = undefined;
+            var height: f32 = undefined;
+            
+            if (sprite.rotated) {
+                width = @as(f32, @floatFromInt(sprite.height)) * options.scale;
+                height = @as(f32, @floatFromInt(sprite.width)) * options.scale;
+            } else {
+                width = @as(f32, @floatFromInt(sprite.width)) * options.scale;
+                height = @as(f32, @floatFromInt(sprite.height)) * options.scale;
+            }
+
+            // Calculate sprite bounds in world space
+            // Sprites are drawn centered at position (origin is center)
+            const half_width = width / 2.0;
+            const half_height = height / 2.0;
+            
+            const sprite_x = x + options.offset_x - half_width;
+            const sprite_y = y + options.offset_y - half_height;
+
+            // Add trim offset if sprite is trimmed
+            var final_x = sprite_x;
+            var final_y = sprite_y;
+            if (sprite.trimmed) {
+                final_x += @as(f32, @floatFromInt(sprite.offset_x)) * options.scale;
+                final_y += @as(f32, @floatFromInt(sprite.offset_y)) * options.scale;
+            }
+
+            // Get viewport and check overlap
+            const viewport = self.camera.getViewport();
+            return viewport.overlapsRect(final_x, final_y, width, height);
+        }
     };
 }
 

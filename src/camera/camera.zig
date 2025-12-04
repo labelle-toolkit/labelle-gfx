@@ -119,6 +119,44 @@ pub fn CameraWith(comptime BackendType: type) type {
             self.bounds = .{};
         }
 
+        /// Viewport rectangle in world coordinates
+        pub const ViewportRect = struct {
+            x: f32, // top-left x
+            y: f32, // top-left y
+            width: f32,
+            height: f32,
+
+            /// Check if a point is inside the viewport
+            pub fn containsPoint(self: ViewportRect, px: f32, py: f32) bool {
+                return px >= self.x and px <= self.x + self.width and
+                    py >= self.y and py <= self.y + self.height;
+            }
+
+            /// Check if a rectangle overlaps with the viewport
+            pub fn overlapsRect(self: ViewportRect, rx: f32, ry: f32, rw: f32, rh: f32) bool {
+                return rx < self.x + self.width and
+                    rx + rw > self.x and
+                    ry < self.y + self.height and
+                    ry + rh > self.y;
+            }
+        };
+
+        /// Get the viewport rectangle in world coordinates
+        /// This represents the visible area of the game world
+        pub fn getViewport(self: *const Self) ViewportRect {
+            const screen_width: f32 = @floatFromInt(BackendType.getScreenWidth());
+            const screen_height: f32 = @floatFromInt(BackendType.getScreenHeight());
+            const half_width = (screen_width / 2.0) / self.zoom;
+            const half_height = (screen_height / 2.0) / self.zoom;
+
+            return .{
+                .x = self.x - half_width,
+                .y = self.y - half_height,
+                .width = screen_width / self.zoom,
+                .height = screen_height / self.zoom,
+            };
+        }
+
         fn clampToBounds(self: *Self) void {
             if (!self.bounds.isEnabled()) return;
 

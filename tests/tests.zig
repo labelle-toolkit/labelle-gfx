@@ -9,6 +9,7 @@ pub const animation_test = @import("animation_test.zig");
 pub const components_test = @import("components_test.zig");
 pub const camera_test = @import("camera_test.zig");
 pub const sprite_storage_test = @import("sprite_storage_test.zig");
+pub const culling_test = @import("culling_test.zig");
 
 test {
     // Run all tests from imported modules
