@@ -38,6 +38,25 @@ pub fn CameraWith(comptime BackendType: type) type {
             return .{};
         }
 
+        /// Initialize camera centered on screen (world coords = screen coords at zoom=1)
+        /// Note: Call this after window is initialized, or use centerOnScreen() later
+        pub fn initCentered() Self {
+            const screen_width: f32 = @floatFromInt(BackendType.getScreenWidth());
+            const screen_height: f32 = @floatFromInt(BackendType.getScreenHeight());
+            return .{
+                .x = screen_width / 2.0,
+                .y = screen_height / 2.0,
+            };
+        }
+
+        /// Center camera on screen (call after window is initialized)
+        pub fn centerOnScreen(self: *Self) void {
+            const screen_width: f32 = @floatFromInt(BackendType.getScreenWidth());
+            const screen_height: f32 = @floatFromInt(BackendType.getScreenHeight());
+            self.x = screen_width / 2.0;
+            self.y = screen_height / 2.0;
+        }
+
         /// Convert to backend Camera2D type
         pub fn toBackend(self: *const Self) BackendType.Camera2D {
             const screen_width: f32 = @floatFromInt(BackendType.getScreenWidth());

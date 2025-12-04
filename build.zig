@@ -80,7 +80,43 @@ pub fn build(b: *std.Build) void {
         .{ .name = "07_with_fixtures", .path = "examples/07_with_fixtures/main.zig", .desc = "TexturePacker fixtures demo" },
         .{ .name = "08_nested_animations", .path = "examples/08_nested_animations/main.zig", .desc = "Nested animation paths" },
         .{ .name = "10_new_engine", .path = "examples/10_new_engine/main.zig", .desc = "Self-contained rendering engine (preview)" },
+        .{ .name = "11_visual_engine", .path = "examples/11_visual_engine/main.zig", .desc = "Visual engine with actual rendering" },
     };
+
+    // Example 12: Comptime animations (needs .zon imports)
+    {
+        const example_12_mod = b.createModule(.{
+            .root_source_file = b.path("examples/12_comptime_animations/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "labelle", .module = lib_mod },
+                .{ .name = "raylib", .module = raylib },
+                .{ .name = "ecs", .module = ecs },
+            },
+        });
+
+        // Add .zon file imports for comptime loading
+        example_12_mod.addImport("characters_frames.zon", b.createModule(.{
+            .root_source_file = b.path("fixtures/output/characters_frames.zon"),
+        }));
+        example_12_mod.addImport("characters_animations.zon", b.createModule(.{
+            .root_source_file = b.path("fixtures/output/characters_animations.zon"),
+        }));
+
+        const example_12 = b.addExecutable(.{
+            .name = "12_comptime_animations",
+            .root_module = example_12_mod,
+        });
+        example_12.linkLibrary(raylib_artifact);
+
+        const run_cmd = b.addRunArtifact(example_12);
+        const run_step = b.step("run-example-12", "Comptime animation definitions");
+        run_step.dependOn(&run_cmd.step);
+
+        const full_run_step = b.step("run-12_comptime_animations", "Comptime animation definitions");
+        full_run_step.dependOn(&run_cmd.step);
+    }
 
     for (examples) |example| {
         const exe = b.addExecutable(.{

@@ -81,6 +81,9 @@
 const std = @import("std");
 pub const ecs = @import("ecs");
 
+// Logging
+pub const log = @import("log.zig");
+
 // Backend system
 pub const backend = @import("backend/backend.zig");
 pub const Backend = backend.Backend;
@@ -168,6 +171,7 @@ pub const FlashWith = effects.FlashWith;
 
 // New self-contained rendering engine (preview)
 pub const rendering_engine = @import("engine/rendering_engine.zig");
+pub const visual_engine = @import("engine/visual_engine.zig");
 pub const sprite_storage = @import("engine/sprite_storage.zig");
 pub const animation_def = @import("animation_def.zig");
 

@@ -270,9 +270,14 @@ pub fn EngineWith(comptime BackendType: type) type {
                 engine.clear_color = color;
             }
 
-            // Configure camera
-            engine.renderer.camera.x = config.camera.initial_x;
-            engine.renderer.camera.y = config.camera.initial_y;
+            // Configure camera - center by default if no explicit position given
+            if (config.camera.initial_x == 0 and config.camera.initial_y == 0) {
+                // Default: center camera so world coords = screen coords at zoom 1
+                engine.renderer.camera.centerOnScreen();
+            } else {
+                engine.renderer.camera.x = config.camera.initial_x;
+                engine.renderer.camera.y = config.camera.initial_y;
+            }
             engine.renderer.camera.zoom = config.camera.initial_zoom;
 
             if (config.camera.bounds) |bounds| {

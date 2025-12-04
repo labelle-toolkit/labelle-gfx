@@ -51,7 +51,7 @@ pub fn RendererWith(comptime BackendType: type) type {
         pub fn init(allocator: std.mem.Allocator) Self {
             return .{
                 .texture_manager = TextureManager.init(allocator),
-                .camera = Camera.init(),
+                .camera = Camera.initCentered(),
                 .allocator = allocator,
             };
         }
