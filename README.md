@@ -16,6 +16,8 @@ A 2D graphics library for Zig games combining [raylib](https://www.raylib.com/) 
 - **Sprite Rendering** - Load and draw sprites from texture atlases
 - **Animation System** - Frame-based animations with customizable types
 - **Comptime Animation Definitions** - Load .zon files at compile time with validation
+- **Comptime Atlas Loading** - Load sprite atlases from .zon at compile time (no JSON parsing)
+- **Generic Sprite Storage** - Flexible internal sprite storage with generational indices
 - **TexturePacker Support** - Load sprite atlases from JSON format (with converter tool)
 - **Camera System** - Pan, zoom, bounds, and coordinate conversion
 - **ECS Integration** - Render components and systems for zig-ecs
@@ -114,6 +116,23 @@ registry.add(player, gfx.Sprite{
 
 // Game loop
 engine.render(dt);
+```
+
+### Comptime Atlas Loading
+
+For optimal runtime performance, load sprite atlas data at compile time:
+
+```zig
+const gfx = @import("labelle");
+const character_frames = @import("characters_frames.zon");
+
+var engine = try VisualEngine.init(allocator, .{
+    .window = .{ .width = 800, .height = 600, .title = "My Game" },
+});
+defer engine.deinit();
+
+// Load atlas from comptime .zon data - no JSON parsing needed
+try engine.loadAtlasComptime("characters", character_frames, "assets/characters.png");
 ```
 
 ## Examples

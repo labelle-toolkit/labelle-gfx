@@ -126,6 +126,68 @@ comptime {
 }
 ```
 
+### Comptime Atlas Loading
+
+Load sprite atlas data at compile time from .zon files (eliminates JSON parsing at runtime):
+
+```zig
+const gfx = @import("labelle");
+const character_frames = @import("characters_frames.zon");
+
+var engine = try VisualEngine.init(allocator, .{
+    .window = .{ .width = 800, .height = 600, .title = "My Game" },
+});
+defer engine.deinit();
+
+// Load atlas with comptime frame data - no JSON parsing needed
+try engine.loadAtlasComptime("characters", character_frames, "assets/characters.png");
+```
+
+### GenericSpriteStorage
+
+Internal sprite storage using generational indices. Used by VisualEngine and RenderingEngine:
+
+```zig
+const gfx = @import("labelle");
+const GenericSpriteStorage = gfx.sprite_storage.GenericSpriteStorage;
+const SpriteId = gfx.sprite_storage.SpriteId;
+
+// Define custom sprite data (must have generation and active fields)
+const MySpriteData = struct {
+    x: f32 = 0,
+    y: f32 = 0,
+    generation: u32 = 0,  // Required
+    active: bool = false, // Required
+};
+
+// Create storage with DataType and max capacity
+const Storage = GenericSpriteStorage(MySpriteData, 10000);
+var storage = try Storage.init(allocator);
+defer storage.deinit();
+
+// Allocate a slot
+const slot = try storage.allocSlot();
+
+// Initialize the sprite data
+storage.sprites[slot.index] = MySpriteData{
+    .x = 100,
+    .y = 200,
+    .generation = slot.generation,
+    .active = true,
+};
+
+// Create handle for later access
+const id = SpriteId{ .index = slot.index, .generation = slot.generation };
+
+// Access sprite data
+if (storage.get(id)) |sprite| {
+    sprite.x = 150;
+}
+
+// Remove sprite
+_ = storage.remove(id);
+```
+
 ### Components
 
 - `Position` - x, y coordinates (from zig-utils Vector2)
@@ -273,9 +335,9 @@ var engine = MyGfx.Engine.init(...);
 1. **Animation enums MUST have `config()` method** - This is enforced at compile time
 2. **Use `play()` to switch animations** - Not `setAnimation()` (removed)
 3. **Use `unpause()` not `resume()`** - `resume` is a Zig keyword
-4. **Sprite names use 4-digit padding** - e.g., `idle_0001`, `walk_0012`
-5. **Frame indices are 1-based in sprite names** - Frame 0 becomes `_0001`
-6. **Camera auto-centers by default** - World coords = screen coords at zoom 1
+4. **Camera auto-centers by default** - World coords = screen coords at zoom 1
+5. **GenericSpriteStorage DataType requirements** - Must have `generation: u32` and `active: bool` fields
+6. **Use `loadAtlasComptime` for .zon atlases** - Eliminates runtime JSON parsing
 
 ## When Making Changes
 

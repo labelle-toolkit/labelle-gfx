@@ -30,6 +30,7 @@
 
 const std = @import("std");
 const sprite_storage = @import("sprite_storage.zig");
+const GenericSpriteStorage = sprite_storage.GenericSpriteStorage;
 
 // Backend and rendering imports
 const backend_mod = @import("../backend/backend.zig");
@@ -160,18 +161,18 @@ fn nameToKey(name: []const u8) AnimNameKey {
 pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize) type {
     const Renderer = renderer_mod.RendererWith(BackendType);
     const Camera = camera_mod.CameraWith(BackendType);
+    const Storage = GenericSpriteStorage(InternalSpriteData, max_sprites);
 
     return struct {
         const Self = @This();
         pub const Backend = BackendType;
+        pub const SpriteStorage = Storage;
 
         allocator: std.mem.Allocator,
         renderer: Renderer,
 
-        // Sprite storage
-        sprites: [max_sprites]InternalSpriteData = [_]InternalSpriteData{.{}} ** max_sprites,
-        free_list: std.ArrayList(u32),
-        sprite_count: u32 = 0,
+        // Sprite storage (uses GenericSpriteStorage for generational indices)
+        storage: Storage,
 
         // Animation registry - maps animation names to their definitions
         animation_registry: std.AutoArrayHashMapUnmanaged(AnimNameKey, AnimationInfo),
@@ -208,7 +209,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
             var engine = Self{
                 .allocator = allocator,
                 .renderer = Renderer.init(allocator),
-                .free_list = .empty,
+                .storage = try Storage.init(allocator),
                 .animation_registry = .empty,
                 .owns_window = owns_window,
                 .clear_color = BackendType.color(
@@ -218,14 +219,6 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
                     config.clear_color_a,
                 ),
             };
-
-            // Pre-allocate free list to max capacity - this ensures removeSprite() can never fail
-            try engine.free_list.ensureTotalCapacity(allocator, max_sprites);
-
-            // Initialize free list (using appendAssumeCapacity since we pre-allocated)
-            for (0..max_sprites) |i| {
-                engine.free_list.appendAssumeCapacity(@intCast(max_sprites - 1 - i));
-            }
 
             // Load atlases
             for (config.atlases) |atlas| {
@@ -237,7 +230,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
 
         pub fn deinit(self: *Self) void {
             self.renderer.deinit();
-            self.free_list.deinit(self.allocator);
+            self.storage.deinit();
             self.animation_registry.deinit(self.allocator);
             if (self.owns_window) {
                 BackendType.closeWindow();
@@ -274,10 +267,9 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
         // ==================== Sprite Management ====================
 
         pub fn addSprite(self: *Self, config: SpriteConfig) !SpriteId {
-            const index = self.free_list.pop() orelse return error.OutOfSprites;
-            const generation = self.sprites[index].generation +% 1;
+            const slot = try self.storage.allocSlot();
 
-            self.sprites[index] = InternalSpriteData{
+            self.storage.sprites[slot.index] = InternalSpriteData{
                 .x = config.x,
                 .y = config.y,
                 .z_index = config.z_index,
@@ -288,99 +280,90 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
                 .visible = config.visible,
                 .offset_x = config.offset_x,
                 .offset_y = config.offset_y,
-                .generation = generation,
+                .generation = slot.generation,
                 .active = true,
             };
 
-            self.sprites[index].setSpriteName(config.sprite_name);
-            self.sprite_count += 1;
+            self.storage.sprites[slot.index].setSpriteName(config.sprite_name);
 
-            return SpriteId{ .index = index, .generation = generation };
+            return SpriteId{ .index = slot.index, .generation = slot.generation };
         }
 
         pub fn removeSprite(self: *Self, id: SpriteId) bool {
-            if (!self.isValid(id)) return false;
-            self.sprites[id.index].active = false;
-            // Safe to use appendAssumeCapacity since we pre-allocated to max_sprites
-            // and free_list can never exceed max_sprites entries
-            self.free_list.appendAssumeCapacity(id.index);
-            self.sprite_count -= 1;
-            return true;
+            return self.storage.remove(id);
         }
 
         pub fn isValid(self: *const Self, id: SpriteId) bool {
-            if (id.index >= max_sprites) return false;
-            const sprite = &self.sprites[id.index];
-            return sprite.active and sprite.generation == id.generation;
+            return self.storage.isValid(id);
         }
 
         pub fn spriteCount(self: *const Self) u32 {
-            return self.sprite_count;
+            return self.storage.count();
         }
 
         // ==================== Sprite Properties ====================
 
         pub fn setPosition(self: *Self, id: SpriteId, x: f32, y: f32) bool {
             if (!self.isValid(id)) return false;
-            self.sprites[id.index].x = x;
-            self.sprites[id.index].y = y;
+            self.storage.sprites[id.index].x = x;
+            self.storage.sprites[id.index].y = y;
             return true;
         }
 
         pub fn getPosition(self: *const Self, id: SpriteId) ?Position {
             if (!self.isValid(id)) return null;
-            return Position{ .x = self.sprites[id.index].x, .y = self.sprites[id.index].y };
+            return Position{ .x = self.storage.sprites[id.index].x, .y = self.storage.sprites[id.index].y };
         }
 
         pub fn setVisible(self: *Self, id: SpriteId, visible: bool) bool {
             if (!self.isValid(id)) return false;
-            self.sprites[id.index].visible = visible;
+            self.storage.sprites[id.index].visible = visible;
             return true;
         }
 
         pub fn setZIndex(self: *Self, id: SpriteId, z_index: u8) bool {
             if (!self.isValid(id)) return false;
-            self.sprites[id.index].z_index = z_index;
+            self.storage.sprites[id.index].z_index = z_index;
             return true;
         }
 
         pub fn setScale(self: *Self, id: SpriteId, scale: f32) bool {
             if (!self.isValid(id)) return false;
-            self.sprites[id.index].scale = scale;
+            self.storage.sprites[id.index].scale = scale;
             return true;
         }
 
         pub fn setRotation(self: *Self, id: SpriteId, rotation: f32) bool {
             if (!self.isValid(id)) return false;
-            self.sprites[id.index].rotation = rotation;
+            self.storage.sprites[id.index].rotation = rotation;
             return true;
         }
 
         pub fn setFlip(self: *Self, id: SpriteId, flip_x: bool, flip_y: bool) bool {
             if (!self.isValid(id)) return false;
-            self.sprites[id.index].flip_x = flip_x;
-            self.sprites[id.index].flip_y = flip_y;
+            self.storage.sprites[id.index].flip_x = flip_x;
+            self.storage.sprites[id.index].flip_y = flip_y;
             return true;
         }
 
         pub fn setTint(self: *Self, id: SpriteId, r: u8, g: u8, b: u8, a: u8) bool {
             if (!self.isValid(id)) return false;
-            self.sprites[id.index].tint_r = r;
-            self.sprites[id.index].tint_g = g;
-            self.sprites[id.index].tint_b = b;
-            self.sprites[id.index].tint_a = a;
+            self.storage.sprites[id.index].tint_r = r;
+            self.storage.sprites[id.index].tint_g = g;
+            self.storage.sprites[id.index].tint_b = b;
+            self.storage.sprites[id.index].tint_a = a;
             return true;
         }
 
         pub fn setSpriteName(self: *Self, id: SpriteId, name: []const u8) bool {
             if (!self.isValid(id)) return false;
-            self.sprites[id.index].setSpriteName(name);
+            self.storage.sprites[id.index].setSpriteName(name);
             return true;
         }
 
         pub fn getSpriteName(self: *const Self, id: SpriteId) ?[]const u8 {
             if (!self.isValid(id)) return null;
-            return self.sprites[id.index].getSpriteName();
+            return self.storage.sprites[id.index].getSpriteName();
         }
 
         // ==================== Animation ====================
@@ -416,7 +399,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
         /// Use this when animation definitions are not registered, or for one-off animations.
         pub fn playAnimation(self: *Self, id: SpriteId, name: []const u8, frame_count: u16, duration: f32, looping: bool) bool {
             if (!self.isValid(id)) return false;
-            var sprite = &self.sprites[id.index];
+            var sprite = &self.storage.sprites[id.index];
             sprite.animation_frame = 0;
             sprite.animation_elapsed = 0;
             sprite.animation_playing = true;
@@ -437,19 +420,19 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
 
         pub fn pauseAnimation(self: *Self, id: SpriteId) bool {
             if (!self.isValid(id)) return false;
-            self.sprites[id.index].animation_paused = true;
+            self.storage.sprites[id.index].animation_paused = true;
             return true;
         }
 
         pub fn resumeAnimation(self: *Self, id: SpriteId) bool {
             if (!self.isValid(id)) return false;
-            self.sprites[id.index].animation_paused = false;
+            self.storage.sprites[id.index].animation_paused = false;
             return true;
         }
 
         pub fn isAnimationPlaying(self: *const Self, id: SpriteId) bool {
             if (!self.isValid(id)) return false;
-            const sprite = &self.sprites[id.index];
+            const sprite = &self.storage.sprites[id.index];
             return sprite.animation_playing and !sprite.animation_paused;
         }
 
@@ -513,7 +496,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
 
         fn updateAnimations(self: *Self, dt: f32) void {
             for (0..max_sprites) |i| {
-                var sprite = &self.sprites[i];
+                var sprite = &self.storage.sprites[i];
                 if (!sprite.active) continue;
                 if (!sprite.animation_playing or sprite.animation_paused) continue;
                 if (sprite.animation_frame_count <= 1) continue;
@@ -615,7 +598,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
             // Collect visible sprites and sort by z-index
             var count: usize = 0;
             for (0..max_sprites) |i| {
-                const sprite = &self.sprites[i];
+                const sprite = &self.storage.sprites[i];
                 if (sprite.active and sprite.visible) {
                     self.render_buffer[count] = SpriteId{
                         .index = @intCast(i),
@@ -629,7 +612,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
             const slice = self.render_buffer[0..count];
             std.mem.sort(SpriteId, slice, self, struct {
                 fn lessThan(ctx: *Self, a: SpriteId, b: SpriteId) bool {
-                    return ctx.sprites[a.index].z_index < ctx.sprites[b.index].z_index;
+                    return ctx.storage.sprites[a.index].z_index < ctx.storage.sprites[b.index].z_index;
                 }
             }.lessThan);
 
@@ -638,7 +621,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
 
             // Render sprites
             for (slice) |id| {
-                const sprite = &self.sprites[id.index];
+                const sprite = &self.storage.sprites[id.index];
                 const tint = BackendType.color(sprite.tint_r, sprite.tint_g, sprite.tint_b, sprite.tint_a);
 
                 self.renderer.drawSprite(
@@ -663,8 +646,25 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
 
         // ==================== Atlas Management ====================
 
+        /// Load an atlas from JSON file (runtime parsing)
         pub fn loadAtlas(self: *Self, name: []const u8, json_path: [:0]const u8, texture_path: [:0]const u8) !void {
             try self.renderer.loadAtlas(name, json_path, texture_path);
+        }
+
+        /// Load an atlas from comptime .zon frame data (no JSON parsing at runtime)
+        /// The frames parameter should be a comptime import of a *_frames.zon file.
+        /// Example:
+        /// ```zig
+        /// const frames = @import("characters_frames.zon");
+        /// try engine.loadAtlasComptime("characters", frames, "characters.png");
+        /// ```
+        pub fn loadAtlasComptime(
+            self: *Self,
+            name: []const u8,
+            comptime frames: anytype,
+            texture_path: [:0]const u8,
+        ) !void {
+            try self.renderer.loadAtlasComptime(name, frames, texture_path);
         }
 
         pub fn getRenderer(self: *Self) *Renderer {

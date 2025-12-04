@@ -60,7 +60,7 @@ pub fn RendererWith(comptime BackendType: type) type {
             self.texture_manager.deinit();
         }
 
-        /// Load a sprite atlas
+        /// Load a sprite atlas from JSON (runtime parsing)
         /// Note: json_path and texture_path must be null-terminated string literals
         pub fn loadAtlas(
             self: *Self,
@@ -69,6 +69,22 @@ pub fn RendererWith(comptime BackendType: type) type {
             texture_path: [:0]const u8,
         ) !void {
             try self.texture_manager.loadAtlas(name, json_path, texture_path);
+        }
+
+        /// Load a sprite atlas from comptime .zon frame data (no JSON parsing)
+        /// The frames parameter should be a comptime import of a *_frames.zon file.
+        /// Example:
+        /// ```zig
+        /// const frames = @import("characters_frames.zon");
+        /// try renderer.loadAtlasComptime("characters", frames, "characters.png");
+        /// ```
+        pub fn loadAtlasComptime(
+            self: *Self,
+            name: []const u8,
+            comptime frames: anytype,
+            texture_path: [:0]const u8,
+        ) !void {
+            try self.texture_manager.loadAtlasComptime(name, frames, texture_path);
         }
 
         /// Draw a sprite by name at a position

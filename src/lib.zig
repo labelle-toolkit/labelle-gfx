@@ -154,6 +154,11 @@ pub const SpriteAtlas = sprite_atlas.SpriteAtlas;
 pub const SpriteAtlasWith = sprite_atlas.SpriteAtlasWith;
 pub const SpriteData = sprite_atlas.SpriteData;
 
+// Comptime atlas (for .zon-based atlas loading)
+pub const comptime_atlas = @import("texture/comptime_atlas.zig");
+pub const ComptimeAtlas = comptime_atlas.ComptimeAtlas;
+pub const SpriteInfo = comptime_atlas.SpriteInfo;
+
 // Camera exports
 pub const camera = @import("camera/camera.zig");
 pub const Camera = camera.Camera;

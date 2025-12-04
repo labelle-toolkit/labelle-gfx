@@ -108,13 +108,13 @@ pub const AnimationInfo = struct {
 
 /// Self-contained rendering engine
 pub fn RenderingEngine(comptime max_sprites: usize) type {
-    const Storage = sprite_storage.SpriteStorage(max_sprites);
+    const Storage = sprite_storage.GenericSpriteStorage(SpriteData, max_sprites);
 
     return struct {
         const Self = @This();
 
         allocator: std.mem.Allocator,
-        sprites: Storage,
+        storage: Storage,
         camera: CameraState = .{},
 
         // Callbacks
@@ -133,83 +133,100 @@ pub fn RenderingEngine(comptime max_sprites: usize) type {
 
             return Self{
                 .allocator = allocator,
-                .sprites = Storage.init(allocator),
+                .storage = try Storage.init(allocator),
                 .animation_infos = std.StringHashMap(AnimationInfo).init(allocator),
             };
         }
 
         pub fn deinit(self: *Self) void {
             self.animation_infos.deinit();
-            self.sprites.deinit();
+            self.storage.deinit();
         }
 
         // ==================== Sprite Management ====================
 
         /// Add a new sprite
         pub fn addSprite(self: *Self, config: SpriteConfig) !SpriteId {
-            return self.sprites.add(config);
+            const slot = try self.storage.allocSlot();
+
+            self.storage.sprites[slot.index] = SpriteData{
+                .x = config.x,
+                .y = config.y,
+                .z_index = config.z_index,
+                .scale = config.scale,
+                .rotation = config.rotation,
+                .flip_x = config.flip_x,
+                .flip_y = config.flip_y,
+                .visible = config.visible,
+                .offset_x = config.offset_x,
+                .offset_y = config.offset_y,
+                .generation = slot.generation,
+                .active = true,
+            };
+
+            return SpriteId{ .index = slot.index, .generation = slot.generation };
         }
 
         /// Remove a sprite
         pub fn removeSprite(self: *Self, id: SpriteId) bool {
-            return self.sprites.remove(id);
+            return self.storage.remove(id);
         }
 
         /// Check if sprite exists
         pub fn spriteExists(self: *const Self, id: SpriteId) bool {
-            return self.sprites.isValid(id);
+            return self.storage.isValid(id);
         }
 
         /// Set sprite position
         pub fn setPosition(self: *Self, id: SpriteId, x: f32, y: f32) bool {
-            return self.sprites.setPosition(id, x, y);
+            return self.storage.setPosition(id, x, y);
         }
 
         /// Get sprite position
         pub fn getPosition(self: *const Self, id: SpriteId) ?Position {
-            return self.sprites.getPosition(id);
+            return self.storage.getPosition(id);
         }
 
         /// Set sprite visibility
         pub fn setVisible(self: *Self, id: SpriteId, visible: bool) bool {
-            return self.sprites.setVisible(id, visible);
+            return self.storage.setVisible(id, visible);
         }
 
         /// Set sprite z-index
         pub fn setZIndex(self: *Self, id: SpriteId, z_index: u8) bool {
-            return self.sprites.setZIndex(id, z_index);
+            return self.storage.setZIndex(id, z_index);
         }
 
         /// Set sprite scale
         pub fn setScale(self: *Self, id: SpriteId, scale: f32) bool {
-            return self.sprites.setScale(id, scale);
+            return self.storage.setScale(id, scale);
         }
 
         /// Set sprite rotation
         pub fn setRotation(self: *Self, id: SpriteId, rotation: f32) bool {
-            return self.sprites.setRotation(id, rotation);
+            return self.storage.setRotation(id, rotation);
         }
 
         /// Set sprite flip
         pub fn setFlip(self: *Self, id: SpriteId, flip_x: bool, flip_y: bool) bool {
-            return self.sprites.setFlip(id, flip_x, flip_y);
+            return self.storage.setFlip(id, flip_x, flip_y);
         }
 
         /// Set sprite tint
         pub fn setTint(self: *Self, id: SpriteId, r: u8, g: u8, b: u8, a: u8) bool {
-            return self.sprites.setTint(id, r, g, b, a);
+            return self.storage.setTint(id, r, g, b, a);
         }
 
         /// Get sprite count
         pub fn spriteCount(self: *const Self) u32 {
-            return self.sprites.count();
+            return self.storage.count();
         }
 
         // ==================== Animation Playback ====================
 
         /// Play an animation on a sprite
         pub fn playAnimation(self: *Self, id: SpriteId, animation: []const u8) bool {
-            if (self.sprites.get(id)) |sprite| {
+            if (self.storage.get(id)) |sprite| {
                 // Look up animation index
                 if (self.animation_infos.get(animation)) |info| {
                     _ = info;
@@ -225,7 +242,7 @@ pub fn RenderingEngine(comptime max_sprites: usize) type {
 
         /// Pause animation on a sprite
         pub fn pauseAnimation(self: *Self, id: SpriteId) bool {
-            if (self.sprites.get(id)) |sprite| {
+            if (self.storage.get(id)) |sprite| {
                 sprite.animation.paused = true;
                 return true;
             }
@@ -234,7 +251,7 @@ pub fn RenderingEngine(comptime max_sprites: usize) type {
 
         /// Resume (unpause) animation on a sprite
         pub fn resumeAnimation(self: *Self, id: SpriteId) bool {
-            if (self.sprites.get(id)) |sprite| {
+            if (self.storage.get(id)) |sprite| {
                 sprite.animation.paused = false;
                 return true;
             }
@@ -243,7 +260,7 @@ pub fn RenderingEngine(comptime max_sprites: usize) type {
 
         /// Check if animation is playing
         pub fn isAnimationPlaying(self: *const Self, id: SpriteId) bool {
-            if (self.sprites.getConst(id)) |sprite| {
+            if (self.storage.getConst(id)) |sprite| {
                 return sprite.animation.playing and !sprite.animation.paused;
             }
             return false;
@@ -320,9 +337,9 @@ pub fn RenderingEngine(comptime max_sprites: usize) type {
 
         /// Update all sprite animations
         fn updateAnimations(self: *Self, dt: f32) void {
-            var iter = self.sprites.iterator();
+            var iter = self.storage.iterator();
             while (iter.next()) |entry| {
-                const sprite = self.sprites.get(entry.id) orelse continue;
+                const sprite = self.storage.get(entry.id) orelse continue;
 
                 if (!sprite.animation.playing or sprite.animation.paused) continue;
 
@@ -361,7 +378,7 @@ pub fn RenderingEngine(comptime max_sprites: usize) type {
         fn updateCamera(self: *Self, dt: f32) void {
             // Follow target
             if (self.camera.follow_target) |target_id| {
-                if (self.sprites.getPosition(target_id)) |pos| {
+                if (self.storage.getPosition(target_id)) |pos| {
                     const lerp = 1.0 - self.camera.follow_lerp;
                     self.camera.x += (pos.x - self.camera.x) * lerp;
                     self.camera.y += (pos.y - self.camera.y) * lerp;
@@ -403,7 +420,7 @@ pub fn RenderingEngine(comptime max_sprites: usize) type {
         /// Get sprites sorted by z-index for rendering
         pub fn getSortedSprites(self: *Self, buffer: []SpriteId) []SpriteId {
             var count: usize = 0;
-            var iter = self.sprites.iterator();
+            var iter = self.storage.iterator();
 
             while (iter.next()) |entry| {
                 if (count >= buffer.len) break;

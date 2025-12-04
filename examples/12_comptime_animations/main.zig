@@ -1,11 +1,11 @@
 //! Example 12: Comptime Animation Definitions
 //!
-//! This example demonstrates using comptime-loaded .zon files for animation
-//! definitions with the visual engine. Frame data and animations are validated
-//! at compile time, and the engine's animation registry provides a simplified API.
+//! This example demonstrates using comptime-loaded .zon files for both atlas
+//! frame data and animation definitions. All sprite data is baked into the binary
+//! at compile time - no JSON parsing at runtime!
 //!
 //! Features demonstrated:
-//! - Loading frame data from .zon files at comptime
+//! - Loading atlas frame data from .zon files at comptime (no JSON parsing!)
 //! - Loading animation definitions from .zon files at comptime
 //! - Compile-time validation of animation frame references
 //! - Registering animations with the visual engine
@@ -39,7 +39,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Initialize the visual engine
+    // Initialize the visual engine (no atlases in config - we'll load comptime!)
     var engine = try VisualEngine.init(allocator, .{
         .window = .{
             .width = 800,
@@ -51,11 +51,13 @@ pub fn main() !void {
         .clear_color_r = 40,
         .clear_color_g = 44,
         .clear_color_b = 52,
-        .atlases = &.{
-            .{ .name = "characters", .json = "fixtures/output/characters.json", .texture = "fixtures/output/characters.png" },
-        },
+        // No .atlases - we use loadAtlasComptime instead!
     });
     defer engine.deinit();
+
+    // Load atlas using comptime .zon frame data - no JSON parsing at runtime!
+    // The frame coordinates are baked directly into the binary.
+    try engine.loadAtlasComptime("characters", character_frames, "fixtures/output/characters.png");
 
     // Register animation definitions from comptime .zon data
     // This enables the simplified engine.play(sprite, "anim_name") API
@@ -63,6 +65,7 @@ pub fn main() !void {
     try engine.registerAnimations(&anim_entries);
 
     std.debug.print("Comptime Animations Demo initialized\n", .{});
+    std.debug.print("Atlas loaded from comptime .zon - no JSON parsing!\n", .{});
     std.debug.print("Animation definitions validated at compile time!\n", .{});
     std.debug.print("Registered {} animations with the engine\n", .{comptime animation_def.animationCountData(character_anims)});
 
@@ -177,7 +180,7 @@ pub fn main() !void {
 
         // Draw UI
         gfx.Engine.UI.text("Comptime Animations Demo", .{ .x = 10, .y = 10, .size = 20, .color = gfx.Color.white });
-        gfx.Engine.UI.text("Animation definitions validated at compile time!", .{ .x = 10, .y = 35, .size = 14, .color = gfx.Color.green });
+        gfx.Engine.UI.text("Atlas loaded from comptime .zon - NO JSON PARSING!", .{ .x = 10, .y = 35, .size = 14, .color = gfx.Color.green });
         gfx.Engine.UI.text("Using engine.play() - no manual frame_count/duration needed!", .{ .x = 10, .y = 55, .size = 14, .color = gfx.Color.green });
         gfx.Engine.UI.text("A/D: Walk  |  Shift+A/D: Run  |  Space: Jump", .{ .x = 10, .y = 80, .size = 16, .color = gfx.Color.light_gray });
 
