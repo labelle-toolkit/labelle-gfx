@@ -79,6 +79,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "06_effects", .path = "examples/06_effects/main.zig", .desc = "Visual effects" },
         .{ .name = "07_with_fixtures", .path = "examples/07_with_fixtures/main.zig", .desc = "TexturePacker fixtures demo" },
         .{ .name = "08_nested_animations", .path = "examples/08_nested_animations/main.zig", .desc = "Nested animation paths" },
+        .{ .name = "10_new_engine", .path = "examples/10_new_engine/main.zig", .desc = "Self-contained rendering engine (preview)" },
     };
 
     for (examples) |example| {

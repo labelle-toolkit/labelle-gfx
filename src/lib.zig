@@ -166,6 +166,11 @@ pub const TemporalFade = effects.TemporalFade;
 pub const Flash = effects.Flash;
 pub const FlashWith = effects.FlashWith;
 
+// New self-contained rendering engine (preview)
+pub const rendering_engine = @import("engine/rendering_engine.zig");
+pub const sprite_storage = @import("engine/sprite_storage.zig");
+pub const animation_def = @import("animation_def.zig");
+
 /// Create a complete set of labelle types using a custom backend implementation.
 ///
 /// This allows you to use labelle with any rendering library by implementing
