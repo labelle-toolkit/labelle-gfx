@@ -93,9 +93,6 @@ pub fn main() !void {
         .y = 350,
         .z_index = ZIndex.characters,
         .scale = 3.0,
-        .tint_r = 255,
-        .tint_g = 100,
-        .tint_b = 100,
     });
     // Enemy walks continuously (6 frames, 0.9s total)
     _ = engine.playAnimation(enemy, "walk", 6, 0.6, true);
