@@ -69,13 +69,19 @@ pub const AtlasConfig = struct {
     texture: [:0]const u8,
 };
 
+/// Color configuration - accepts either a Color struct or individual RGBA components
+pub const ColorConfig = struct {
+    r: u8 = 255,
+    g: u8 = 255,
+    b: u8 = 255,
+    a: u8 = 255,
+};
+
 /// Engine configuration
 pub const EngineConfig = struct {
     window: ?WindowConfig = null,
-    clear_color_r: u8 = 40,
-    clear_color_g: u8 = 40,
-    clear_color_b: u8 = 40,
-    clear_color_a: u8 = 255,
+    /// Clear color for the window background. Accepts a Color struct.
+    clear_color: ColorConfig = .{ .r = 40, .g = 40, .b = 40, .a = 255 },
     atlases: []const AtlasConfig = &.{},
 };
 
@@ -92,6 +98,8 @@ pub const SpriteConfig = struct {
     visible: bool = true,
     offset_x: f32 = 0,
     offset_y: f32 = 0,
+    /// Tint color for the sprite. Accepts a Color struct.
+    tint: ColorConfig = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
 };
 
 /// Internal sprite data with rendering info
@@ -213,10 +221,10 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
                 .animation_registry = .empty,
                 .owns_window = owns_window,
                 .clear_color = BackendType.color(
-                    config.clear_color_r,
-                    config.clear_color_g,
-                    config.clear_color_b,
-                    config.clear_color_a,
+                    config.clear_color.r,
+                    config.clear_color.g,
+                    config.clear_color.b,
+                    config.clear_color.a,
                 ),
             };
 
@@ -280,6 +288,10 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
                 .visible = config.visible,
                 .offset_x = config.offset_x,
                 .offset_y = config.offset_y,
+                .tint_r = config.tint.r,
+                .tint_g = config.tint.g,
+                .tint_b = config.tint.b,
+                .tint_a = config.tint.a,
                 .generation = slot.generation,
                 .active = true,
             };
@@ -346,7 +358,18 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
             return true;
         }
 
-        pub fn setTint(self: *Self, id: SpriteId, r: u8, g: u8, b: u8, a: u8) bool {
+        /// Set sprite tint using a ColorConfig struct
+        pub fn setTint(self: *Self, id: SpriteId, color: ColorConfig) bool {
+            if (!self.isValid(id)) return false;
+            self.storage.sprites[id.index].tint_r = color.r;
+            self.storage.sprites[id.index].tint_g = color.g;
+            self.storage.sprites[id.index].tint_b = color.b;
+            self.storage.sprites[id.index].tint_a = color.a;
+            return true;
+        }
+
+        /// Set sprite tint using individual RGBA components
+        pub fn setTintRgba(self: *Self, id: SpriteId, r: u8, g: u8, b: u8, a: u8) bool {
             if (!self.isValid(id)) return false;
             self.storage.sprites[id.index].tint_r = r;
             self.storage.sprites[id.index].tint_g = g;

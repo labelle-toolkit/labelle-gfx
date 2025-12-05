@@ -51,9 +51,7 @@ pub fn main() !void {
             .target_fps = 60,
             .hidden = ci_test,
         },
-        .clear_color_r = 30,
-        .clear_color_g = 35,
-        .clear_color_b = 45,
+        .clear_color = .{ .r = 30, .g = 35, .b = 45 },
     }) catch |err| {
         std.debug.print("Failed to initialize engine: {}\n", .{err});
         std.debug.print("Make sure you run this from the labelle directory\n", .{});

@@ -158,6 +158,7 @@ pub const animation_def = @import("animation_def.zig");
 // Re-export VisualEngine at top level for convenience
 pub const VisualEngine = visual_engine.VisualEngine;
 pub const SpriteId = sprite_storage.SpriteId;
+pub const ColorConfig = visual_engine.ColorConfig;
 
 /// Create a complete set of labelle types using a custom backend implementation.
 ///

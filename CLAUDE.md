@@ -43,6 +43,7 @@ const VisualEngine = gfx.visual_engine.VisualEngine;
 
 var engine = try VisualEngine.init(allocator, .{
     .window = .{ .width = 800, .height = 600, .title = "My Game" },
+    .clear_color = .{ .r = 40, .g = 40, .b = 40 },  // Optional, defaults to dark gray
     .atlases = &.{
         .{ .name = "sprites", .json = "assets/sprites.json", .texture = "assets/sprites.png" },
     },
@@ -54,6 +55,7 @@ const player = try engine.addSprite(.{
     .sprite_name = "player_idle",
     .x = 400, .y = 300,
     .z_index = gfx.visual_engine.ZIndex.characters,
+    .tint = .{ .r = 255, .g = 200, .b = 200 },  // Optional tint color
 });
 
 // Game loop

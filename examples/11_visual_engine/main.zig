@@ -38,9 +38,7 @@ pub fn main() !void {
             .target_fps = 60,
             .hidden = ci_test,
         },
-        .clear_color_r = 40,
-        .clear_color_g = 44,
-        .clear_color_b = 52,
+        .clear_color = .{ .r = 40, .g = 44, .b = 52 },
         .atlases = &.{
             .{ .name = "characters", .json = "fixtures/output/characters.json", .texture = "fixtures/output/characters.png" },
             .{ .name = "items", .json = "fixtures/output/items.json", .texture = "fixtures/output/items.png" },

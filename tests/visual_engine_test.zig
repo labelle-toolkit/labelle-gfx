@@ -51,8 +51,27 @@ pub const VisualEngineAnimationTests = struct {
     test "EngineConfig defaults" {
         const config = gfx.visual_engine.EngineConfig{};
         try expect.toBeTrue(config.window == null);
-        try expect.equal(config.clear_color_r, 40);
+        try expect.equal(config.clear_color.r, 40);
+        try expect.equal(config.clear_color.g, 40);
+        try expect.equal(config.clear_color.b, 40);
+        try expect.equal(config.clear_color.a, 255);
         try expect.equal(config.atlases.len, 0);
+    }
+
+    test "SpriteConfig tint defaults" {
+        const config = gfx.visual_engine.SpriteConfig{};
+        try expect.equal(config.tint.r, 255);
+        try expect.equal(config.tint.g, 255);
+        try expect.equal(config.tint.b, 255);
+        try expect.equal(config.tint.a, 255);
+    }
+
+    test "ColorConfig accepts struct initialization" {
+        const color = gfx.visual_engine.ColorConfig{ .r = 100, .g = 150, .b = 200, .a = 128 };
+        try expect.equal(color.r, 100);
+        try expect.equal(color.g, 150);
+        try expect.equal(color.b, 200);
+        try expect.equal(color.a, 128);
     }
 
     test "WindowConfig defaults" {
