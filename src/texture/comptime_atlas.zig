@@ -119,7 +119,11 @@ pub fn spriteNames(comptime frames: anytype) []const []const u8 {
         return &.{};
     }
 
-    var names: [info.@"struct".fields.len][]const u8 = undefined;
+    const field_count = info.@"struct".fields.len;
+    // Scale branch quota based on field count to handle large atlases (500+ sprites)
+    @setEvalBranchQuota(@max(1000, field_count * 10));
+
+    var names: [field_count][]const u8 = undefined;
     inline for (info.@"struct".fields, 0..) |field, i| {
         names[i] = field.name;
     }
@@ -141,6 +145,8 @@ pub fn ComptimeAtlas(comptime frames: anytype) type {
 
         /// All sprite infos, indexed by field order
         pub const sprites: [field_count]SpriteInfo = blk: {
+            // Scale branch quota based on field count to handle large atlases (500+ sprites)
+            @setEvalBranchQuota(@max(1000, field_count * 100));
             var result: [field_count]SpriteInfo = undefined;
             for (info.@"struct".fields, 0..) |field, i| {
                 const frame = @field(frames, field.name);
@@ -151,6 +157,8 @@ pub fn ComptimeAtlas(comptime frames: anytype) type {
 
         /// All sprite names, indexed by field order
         pub const names: [field_count][]const u8 = blk: {
+            // Scale branch quota based on field count to handle large atlases (500+ sprites)
+            @setEvalBranchQuota(@max(1000, field_count * 10));
             var result: [field_count][]const u8 = undefined;
             for (info.@"struct".fields, 0..) |field, i| {
                 result[i] = field.name;
