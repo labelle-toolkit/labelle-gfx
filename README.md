@@ -8,7 +8,7 @@
 [![Zig](https://img.shields.io/badge/zig-0.15.2-orange)](https://ziglang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-A 2D graphics library for Zig games combining [raylib](https://www.raylib.com/) rendering with [zig-ecs](https://github.com/prime31/zig-ecs) entity component system. Part of the [labelle-toolkit](https://github.com/labelle-toolkit).
+A 2D graphics library for Zig games using [raylib](https://www.raylib.com/) for rendering. Part of the [labelle-toolkit](https://github.com/labelle-toolkit).
 
 ## Features
 
@@ -21,7 +21,7 @@ A 2D graphics library for Zig games combining [raylib](https://www.raylib.com/) 
 - **TexturePacker Support** - Load sprite atlases from JSON format (with converter tool)
 - **Camera System** - Pan, zoom, bounds, and coordinate conversion
 - **Viewport Culling** - Automatic frustum culling skips off-screen sprites for better performance
-- **ECS Integration** - Render components and systems for zig-ecs
+- **Input/UI Helpers** - Static helpers for keyboard input and UI text rendering
 - **Visual Effects** - Fade, temporal fade, flash effects
 - **Z-Index Layering** - Proper draw order for 2D games
 - **Backend Abstraction** - Support for raylib (default) and sokol backends
@@ -90,35 +90,6 @@ while (engine.isRunning()) {
 }
 ```
 
-### ECS-Based Engine
-
-For games that need full ECS control:
-
-```zig
-const gfx = @import("labelle");
-
-var registry = ecs.Registry.init(allocator);
-defer registry.deinit();
-
-var engine = try gfx.Engine.init(allocator, &registry, .{
-    .atlases = &.{
-        .{ .name = "sprites", .json = "assets/sprites.json", .texture = "assets/sprites.png" },
-    },
-});
-defer engine.deinit();
-
-// Create entity with components
-const player = registry.create();
-registry.add(player, gfx.Position{ .x = 400, .y = 300 });
-registry.add(player, gfx.Sprite{
-    .name = "player_idle",
-    .z_index = gfx.ZIndex.characters,
-});
-
-// Game loop
-engine.render(dt);
-```
-
 ### Comptime Atlas Loading
 
 For optimal runtime performance, load sprite atlas data at compile time:
@@ -153,7 +124,7 @@ zig build run-example-03
 # Camera system
 zig build run-example-04
 
-# ECS rendering
+# Sprite rendering with VisualEngine
 zig build run-example-05
 
 # Visual effects
@@ -187,7 +158,6 @@ zig build run-example-12
 | `Position` | x, y coordinates (from zig-utils Vector2) |
 | `Sprite` | Static sprite (name, z_index, tint, scale, rotation, flip) |
 | `Animation(T)` | Animated sprite with config-based enum |
-| `Render` | Legacy render component |
 
 ### Z-Index Layers
 
@@ -226,12 +196,11 @@ labelle/
 ├── src/
 │   ├── lib.zig                 # Main exports
 │   ├── log.zig                 # Logging infrastructure
-│   ├── components/             # ECS components
+│   ├── components/             # Sprite and animation components
 │   ├── animation/              # Animation system
 │   ├── renderer/               # Sprite renderer
 │   ├── texture/                # Texture/atlas management
 │   ├── camera/                 # Camera system
-│   ├── ecs/                    # ECS systems
 │   ├── effects/                # Visual effects
 │   ├── engine/                 # Engine API and VisualEngine
 │   ├── backend/                # Backend abstraction
@@ -263,7 +232,6 @@ zig build -Dconvert-atlases=true
 ## Dependencies
 
 - [raylib-zig](https://github.com/raysan5/raylib) - Graphics and windowing
-- [zig-ecs](https://github.com/prime31/zig-ecs) - Entity Component System
 - [sokol](https://github.com/floooh/sokol) - Optional alternative backend
 - [zig-utils](https://github.com/labelle-toolkit/zig-utils) - Common utilities
 - [zspec](https://github.com/labelle-toolkit/zspec) - BDD-style testing

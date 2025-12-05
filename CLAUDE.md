@@ -2,13 +2,12 @@
 
 ## Project Overview
 
-**labelle** is a 2D graphics library for Zig games that combines raylib rendering with zig-ecs (Entity Component System). It provides sprite rendering, animations, texture atlas support, camera controls, visual effects, and a self-contained visual engine.
+**labelle** is a 2D graphics library for Zig games using raylib for rendering. It provides sprite rendering, animations, texture atlas support, camera controls, visual effects, and a self-contained visual engine.
 
 ## Tech Stack
 
 - **Language**: Zig 0.15.x
 - **Graphics**: raylib (via raylib-zig bindings), sokol (optional backend)
-- **ECS**: zig-ecs (entt-style ECS)
 - **Build**: Zig build system
 - **Testing**: zspec (BDD-style testing)
 
@@ -19,14 +18,13 @@ labelle/
 ├── src/
 │   ├── lib.zig                 # Main exports - START HERE
 │   ├── log.zig                 # Logging infrastructure
-│   ├── components/             # ECS components (Position, Sprite, Animation, Render)
+│   ├── components/             # Sprite and animation components
 │   ├── animation/              # Animation system and player
 │   ├── renderer/               # Sprite renderer and z-index
 │   ├── texture/                # Texture/atlas management
 │   ├── camera/                 # Camera system (pan, zoom, bounds)
-│   ├── ecs/                    # ECS systems (render, animation update)
 │   ├── effects/                # Visual effects (Fade, TemporalFade, Flash)
-│   ├── engine/                 # High-level Engine API and VisualEngine
+│   ├── engine/                 # VisualEngine and Input/UI helpers
 │   ├── backend/                # Backend abstraction (raylib, sokol, mock)
 │   └── tools/                  # CLI tools (converter)
 ├── tests/                      # Test files (zspec)
@@ -37,12 +35,7 @@ labelle/
 
 ## Key Concepts
 
-### Two Engine Options
-
-1. **Engine** (ECS-based): Uses external zig-ecs registry, game owns entities
-2. **VisualEngine** (Self-contained): Engine owns sprites internally via opaque handles
-
-### VisualEngine (Recommended for new projects)
+### VisualEngine (Recommended)
 
 ```zig
 const gfx = @import("labelle");
@@ -72,19 +65,17 @@ while (engine.isRunning()) {
 }
 ```
 
-### Engine API (ECS-based)
+### Input and UI Helpers
+
+The Engine namespace provides static helpers for input and UI:
 
 ```zig
-var engine = try gfx.Engine.init(allocator, &registry, .{
-    .atlases = &.{
-        .{ .name = "sprites", .json = "assets/sprites.json", .texture = "assets/sprites.png" },
-    },
-});
-defer engine.deinit();
+// Check keyboard input
+if (gfx.Engine.Input.isDown(.left)) { ... }
+if (gfx.Engine.Input.isPressed(.space)) { ... }
 
-// Game loop
-engine.render(dt);
-engine.renderAnimations(Animations.Player, "player", dt);
+// Draw UI text
+gfx.Engine.UI.text("Hello", .{ .x = 10, .y = 10, .size = 20, .color = gfx.Color.white });
 ```
 
 ### Animation System (config-based)
@@ -193,7 +184,6 @@ _ = storage.remove(id);
 - `Position` - x, y coordinates (from zig-utils Vector2)
 - `Sprite` - Static sprite (name, z_index, tint, scale, rotation, flip)
 - `Animation(T)` - Animated sprite with config-based enum
-- `Render` - Legacy render component (sprite_name, z_index, etc.)
 
 ### Z-Index Layers
 
@@ -274,7 +264,7 @@ pub const AnimationTests = struct {
 | 02_animation | Animation system |
 | 03_sprite_atlas | Sprite atlas loading |
 | 04_camera | Camera pan and zoom |
-| 05_ecs_rendering | ECS render systems |
+| 05_ecs_rendering | Sprite rendering with VisualEngine |
 | 06_effects | Visual effects |
 | 07_with_fixtures | TexturePacker fixtures demo |
 | 08_nested_animations | Nested animation paths |
@@ -317,11 +307,11 @@ const name = anim.getSpriteName("player", &buffer);
 ```zig
 // Use default raylib backend
 const gfx = @import("labelle");
-var engine = gfx.Engine.init(...);
+var engine = try gfx.VisualEngine.init(...);
 
 // Use custom backend
 const MyGfx = gfx.withBackend(gfx.SokolBackend);
-var engine = MyGfx.Engine.init(...);
+var engine = try MyGfx.VisualEngine.init(...);
 ```
 
 ## CI/CD
