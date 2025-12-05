@@ -17,7 +17,7 @@ pub const Fade = struct {
     target_alpha: f32 = 1.0,
     /// Fade speed (alpha change per second)
     speed: f32 = 1.0,
-    /// Whether to remove entity when fully faded out
+    /// Whether this object should be removed when fully faded out
     remove_on_fadeout: bool = false,
 
     /// Update the fade effect

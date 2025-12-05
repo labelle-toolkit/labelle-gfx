@@ -63,9 +63,9 @@ pub const EngineConfig = struct {
     clear_color: ?raylib_backend.RaylibBackend.Color = null,
 };
 
-/// High-level engine with custom backend support
-/// Note: This is a minimal wrapper providing static helpers like Input and UI.
-/// For actual sprite management, use VisualEngine.
+/// Engine namespace for Input and UI static helpers.
+/// This type only serves as a namespace for static utilities.
+/// For actual sprite management and rendering, use VisualEngine.
 pub fn EngineWith(comptime BackendType: type) type {
     return struct {
         const Self = @This();

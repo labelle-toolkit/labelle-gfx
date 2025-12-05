@@ -6,7 +6,7 @@
 //! ## Features
 //! - VisualEngine API for simplified sprite management
 //! - Static and animated sprite rendering
-//! - TexturePacker atlas support (JSON and comptime .zon formats)
+//! - TexturePacker atlas support (JSON and comptime .zon format)
 //! - Generic animation system with config-based enums
 //! - Z-index based layer management
 //! - Camera abstraction with pan/zoom and entity following
@@ -220,7 +220,7 @@ pub fn withBackend(comptime Impl: type) type {
         pub const TemporalFade = effects.TemporalFade;
         pub const Flash = effects.FlashWith(B);
 
-        // Engine (provides Input and UI helpers)
+        // Engine namespace for Input and UI static helpers
         pub const Engine = engine_mod.EngineWith(B);
         pub const AtlasConfig = engine_mod.AtlasConfig;
         pub const CameraConfig = engine_mod.CameraConfig;

@@ -10,9 +10,7 @@
 //! - Many entities outside the current view
 //!
 //! Culling is applied automatically in:
-//! - `Engine.render()` - ECS-based engine
 //! - `VisualEngine.tick()` - Self-contained visual engine
-//! - `systems.spriteRenderSystem()` - ECS render systems
 //!
 //! The culling logic accounts for:
 //! - Sprite dimensions (width/height)
@@ -26,7 +24,6 @@
 //! visual popping at screen edges.
 
 const std = @import("std");
-const ecs = @import("ecs");
 
 const backend_mod = @import("../backend/backend.zig");
 const raylib_backend = @import("../backend/raylib_backend.zig");
