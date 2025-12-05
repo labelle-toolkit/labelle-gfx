@@ -95,7 +95,7 @@ pub const EngineConfig = struct {
     clear_color_g: u8 = 40,
     clear_color_b: u8 = 40,
     clear_color_a: u8 = 255,
-    max_sprites: u32 = 10000,
+    max_sprites: u32 = 2000,
 };
 
 /// Animation info stored at runtime
@@ -445,8 +445,8 @@ pub fn RenderingEngine(comptime max_sprites: usize) type {
     };
 }
 
-/// Default engine with 10000 max sprites
-pub const DefaultRenderingEngine = RenderingEngine(10000);
+/// Default engine with 2000 max sprites
+pub const DefaultRenderingEngine = RenderingEngine(2000);
 
 // Tests
 test "engine init and deinit" {

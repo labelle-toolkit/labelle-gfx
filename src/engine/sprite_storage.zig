@@ -18,7 +18,7 @@
 //!     active: bool = false, // Required
 //! };
 //!
-//! const Storage = GenericSpriteStorage(MySpriteData, 10000);
+//! const Storage = GenericSpriteStorage(MySpriteData, 2000);
 //! var storage = try Storage.init(allocator);
 //!
 //! // Allocate a slot and initialize sprite data
@@ -281,5 +281,5 @@ pub fn GenericSpriteStorage(comptime DataType: type, comptime max_sprites: usize
     };
 }
 
-// Default storage with SpriteData and 10000 sprites max
-pub const DefaultSpriteStorage = GenericSpriteStorage(SpriteData, 10000);
+// Default storage with SpriteData and 2000 sprites max
+pub const DefaultSpriteStorage = GenericSpriteStorage(SpriteData, 2000);

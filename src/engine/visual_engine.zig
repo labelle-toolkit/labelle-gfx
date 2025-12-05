@@ -688,5 +688,5 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
 // Default backend
 const DefaultBackend = backend_mod.Backend(raylib_backend.RaylibBackend);
 
-/// Default visual engine with raylib backend and 10000 max sprites
-pub const VisualEngine = VisualEngineWith(DefaultBackend, 10000);
+/// Default visual engine with raylib backend and 2000 max sprites
+pub const VisualEngine = VisualEngineWith(DefaultBackend, 2000);
