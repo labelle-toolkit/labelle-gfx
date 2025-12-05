@@ -624,7 +624,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
                 const sprite = &self.storage.sprites[id.index];
                 const tint = BackendType.color(sprite.tint_r, sprite.tint_g, sprite.tint_b, sprite.tint_a);
                 
-                const draw_opts = .{
+                const draw_opts: Renderer.DrawOptions = .{
                     .offset_x = sprite.offset_x,
                     .offset_y = sprite.offset_y,
                     .scale = sprite.scale,

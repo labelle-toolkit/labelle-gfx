@@ -401,7 +401,7 @@ pub fn EngineWith(comptime BackendType: type) type {
             for (items.items) |item| {
                 switch (item.kind) {
                     .sprite => |sprite| {
-                        const draw_opts = .{
+                        const draw_opts: Renderer.DrawOptions = .{
                             .offset_x = sprite.offset_x,
                             .offset_y = sprite.offset_y,
                             .scale = sprite.scale,
@@ -429,7 +429,7 @@ pub fn EngineWith(comptime BackendType: type) type {
                         );
                     },
                     .animation => |anim_data| {
-                        const draw_opts = .{
+                        const draw_opts: Renderer.DrawOptions = .{
                             .offset_x = anim_data.offset_x,
                             .offset_y = anim_data.offset_y,
                             .scale = anim_data.scale,

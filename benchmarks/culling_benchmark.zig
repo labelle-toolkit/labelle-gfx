@@ -45,8 +45,8 @@ fn runBenchmark(
 
     // Create a grid of sprites
     // Many will be off-screen to test culling effectiveness
-    var sprites = std.ArrayList(SpriteId).init(allocator);
-    defer sprites.deinit();
+    var sprites: std.ArrayList(SpriteId) = .empty;
+    defer sprites.deinit(allocator);
 
     const grid_size = @as(usize, @intFromFloat(@sqrt(@as(f64, @floatFromInt(sprite_count))))) + 1;
     const spacing: f32 = 100.0;
@@ -67,7 +67,7 @@ fn runBenchmark(
                 .z_index = ZIndex.items,
                 .scale = 1.0,
             });
-            try sprites.append(sprite);
+            try sprites.append(allocator, sprite);
         }
     }
 
@@ -163,8 +163,8 @@ pub fn main() !void {
         .{ .sprites = 2000, .frames = 300 },
     };
 
-    var all_results = std.ArrayList(BenchmarkResults).init(allocator);
-    defer all_results.deinit();
+    var all_results: std.ArrayList(BenchmarkResults) = .empty;
+    defer all_results.deinit(allocator);
 
     for (configs) |config| {
         const name = try std.fmt.allocPrint(
@@ -175,7 +175,7 @@ pub fn main() !void {
         defer allocator.free(name);
 
         const results = try runBenchmark(allocator, config.sprites, config.frames);
-        try all_results.append(results);
+        try all_results.append(allocator, results);
         printResults(name, results);
     }
 
