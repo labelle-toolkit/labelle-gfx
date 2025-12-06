@@ -144,7 +144,7 @@ const tile = try engine.addSprite(.{
 const gem = try engine.addSprite(.{
     .sprite_name = "gem",
     .x = 100, .y = 100,
-    .pivot = .center,  // Required - use .center for symmetric rotation
+    .pivot = .center,  // Default, can be omitted
 });
 
 // Custom pivot (e.g., weapon handle position)

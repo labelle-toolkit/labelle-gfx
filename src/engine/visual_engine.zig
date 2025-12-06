@@ -102,8 +102,8 @@ pub const SpriteConfig = struct {
     offset_y: f32 = 0,
     /// Tint color for the sprite. Accepts a Color struct.
     tint: ColorConfig = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
-    /// Pivot point for positioning and rotation (required)
-    pivot: Pivot,
+    /// Pivot point for positioning and rotation (defaults to center)
+    pivot: Pivot = .center,
     /// Custom pivot X coordinate (0.0-1.0), used when pivot == .custom
     pivot_x: f32 = 0.5,
     /// Custom pivot Y coordinate (0.0-1.0), used when pivot == .custom
