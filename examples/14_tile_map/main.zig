@@ -71,13 +71,13 @@ pub fn main() !void {
     var camera_x: f32 = 0;
     var camera_y: f32 = 0;
     const camera_speed: f32 = 200;
-    const scale: f32 = 2.0;
+    const scale: f32 = 4.0; // Larger scale so map is bigger than window
 
-    // Calculate map bounds
+    // Calculate map bounds (allow panning if map is larger than screen)
     const map_pixel_width: f32 = @floatFromInt(tilemap.getPixelWidth());
     const map_pixel_height: f32 = @floatFromInt(tilemap.getPixelHeight());
-    const max_camera_x = map_pixel_width * scale - 800;
-    const max_camera_y = map_pixel_height * scale - 600;
+    const max_camera_x = @max(0, map_pixel_width * scale - 800);
+    const max_camera_y = @max(0, map_pixel_height * scale - 600);
 
     var frame_count: u32 = 0;
 
@@ -107,8 +107,8 @@ pub fn main() !void {
         }
 
         // Clamp camera to map bounds
-        camera_x = std.math.clamp(camera_x, 0, @max(0, max_camera_x));
-        camera_y = std.math.clamp(camera_y, 0, @max(0, max_camera_y));
+        camera_x = std.math.clamp(camera_x, 0, max_camera_x);
+        camera_y = std.math.clamp(camera_y, 0, max_camera_y);
 
         // Begin drawing
         gfx.DefaultBackend.beginDrawing();
