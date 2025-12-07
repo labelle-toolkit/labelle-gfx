@@ -126,7 +126,7 @@ pub const SpriteVisual = struct {
     flip_x: bool = false,
     flip_y: bool = false,
     tint: Color = Color.white,
-    z_index: i16 = 0,
+    z_index: u8 = 128,
     visible: bool = true,
 };
 
@@ -135,7 +135,7 @@ pub const ShapeVisual = struct {
     shape: Shape,
     color: Color = Color.white,
     rotation: f32 = 0,
-    z_index: i16 = 0,
+    z_index: u8 = 128,
     visible: bool = true,
 
     pub const Shape = union(enum) {
@@ -209,7 +209,7 @@ pub const TextVisual = struct {
     text: [:0]const u8 = "",
     size: f32 = 16,
     color: Color = Color.white,
-    z_index: i16 = 0,
+    z_index: u8 = 128,
     visible: bool = true,
 };
 
@@ -231,7 +231,7 @@ pub const EngineConfig = struct {
 };
 
 // ============================================
-// Render Item for Z-Index Sorting
+// Render Item for Z-Index Buckets
 // ============================================
 
 const RenderItemType = enum { sprite, shape, text };
@@ -239,7 +239,107 @@ const RenderItemType = enum { sprite, shape, text };
 const RenderItem = struct {
     entity_id: EntityId,
     item_type: RenderItemType,
-    z_index: i16,
+
+    pub fn eql(self: RenderItem, other: RenderItem) bool {
+        return self.entity_id == other.entity_id and self.item_type == other.item_type;
+    }
+};
+
+/// Z-index bucket storage for RetainedEngine
+/// Similar to z_index_buckets.ZIndexBuckets but uses EntityId-based RenderItem
+const ZBuckets = struct {
+    const Bucket = std.ArrayListUnmanaged(RenderItem);
+
+    buckets: [256]Bucket,
+    allocator: std.mem.Allocator,
+    total_count: usize,
+
+    pub fn init(allocator: std.mem.Allocator) ZBuckets {
+        return ZBuckets{
+            .buckets = [_]Bucket{.{}} ** 256,
+            .allocator = allocator,
+            .total_count = 0,
+        };
+    }
+
+    pub fn deinit(self: *ZBuckets) void {
+        for (&self.buckets) |*bucket| {
+            bucket.deinit(self.allocator);
+        }
+    }
+
+    pub fn insert(self: *ZBuckets, item: RenderItem, z: u8) !void {
+        try self.buckets[z].append(self.allocator, item);
+        self.total_count += 1;
+    }
+
+    pub fn remove(self: *ZBuckets, item: RenderItem, z: u8) bool {
+        const bucket = &self.buckets[z];
+        for (bucket.items, 0..) |existing, i| {
+            if (existing.eql(item)) {
+                _ = bucket.swapRemove(i);
+                self.total_count -= 1;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    pub fn changeZIndex(self: *ZBuckets, item: RenderItem, old_z: u8, new_z: u8) !void {
+        if (old_z == new_z) return;
+        const removed = self.remove(item, old_z);
+        if (!removed) {
+            return error.ItemNotFound;
+        }
+        try self.insert(item, new_z);
+    }
+
+    pub fn clear(self: *ZBuckets) void {
+        for (&self.buckets) |*bucket| {
+            bucket.clearRetainingCapacity();
+        }
+        self.total_count = 0;
+    }
+
+    pub const Iterator = struct {
+        buckets: *const [256]Bucket,
+        z: u16,
+        idx: usize,
+
+        pub fn init(storage: *const ZBuckets) Iterator {
+            var iter = Iterator{
+                .buckets = &storage.buckets,
+                .z = 0,
+                .idx = 0,
+            };
+            iter.skipEmptyBuckets();
+            return iter;
+        }
+
+        pub fn next(self: *Iterator) ?RenderItem {
+            while (self.z < 256) {
+                const bucket = &self.buckets[self.z];
+                if (self.idx < bucket.items.len) {
+                    const item = bucket.items[self.idx];
+                    self.idx += 1;
+                    return item;
+                }
+                self.z += 1;
+                self.idx = 0;
+            }
+            return null;
+        }
+
+        fn skipEmptyBuckets(self: *Iterator) void {
+            while (self.z < 256 and self.buckets[self.z].items.len == 0) {
+                self.z += 1;
+            }
+        }
+    };
+
+    pub fn iterator(self: *const ZBuckets) Iterator {
+        return Iterator.init(self);
+    }
 };
 
 // ============================================
@@ -263,9 +363,8 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
         shapes: std.AutoArrayHashMap(EntityId, ShapeEntry),
         texts: std.AutoArrayHashMap(EntityId, TextEntry),
 
-        // Z-index sorted render list
-        render_list: std.ArrayListUnmanaged(RenderItem),
-        render_list_dirty: bool,
+        // Z-index bucket storage for efficient ordered rendering (no per-frame sorting)
+        z_buckets: ZBuckets,
 
         // Window state
         owns_window: bool,
@@ -309,8 +408,7 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
                 .sprites = std.AutoArrayHashMap(EntityId, SpriteEntry).init(allocator),
                 .shapes = std.AutoArrayHashMap(EntityId, ShapeEntry).init(allocator),
                 .texts = std.AutoArrayHashMap(EntityId, TextEntry).init(allocator),
-                .render_list = .empty,
-                .render_list_dirty = false,
+                .z_buckets = ZBuckets.init(allocator),
                 .owns_window = owns_window,
                 .clear_color = BackendType.color(
                     config.clear_color.r,
@@ -326,7 +424,7 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
             self.sprites.deinit();
             self.shapes.deinit();
             self.texts.deinit();
-            self.render_list.deinit(self.allocator);
+            self.z_buckets.deinit();
             self.texture_manager.deinit();
             if (self.owns_window) {
                 BackendType.closeWindow();
@@ -355,7 +453,7 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 
         pub fn createSprite(self: *Self, id: EntityId, visual: SpriteVisual, pos: Position) void {
             self.sprites.put(id, .{ .visual = visual, .position = pos }) catch return;
-            self.render_list_dirty = true;
+            self.z_buckets.insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch return;
         }
 
         pub fn updateSprite(self: *Self, id: EntityId, visual: SpriteVisual) void {
@@ -363,14 +461,17 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
                 const old_z = entry.visual.z_index;
                 entry.visual = visual;
                 if (old_z != visual.z_index) {
-                    self.render_list_dirty = true;
+                    self.z_buckets.changeZIndex(.{ .entity_id = id, .item_type = .sprite }, old_z, visual.z_index) catch {};
                 }
             }
         }
 
         pub fn destroySprite(self: *Self, id: EntityId) void {
+            if (self.sprites.get(id)) |entry| {
+                const removed = self.z_buckets.remove(.{ .entity_id = id, .item_type = .sprite }, entry.visual.z_index);
+                std.debug.assert(removed);
+            }
             _ = self.sprites.swapRemove(id);
-            self.render_list_dirty = true;
         }
 
         pub fn getSprite(self: *const Self, id: EntityId) ?SpriteVisual {
@@ -384,7 +485,7 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 
         pub fn createShape(self: *Self, id: EntityId, visual: ShapeVisual, pos: Position) void {
             self.shapes.put(id, .{ .visual = visual, .position = pos }) catch return;
-            self.render_list_dirty = true;
+            self.z_buckets.insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch return;
         }
 
         pub fn updateShape(self: *Self, id: EntityId, visual: ShapeVisual) void {
@@ -392,14 +493,17 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
                 const old_z = entry.visual.z_index;
                 entry.visual = visual;
                 if (old_z != visual.z_index) {
-                    self.render_list_dirty = true;
+                    self.z_buckets.changeZIndex(.{ .entity_id = id, .item_type = .shape }, old_z, visual.z_index) catch {};
                 }
             }
         }
 
         pub fn destroyShape(self: *Self, id: EntityId) void {
+            if (self.shapes.get(id)) |entry| {
+                const removed = self.z_buckets.remove(.{ .entity_id = id, .item_type = .shape }, entry.visual.z_index);
+                std.debug.assert(removed);
+            }
             _ = self.shapes.swapRemove(id);
-            self.render_list_dirty = true;
         }
 
         pub fn getShape(self: *const Self, id: EntityId) ?ShapeVisual {
@@ -413,7 +517,7 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 
         pub fn createText(self: *Self, id: EntityId, visual: TextVisual, pos: Position) void {
             self.texts.put(id, .{ .visual = visual, .position = pos }) catch return;
-            self.render_list_dirty = true;
+            self.z_buckets.insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch return;
         }
 
         pub fn updateText(self: *Self, id: EntityId, visual: TextVisual) void {
@@ -421,14 +525,17 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
                 const old_z = entry.visual.z_index;
                 entry.visual = visual;
                 if (old_z != visual.z_index) {
-                    self.render_list_dirty = true;
+                    self.z_buckets.changeZIndex(.{ .entity_id = id, .item_type = .text }, old_z, visual.z_index) catch {};
                 }
             }
         }
 
         pub fn destroyText(self: *Self, id: EntityId) void {
+            if (self.texts.get(id)) |entry| {
+                const removed = self.z_buckets.remove(.{ .entity_id = id, .item_type = .text }, entry.visual.z_index);
+                std.debug.assert(removed);
+            }
             _ = self.texts.swapRemove(id);
-            self.render_list_dirty = true;
         }
 
         pub fn getText(self: *const Self, id: EntityId) ?TextVisual {
@@ -518,17 +625,12 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 
         /// Render all stored visuals - no arguments needed
         pub fn render(self: *Self) void {
-            // Rebuild render list if dirty
-            if (self.render_list_dirty) {
-                self.rebuildRenderList();
-                self.render_list_dirty = false;
-            }
-
             // Begin camera mode
             self.beginCameraMode();
 
-            // Render all items in z-order
-            for (self.render_list.items) |item| {
+            // Iterate z-index buckets in order (no sorting needed)
+            var iter = self.z_buckets.iterator();
+            while (iter.next()) |item| {
                 if (!self.isVisible(item)) continue;
 
                 switch (item.item_type) {
@@ -548,47 +650,6 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
                 .shape => if (self.shapes.get(item.entity_id)) |e| e.visual.visible else false,
                 .text => if (self.texts.get(item.entity_id)) |e| e.visual.visible else false,
             };
-        }
-
-        fn rebuildRenderList(self: *Self) void {
-            self.render_list.clearRetainingCapacity();
-
-            // Add all sprites
-            var sprite_iter = self.sprites.iterator();
-            while (sprite_iter.next()) |entry| {
-                self.render_list.append(self.allocator, .{
-                    .entity_id = entry.key_ptr.*,
-                    .item_type = .sprite,
-                    .z_index = entry.value_ptr.visual.z_index,
-                }) catch continue;
-            }
-
-            // Add all shapes
-            var shape_iter = self.shapes.iterator();
-            while (shape_iter.next()) |entry| {
-                self.render_list.append(self.allocator, .{
-                    .entity_id = entry.key_ptr.*,
-                    .item_type = .shape,
-                    .z_index = entry.value_ptr.visual.z_index,
-                }) catch continue;
-            }
-
-            // Add all texts
-            var text_iter = self.texts.iterator();
-            while (text_iter.next()) |entry| {
-                self.render_list.append(self.allocator, .{
-                    .entity_id = entry.key_ptr.*,
-                    .item_type = .text,
-                    .z_index = entry.value_ptr.visual.z_index,
-                }) catch continue;
-            }
-
-            // Sort by z-index
-            std.mem.sort(RenderItem, self.render_list.items, {}, struct {
-                fn lessThan(_: void, a: RenderItem, b: RenderItem) bool {
-                    return a.z_index < b.z_index;
-                }
-            }.lessThan);
         }
 
         fn beginCameraMode(self: *Self) void {

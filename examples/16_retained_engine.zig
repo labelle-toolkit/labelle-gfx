@@ -42,13 +42,12 @@ pub fn main() !void {
 
     // Entity 2: A circle shape
     const circle_id = EntityId.from(2);
-    engine.createShape(circle_id, ShapeVisual.circle(30), .{ .x = 200, .y = 200 });
-    engine.updateShape(circle_id, blk: {
+    engine.createShape(circle_id, blk: {
         var v = ShapeVisual.circle(30);
         v.color = .{ .r = 255, .g = 100, .b = 100 };
         v.z_index = 5;
         break :blk v;
-    });
+    }, .{ .x = 200, .y = 200 });
 
     // Entity 3: A rectangle
     const rect_id = EntityId.from(3);
@@ -73,7 +72,6 @@ pub fn main() !void {
     var frame_count: u32 = 0;
     var player_x: f32 = 400;
     var player_y: f32 = 300;
-    const speed: f32 = 200;
 
     // Game loop
     while (engine.isRunning()) {
@@ -111,5 +109,4 @@ pub fn main() !void {
     std.debug.print("Retained Engine demo complete\n", .{});
 
     // Cleanup happens automatically via defer
-    _ = speed;
 }
