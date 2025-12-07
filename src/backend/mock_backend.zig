@@ -78,7 +78,7 @@ pub const MockBackend = struct {
     };
 
     // Global state for recording (using thread-local for test isolation)
-    threadlocal var draw_calls_list: ?std.ArrayList(DrawCall) = null;
+    threadlocal var draw_calls_list: std.ArrayListUnmanaged(DrawCall) = .empty;
     threadlocal var allocator_ref: ?std.mem.Allocator = null;
     threadlocal var screen_width_val: i32 = 800;
     threadlocal var screen_height_val: i32 = 600;
@@ -89,7 +89,7 @@ pub const MockBackend = struct {
     /// Initialize the mock backend for testing
     pub fn init(allocator: std.mem.Allocator) void {
         allocator_ref = allocator;
-        draw_calls_list = std.ArrayList(DrawCall).init(allocator);
+        draw_calls_list = .empty;
         texture_counter = 1;
         in_camera_mode = false;
         current_camera = null;
@@ -97,19 +97,17 @@ pub const MockBackend = struct {
 
     /// Deinitialize the mock backend
     pub fn deinit() void {
-        if (draw_calls_list) |*list| {
-            list.deinit();
+        if (allocator_ref) |alloc| {
+            draw_calls_list.deinit(alloc);
         }
-        draw_calls_list = null;
+        draw_calls_list = .empty;
         cleanupMockAtlases();
         allocator_ref = null;
     }
 
     /// Reset recorded state (call between tests)
     pub fn reset() void {
-        if (draw_calls_list) |*list| {
-            list.clearRetainingCapacity();
-        }
+        draw_calls_list.clearRetainingCapacity();
         texture_counter = 1;
         in_camera_mode = false;
         current_camera = null;
@@ -117,18 +115,12 @@ pub const MockBackend = struct {
 
     /// Get recorded draw calls for assertions
     pub fn getDrawCalls() []const DrawCall {
-        if (draw_calls_list) |list| {
-            return list.items;
-        }
-        return &.{};
+        return draw_calls_list.items;
     }
 
     /// Get draw call count
     pub fn getDrawCallCount() usize {
-        if (draw_calls_list) |list| {
-            return list.items.len;
-        }
-        return 0;
+        return draw_calls_list.items.len;
     }
 
     /// Set mock screen dimensions
@@ -152,8 +144,8 @@ pub const MockBackend = struct {
         rotation: f32,
         tint: Color,
     ) void {
-        if (draw_calls_list) |*list| {
-            list.append(.{
+        if (allocator_ref) |alloc| {
+            draw_calls_list.append(alloc, .{
                 .texture_id = texture.id,
                 .source = source,
                 .dest = dest,
@@ -290,31 +282,31 @@ pub const MockBackend = struct {
         trimmed: bool = false,
     };
 
-    threadlocal var mock_atlases: ?std.StringHashMap(std.ArrayList(MockSpriteData)) = null;
+    threadlocal var mock_atlases: ?std.StringHashMapUnmanaged(std.ArrayListUnmanaged(MockSpriteData)) = null;
 
     /// Create a mock atlas for testing
     /// This allows tests to query sprites without loading actual files
     pub fn createMockAtlas(name: []const u8, sprites: []const MockSpriteData) !void {
         const alloc = allocator_ref orelse return error.NotInitialized;
-        
+
         if (mock_atlases == null) {
-            mock_atlases = std.StringHashMap(std.ArrayList(MockSpriteData)).init(alloc);
+            mock_atlases = .empty;
         }
-        
-        var sprite_list = std.ArrayList(MockSpriteData).init(alloc);
+
+        var sprite_list: std.ArrayListUnmanaged(MockSpriteData) = .empty;
         for (sprites) |sprite| {
-            try sprite_list.append(sprite);
+            try sprite_list.append(alloc, sprite);
         }
-        
+
         const name_copy = try alloc.dupe(u8, name);
-        try mock_atlases.?.put(name_copy, sprite_list);
+        try mock_atlases.?.put(alloc, name_copy, sprite_list);
     }
 
     /// Get a mock sprite by name from a mock atlas
     pub fn getMockSprite(atlas_name: []const u8, sprite_name: []const u8) ?MockSpriteData {
         const atlases = mock_atlases orelse return null;
         const sprite_list = atlases.get(atlas_name) orelse return null;
-        
+
         for (sprite_list.items) |sprite| {
             if (std.mem.eql(u8, sprite.name, sprite_name)) {
                 return sprite;
@@ -326,14 +318,14 @@ pub const MockBackend = struct {
     /// Clean up mock atlases
     fn cleanupMockAtlases() void {
         if (mock_atlases) |*atlases| {
-            var iter = atlases.iterator();
-            while (iter.next()) |entry| {
-                if (allocator_ref) |alloc| {
+            if (allocator_ref) |alloc| {
+                var iter = atlases.iterator();
+                while (iter.next()) |entry| {
                     alloc.free(entry.key_ptr.*);
+                    entry.value_ptr.deinit(alloc);
                 }
-                entry.value_ptr.deinit();
+                atlases.deinit(alloc);
             }
-            atlases.deinit();
         }
         mock_atlases = null;
     }

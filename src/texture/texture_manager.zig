@@ -6,10 +6,12 @@ const raylib_backend = @import("../backend/raylib_backend.zig");
 const sprite_atlas_mod = @import("sprite_atlas.zig");
 const SpriteData = sprite_atlas_mod.SpriteData;
 const comptime_atlas = @import("comptime_atlas.zig");
+const single_sprite_mod = @import("single_sprite.zig");
 
 /// Texture manager with custom backend support
 pub fn TextureManagerWith(comptime BackendType: type) type {
     const SpriteAtlas = sprite_atlas_mod.SpriteAtlasWith(BackendType);
+    const SingleSprite = single_sprite_mod.SingleSpriteWith(BackendType);
 
     return struct {
         const Self = @This();
@@ -97,6 +99,33 @@ pub fn TextureManagerWith(comptime BackendType: type) type {
 
             const atlas_name_owned = try self.allocator.dupe(u8, name);
             try self.atlases.put(atlas_name_owned, atlas);
+        }
+
+        /// Load a single sprite image (PNG, JPG, etc.) without requiring a texture atlas.
+        /// The sprite will be accessible by the given name.
+        ///
+        /// This is useful for:
+        /// - Background images
+        /// - Simple sprites during prototyping
+        /// - Assets that don't need atlas optimization
+        ///
+        /// Example:
+        /// ```zig
+        /// try manager.loadSprite("background", "assets/background.png");
+        /// // Now use like any atlas sprite:
+        /// renderer.drawSprite("background", 0, 0, .{ .pivot = .top_left });
+        /// ```
+        pub fn loadSprite(
+            self: *Self,
+            name: []const u8,
+            texture_path: [:0]const u8,
+        ) !void {
+            // Create a single-sprite atlas
+            var atlas = try SingleSprite.load(self.allocator, texture_path, name);
+            errdefer atlas.deinit();
+
+            const name_owned = try self.allocator.dupe(u8, name);
+            try self.atlases.put(name_owned, atlas);
         }
 
         /// Get an atlas by name

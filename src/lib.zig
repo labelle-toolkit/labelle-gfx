@@ -138,6 +138,11 @@ pub const comptime_atlas = @import("texture/comptime_atlas.zig");
 pub const ComptimeAtlas = comptime_atlas.ComptimeAtlas;
 pub const SpriteInfo = comptime_atlas.SpriteInfo;
 
+// Single sprite loading (for individual images without atlas)
+pub const single_sprite = @import("texture/single_sprite.zig");
+pub const SingleSprite = single_sprite.SingleSprite;
+pub const SingleSpriteWith = single_sprite.SingleSpriteWith;
+
 // Camera exports
 pub const camera = @import("camera/camera.zig");
 pub const Camera = camera.Camera;

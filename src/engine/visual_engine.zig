@@ -743,6 +743,34 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
             try self.renderer.loadAtlasComptime(name, frames, texture_path);
         }
 
+        /// Load a single sprite image (PNG, JPG, etc.) without requiring a texture atlas.
+        /// The sprite will be accessible by the given name.
+        ///
+        /// This is useful for:
+        /// - Background images
+        /// - Simple sprites during prototyping
+        /// - Assets that don't need atlas optimization
+        ///
+        /// Example:
+        /// ```zig
+        /// try engine.loadSprite("background", "assets/background.png");
+        ///
+        /// // Use like any atlas sprite
+        /// const bg = try engine.addSprite(.{
+        ///     .sprite_name = "background",
+        ///     .x = 0, .y = 0,
+        ///     .pivot = .top_left,
+        ///     .z_index = ZIndex.background,
+        /// });
+        /// ```
+        pub fn loadSprite(
+            self: *Self,
+            name: []const u8,
+            texture_path: [:0]const u8,
+        ) !void {
+            try self.renderer.texture_manager.loadSprite(name, texture_path);
+        }
+
         pub fn getRenderer(self: *Self) *Renderer {
             return &self.renderer;
         }

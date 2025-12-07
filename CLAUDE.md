@@ -39,9 +39,8 @@ labelle/
 
 ```zig
 const gfx = @import("labelle");
-const VisualEngine = gfx.visual_engine.VisualEngine;
 
-var engine = try VisualEngine.init(allocator, .{
+var engine = try gfx.VisualEngine.init(allocator, .{
     .window = .{ .width = 800, .height = 600, .title = "My Game" },
     .clear_color = .{ .r = 40, .g = 40, .b = 40 },  // Optional, defaults to dark gray
     .atlases = &.{
@@ -54,7 +53,7 @@ defer engine.deinit();
 const player = try engine.addSprite(.{
     .sprite_name = "player_idle",
     .x = 400, .y = 300,
-    .z_index = gfx.visual_engine.ZIndex.characters,
+    .z_index = gfx.ZIndex.characters,
     .tint = .{ .r = 255, .g = 200, .b = 200 },  // Optional tint color
 });
 
@@ -119,6 +118,36 @@ comptime {
 }
 ```
 
+### Single Sprite Loading
+
+Load individual images without requiring a texture atlas. Useful for backgrounds, simple sprites, or prototyping:
+
+```zig
+const gfx = @import("labelle");
+
+var engine = try gfx.VisualEngine.init(allocator, .{
+    .window = .{ .width = 800, .height = 600, .title = "My Game" },
+});
+defer engine.deinit();
+
+// Load a single sprite image (PNG, JPG, etc.)
+try engine.loadSprite("background", "assets/background.png");
+
+// Use like any atlas sprite
+const bg = try engine.addSprite(.{
+    .sprite_name = "background",
+    .x = 0, .y = 0,
+    .pivot = .top_left,
+    .z_index = gfx.ZIndex.background,
+});
+```
+
+Also available on TextureManager for lower-level usage:
+
+```zig
+try renderer.texture_manager.loadSprite("player", "assets/player.png");
+```
+
 ### Pivot Points (Anchors)
 
 Pivot points determine which point of the sprite is placed at the (x, y) position and serves as the center of rotation:
@@ -176,7 +205,7 @@ Load sprite atlas data at compile time from .zon files (eliminates JSON parsing 
 const gfx = @import("labelle");
 const character_frames = @import("characters_frames.zon");
 
-var engine = try VisualEngine.init(allocator, .{
+var engine = try gfx.VisualEngine.init(allocator, .{
     .window = .{ .width = 800, .height = 600, .title = "My Game" },
 });
 defer engine.deinit();
@@ -192,7 +221,7 @@ Internal sprite storage using generational indices. Used by VisualEngine and Ren
 ```zig
 const gfx = @import("labelle");
 const GenericSpriteStorage = gfx.sprite_storage.GenericSpriteStorage;
-const SpriteId = gfx.sprite_storage.SpriteId;
+const SpriteId = gfx.SpriteId;
 
 // Define custom sprite data (must have generation and active fields)
 const MySpriteData = struct {
