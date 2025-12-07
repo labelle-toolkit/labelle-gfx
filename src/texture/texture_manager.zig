@@ -98,6 +98,7 @@ pub fn TextureManagerWith(comptime BackendType: type) type {
             }
 
             const atlas_name_owned = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(atlas_name_owned);
             try self.atlases.put(atlas_name_owned, atlas);
         }
 
@@ -125,6 +126,7 @@ pub fn TextureManagerWith(comptime BackendType: type) type {
             errdefer atlas.deinit();
 
             const name_owned = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(name_owned);
             try self.atlases.put(name_owned, atlas);
         }
 

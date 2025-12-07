@@ -52,6 +52,7 @@ pub fn SingleSpriteWith(comptime BackendType: type) type {
 
             // Load the texture
             atlas.texture = try BackendType.loadTexture(texture_path);
+            errdefer BackendType.unloadTexture(atlas.texture);
 
             // Get texture dimensions from the loaded texture
             const width = getTextureWidth(atlas.texture);
@@ -92,9 +93,7 @@ pub fn SingleSpriteWith(comptime BackendType: type) type {
             } else if (@hasField(BackendType.Texture, "w")) {
                 return @intCast(texture.w);
             } else {
-                // Fallback: if backend doesn't expose dimensions, use a default
-                // This shouldn't happen with raylib which has .width
-                return 1;
+                @compileError("Backend.Texture type must have a 'width' or 'w' field.");
             }
         }
 
@@ -105,7 +104,7 @@ pub fn SingleSpriteWith(comptime BackendType: type) type {
             } else if (@hasField(BackendType.Texture, "h")) {
                 return @intCast(texture.h);
             } else {
-                return 1;
+                @compileError("Backend.Texture type must have a 'height' or 'h' field.");
             }
         }
     };

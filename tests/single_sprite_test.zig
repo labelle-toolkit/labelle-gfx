@@ -86,7 +86,7 @@ pub const SingleSpriteTests = struct {
         try expect.equal(found.sprite.height, 256);
     }
 
-    test "TextureManager.loadSprite works alongside loadAtlas" {
+    test "TextureManager.loadSprite is accessible via findSprite" {
         MockBackend.init(std.testing.allocator);
         defer MockBackend.deinit();
 
@@ -96,7 +96,7 @@ pub const SingleSpriteTests = struct {
         // Load a single sprite
         try manager.loadSprite("background", "background.png");
 
-        // Both should be accessible
+        // Sprite should be accessible via findSprite
         const bg = manager.findSprite("background");
         try expect.toBeTrue(bg != null);
     }
