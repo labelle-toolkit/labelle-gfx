@@ -283,7 +283,7 @@ defer storage.deinit();
 const slot = try storage.allocSlot();
 
 // Initialize the sprite data
-storage.sprites[slot.index] = MySpriteData{
+storage.items[slot.index] = MySpriteData{
     .x = 100,
     .y = 200,
     .generation = slot.generation,
@@ -307,6 +307,47 @@ _ = storage.remove(id);
 - `Position` - x, y coordinates (from zig-utils Vector2)
 - `Sprite` - Static sprite (name, z_index, tint, scale, rotation, flip)
 - `Animation(T)` - Animated sprite with config-based enum
+- `Shape` - Primitive shapes (circle, rectangle, line, triangle, polygon)
+
+### Shape Primitives
+
+Draw geometric shapes alongside sprites, sorted by z-index:
+
+```zig
+const gfx = @import("labelle");
+
+var engine = try gfx.VisualEngine.init(allocator, .{
+    .window = .{ .width = 800, .height = 600, .title = "Shapes" },
+});
+defer engine.deinit();
+
+// Create shapes using ShapeConfig helpers
+const circle = try engine.addShape(gfx.ShapeConfig.circle(100, 100, 50));
+const rect = try engine.addShape(gfx.ShapeConfig.rectangle(200, 50, 80, 60));
+const line = try engine.addShape(gfx.ShapeConfig.line(0, 0, 100, 100));
+const tri = try engine.addShape(gfx.ShapeConfig.triangle(300, 100, 350, 0, 400, 100));
+const hex = try engine.addShape(gfx.ShapeConfig.polygon(500, 100, 6, 40));
+
+// Modify shape properties
+_ = engine.setShapeColor(circle, .{ .r = 255, .g = 0, .b = 0, .a = 255 });
+_ = engine.setShapeFilled(rect, false);  // Outline only
+_ = engine.setShapeRadius(circle, 60);
+_ = engine.setShapeRotation(hex, 30);
+
+// Game loop - shapes render automatically with sprites
+while (engine.isRunning()) {
+    engine.beginFrame();
+    engine.tick(engine.getDeltaTime());
+    engine.endFrame();
+}
+```
+
+Available shape types:
+- `circle` - Center position + radius
+- `rectangle` - Top-left position + width/height
+- `line` - Start and end points + thickness
+- `triangle` - Three vertices
+- `polygon` - Regular polygon with center, sides, and radius
 
 ### Z-Index Layers
 
@@ -356,7 +397,7 @@ zig build test
 # Run specific example
 zig build run-example-01
 zig build run-example-02
-# ... through run-example-14
+# ... through run-example-15
 
 # Run converter tool
 zig build converter -- input.json -o output.zon
@@ -397,6 +438,7 @@ pub const AnimationTests = struct {
 | 12_comptime_animations | Comptime animation definitions |
 | 13_pivot_points | Pivot point/anchor support |
 | 14_tile_map | Tiled Map Editor (.tmx) support |
+| 15_shapes | Shape primitives (circle, rect, line, triangle, polygon) |
 
 ## Common Patterns
 
@@ -443,7 +485,7 @@ var engine = try MyGfx.VisualEngine.init(...);
 
 - **CI workflow**: Builds, tests, and runs examples to capture screenshots
 - **Coverage workflow**: Runs test coverage
-- Screenshots are generated for examples 01-14 and compared in PRs
+- Screenshots are generated for examples 01-15 and compared in PRs
 
 ## Important Notes
 
@@ -461,4 +503,4 @@ var engine = try MyGfx.VisualEngine.init(...);
 1. Run `zig build test` to ensure tests pass
 2. Run `zig build` to check compilation
 3. Update examples if API changes
-4. CI expects all 14 example screenshots to be generated
+4. CI expects all 15 example screenshots to be generated

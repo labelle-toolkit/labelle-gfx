@@ -247,6 +247,83 @@ pub const AnimationsArrayTests = struct {
     }
 };
 
+// ============================================================================
+// Shape Component Tests
+// ============================================================================
+
+pub const ShapeTests = struct {
+    test "ShapeType enum values" {
+        try expect.equal(@intFromEnum(gfx.ShapeType.circle), 0);
+        try expect.equal(@intFromEnum(gfx.ShapeType.rectangle), 1);
+        try expect.equal(@intFromEnum(gfx.ShapeType.line), 2);
+        try expect.equal(@intFromEnum(gfx.ShapeType.triangle), 3);
+        try expect.equal(@intFromEnum(gfx.ShapeType.polygon), 4);
+    }
+
+    test "Shape.circle creates circle shape" {
+        const shape = gfx.Shape.circle(100, 200, 50);
+
+        try expect.equal(shape.shape_type, .circle);
+        try expect.equal(shape.x, 100);
+        try expect.equal(shape.y, 200);
+        try expect.equal(shape.radius, 50);
+    }
+
+    test "Shape.rectangle creates rectangle shape" {
+        const shape = gfx.Shape.rectangle(50, 60, 100, 80);
+
+        try expect.equal(shape.shape_type, .rectangle);
+        try expect.equal(shape.x, 50);
+        try expect.equal(shape.y, 60);
+        try expect.equal(shape.width, 100);
+        try expect.equal(shape.height, 80);
+    }
+
+    test "Shape.line creates line shape" {
+        const shape = gfx.Shape.line(0, 0, 100, 100);
+
+        try expect.equal(shape.shape_type, .line);
+        try expect.equal(shape.x, 0);
+        try expect.equal(shape.y, 0);
+        try expect.equal(shape.x2, 100);
+        try expect.equal(shape.y2, 100);
+    }
+
+    test "Shape.triangle creates triangle shape" {
+        const shape = gfx.Shape.triangle(0, 0, 50, 100, 100, 0);
+
+        try expect.equal(shape.shape_type, .triangle);
+        try expect.equal(shape.x, 0);
+        try expect.equal(shape.y, 0);
+        try expect.equal(shape.x2, 50);
+        try expect.equal(shape.y2, 100);
+        try expect.equal(shape.x3, 100);
+        try expect.equal(shape.y3, 0);
+    }
+
+    test "Shape.polygon creates polygon shape" {
+        const shape = gfx.Shape.polygon(200, 200, 6, 50);
+
+        try expect.equal(shape.shape_type, .polygon);
+        try expect.equal(shape.x, 200);
+        try expect.equal(shape.y, 200);
+        try expect.equal(shape.sides, 6);
+        try expect.equal(shape.radius, 50);
+    }
+
+    test "Shape default values" {
+        const shape = gfx.Shape{ .shape_type = .circle };
+
+        try expect.equal(shape.x, 0);
+        try expect.equal(shape.y, 0);
+        try expect.equal(shape.z_index, 0);
+        try expect.toBeTrue(shape.filled);
+        try expect.toBeTrue(shape.visible);
+        try expect.equal(shape.rotation, 0);
+        try expect.equal(shape.thickness, 1);
+    }
+};
+
 // Entry point for zspec
 comptime {
     _ = zspec.runAll(@This());

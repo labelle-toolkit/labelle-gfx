@@ -220,4 +220,56 @@ pub const RaylibBackend = struct {
     pub fn drawRectangleRec(rec: Rectangle, col: Color) void {
         rl.drawRectangleRec(rec, col);
     }
+
+    /// Draw rectangle with float coordinates (for world-space rendering)
+    pub fn drawRectangleV(x: f32, y: f32, width: f32, height: f32, col: Color) void {
+        rl.drawRectangleV(.{ .x = x, .y = y }, .{ .x = width, .y = height }, col);
+    }
+
+    /// Draw rectangle lines with float coordinates
+    pub fn drawRectangleLinesV(x: f32, y: f32, width: f32, height: f32, col: Color) void {
+        rl.drawRectangleLinesEx(.{ .x = x, .y = y, .width = width, .height = height }, 1.0, col);
+    }
+
+    // Shape primitives
+
+    /// Draw filled circle
+    pub fn drawCircle(center_x: f32, center_y: f32, radius: f32, col: Color) void {
+        rl.drawCircleV(.{ .x = center_x, .y = center_y }, radius, col);
+    }
+
+    /// Draw circle outline
+    pub fn drawCircleLines(center_x: f32, center_y: f32, radius: f32, col: Color) void {
+        rl.drawCircleLinesV(.{ .x = center_x, .y = center_y }, radius, col);
+    }
+
+    /// Draw line
+    pub fn drawLine(start_x: f32, start_y: f32, end_x: f32, end_y: f32, col: Color) void {
+        rl.drawLineV(.{ .x = start_x, .y = start_y }, .{ .x = end_x, .y = end_y }, col);
+    }
+
+    /// Draw line with thickness
+    pub fn drawLineEx(start_x: f32, start_y: f32, end_x: f32, end_y: f32, thickness: f32, col: Color) void {
+        rl.drawLineEx(.{ .x = start_x, .y = start_y }, .{ .x = end_x, .y = end_y }, thickness, col);
+    }
+
+    /// Draw filled triangle
+    pub fn drawTriangle(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: Color) void {
+        rl.drawTriangle(.{ .x = x1, .y = y1 }, .{ .x = x2, .y = y2 }, .{ .x = x3, .y = y3 }, col);
+    }
+
+    /// Draw triangle outline
+    pub fn drawTriangleLines(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: Color) void {
+        rl.drawTriangleLines(.{ .x = x1, .y = y1 }, .{ .x = x2, .y = y2 }, .{ .x = x3, .y = y3 }, col);
+    }
+
+    /// Draw filled polygon (regular polygon with n sides)
+    pub fn drawPoly(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
+        rl.drawPoly(.{ .x = center_x, .y = center_y }, sides, radius, rotation, col);
+    }
+
+    /// Draw polygon outline
+    pub fn drawPolyLines(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
+        rl.drawPolyLinesEx(.{ .x = center_x, .y = center_y }, sides, radius, rotation, 1.0, col);
+    }
 };

@@ -23,7 +23,7 @@
 //!
 //! // Allocate a slot and initialize sprite data
 //! const slot = try storage.allocSlot();
-//! storage.sprites[slot.index] = MySpriteData{
+//! storage.items[slot.index] = MySpriteData{
 //!     .x = 100,
 //!     .y = 200,
 //!     .generation = slot.generation,
@@ -162,7 +162,7 @@ pub fn GenericSpriteStorage(comptime DataType: type, comptime max_sprites: usize
         pub const Data = DataType;
         pub const capacity = max_sprites;
 
-        sprites: [max_sprites]DataType = [_]DataType{.{}} ** max_sprites,
+        items: [max_sprites]DataType = [_]DataType{.{}} ** max_sprites,
         free_list: std.ArrayList(u32),
         sprite_count: u32 = 0,
         allocator: std.mem.Allocator,
@@ -192,21 +192,21 @@ pub fn GenericSpriteStorage(comptime DataType: type, comptime max_sprites: usize
         /// The caller is responsible for initializing the sprite data.
         pub fn allocSlot(self: *Self) !struct { index: u32, generation: u32 } {
             const index = self.free_list.pop() orelse return error.OutOfSprites;
-            const generation = self.sprites[index].generation +% 1;
+            const generation = self.items[index].generation +% 1;
             self.sprite_count += 1;
             return .{ .index = index, .generation = generation };
         }
 
-        /// Get raw access to a sprite slot by index (for initialization after allocSlot)
+        /// Get raw access to a slot by index (for initialization after allocSlot)
         pub fn getSlot(self: *Self, index: u32) *DataType {
-            return &self.sprites[index];
+            return &self.items[index];
         }
 
-        /// Remove a sprite by handle
+        /// Remove an item by handle
         pub fn remove(self: *Self, id: SpriteId) bool {
             if (!self.isValid(id)) return false;
 
-            self.sprites[id.index].active = false;
+            self.items[id.index].active = false;
             // Safe to use appendAssumeCapacity since we pre-allocated to max_sprites
             // and free_list can never exceed max_sprites entries
             self.free_list.appendAssumeCapacity(id.index);
@@ -215,23 +215,23 @@ pub fn GenericSpriteStorage(comptime DataType: type, comptime max_sprites: usize
             return true;
         }
 
-        /// Check if a sprite handle is valid
+        /// Check if a handle is valid
         pub fn isValid(self: *const Self, id: SpriteId) bool {
             if (id.index >= max_sprites) return false;
-            const sprite = &self.sprites[id.index];
-            return sprite.active and sprite.generation == id.generation;
+            const item = &self.items[id.index];
+            return item.active and item.generation == id.generation;
         }
 
-        /// Get sprite data (mutable)
+        /// Get item data (mutable)
         pub fn get(self: *Self, id: SpriteId) ?*DataType {
             if (!self.isValid(id)) return null;
-            return &self.sprites[id.index];
+            return &self.items[id.index];
         }
 
-        /// Get sprite data (const)
+        /// Get item data (const)
         pub fn getConst(self: *const Self, id: SpriteId) ?*const DataType {
             if (!self.isValid(id)) return null;
-            return &self.sprites[id.index];
+            return &self.items[id.index];
         }
 
         /// Get number of active sprites
@@ -249,11 +249,11 @@ pub fn GenericSpriteStorage(comptime DataType: type, comptime max_sprites: usize
                     const idx = self.index;
                     self.index += 1;
 
-                    const sprite = &self.storage.sprites[idx];
-                    if (sprite.active) {
+                    const item = &self.storage.items[idx];
+                    if (item.active) {
                         return .{
-                            .id = SpriteId{ .index = idx, .generation = sprite.generation },
-                            .data = sprite,
+                            .id = SpriteId{ .index = idx, .generation = item.generation },
+                            .data = item,
                         };
                     }
                 }
@@ -261,7 +261,7 @@ pub fn GenericSpriteStorage(comptime DataType: type, comptime max_sprites: usize
             }
         };
 
-        /// Mutable iterator for active sprites
+        /// Mutable iterator for active items
         pub const MutableIterator = struct {
             storage: *Self,
             index: u32 = 0,
@@ -271,11 +271,11 @@ pub fn GenericSpriteStorage(comptime DataType: type, comptime max_sprites: usize
                     const idx = self.index;
                     self.index += 1;
 
-                    const sprite = &self.storage.sprites[idx];
-                    if (sprite.active) {
+                    const item = &self.storage.items[idx];
+                    if (item.active) {
                         return .{
-                            .id = SpriteId{ .index = idx, .generation = sprite.generation },
-                            .data = sprite,
+                            .id = SpriteId{ .index = idx, .generation = item.generation },
+                            .data = item,
                         };
                     }
                 }

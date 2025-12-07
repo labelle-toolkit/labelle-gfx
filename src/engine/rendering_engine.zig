@@ -149,7 +149,7 @@ pub fn RenderingEngine(comptime max_sprites: usize) type {
         pub fn addSprite(self: *Self, config: SpriteConfig) !SpriteId {
             const slot = try self.storage.allocSlot();
 
-            self.storage.sprites[slot.index] = SpriteData{
+            self.storage.items[slot.index] = SpriteData{
                 .x = config.x,
                 .y = config.y,
                 .z_index = config.z_index,

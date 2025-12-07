@@ -102,6 +102,11 @@ pub const SpriteLocation = components.SpriteLocation;
 pub const Color = components.ColorHelpers;
 pub const Pivot = components.Pivot;
 
+// Shape components
+pub const Shape = components.Shape;
+pub const ShapeWith = components.ShapeWith;
+pub const ShapeType = components.ShapeType;
+
 // Generic animation types - users provide their own enum with config()
 pub const Animation = components.Animation;
 pub const AnimationWith = components.AnimationWith;
@@ -168,12 +173,20 @@ pub const FlashWith = effects.FlashWith;
 pub const rendering_engine = @import("engine/rendering_engine.zig");
 pub const visual_engine = @import("engine/visual_engine.zig");
 pub const sprite_storage = @import("engine/sprite_storage.zig");
+pub const shape_storage = @import("engine/shape_storage.zig");
+pub const scene = @import("engine/scene.zig");
 pub const animation_def = @import("animation_def.zig");
 
 // Re-export VisualEngine at top level for convenience
 pub const VisualEngine = visual_engine.VisualEngine;
 pub const SpriteId = sprite_storage.SpriteId;
+pub const ShapeId = visual_engine.ShapeId;
+pub const ShapeConfig = visual_engine.ShapeConfig;
 pub const ColorConfig = visual_engine.ColorConfig;
+
+// Scene loading
+pub const loadSceneComptime = scene.loadSceneComptime;
+pub const NamedColor = scene.NamedColor;
 
 /// Create a complete set of labelle types using a custom backend implementation.
 ///

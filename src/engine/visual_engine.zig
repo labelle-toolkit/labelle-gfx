@@ -30,7 +30,9 @@
 
 const std = @import("std");
 const sprite_storage = @import("sprite_storage.zig");
+const shape_storage = @import("shape_storage.zig");
 const GenericSpriteStorage = sprite_storage.GenericSpriteStorage;
+const GenericShapeStorage = shape_storage.GenericShapeStorage;
 
 // Backend and rendering imports
 const backend_mod = @import("../backend/backend.zig");
@@ -42,6 +44,8 @@ const animation_def = @import("../animation_def.zig");
 const components = @import("../components/components.zig");
 
 pub const SpriteId = sprite_storage.SpriteId;
+pub const ShapeId = shape_storage.ShapeId;
+pub const ShapeType = shape_storage.ShapeType;
 pub const Position = sprite_storage.Position;
 pub const ZIndex = sprite_storage.ZIndex;
 pub const AnimationInfo = animation_def.AnimationInfo;
@@ -108,6 +112,93 @@ pub const SpriteConfig = struct {
     pivot_x: f32 = 0.5,
     /// Custom pivot Y coordinate (0.0-1.0), used when pivot == .custom
     pivot_y: f32 = 0.5,
+};
+
+/// Shape configuration for adding shapes
+pub const ShapeConfig = struct {
+    shape_type: ShapeType = .circle,
+    x: f32 = 0,
+    y: f32 = 0,
+    z_index: u8 = ZIndex.effects,
+    color: ColorConfig = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    filled: bool = true,
+    rotation: f32 = 0,
+    visible: bool = true,
+
+    // Circle properties
+    radius: f32 = 0,
+
+    // Rectangle properties
+    width: f32 = 0,
+    height: f32 = 0,
+
+    // Line properties
+    x2: f32 = 0,
+    y2: f32 = 0,
+    thickness: f32 = 1,
+
+    // Triangle properties (uses x,y as first point, x2,y2 as second)
+    x3: f32 = 0,
+    y3: f32 = 0,
+
+    // Polygon properties (regular polygon)
+    sides: i32 = 6,
+
+    /// Create a circle shape config
+    pub fn circle(center_x: f32, center_y: f32, r: f32) ShapeConfig {
+        return .{
+            .shape_type = .circle,
+            .x = center_x,
+            .y = center_y,
+            .radius = r,
+        };
+    }
+
+    /// Create a rectangle shape config
+    pub fn rectangle(rect_x: f32, rect_y: f32, w: f32, h: f32) ShapeConfig {
+        return .{
+            .shape_type = .rectangle,
+            .x = rect_x,
+            .y = rect_y,
+            .width = w,
+            .height = h,
+        };
+    }
+
+    /// Create a line shape config
+    pub fn line(start_x: f32, start_y: f32, end_x: f32, end_y: f32) ShapeConfig {
+        return .{
+            .shape_type = .line,
+            .x = start_x,
+            .y = start_y,
+            .x2 = end_x,
+            .y2 = end_y,
+        };
+    }
+
+    /// Create a triangle shape config
+    pub fn triangle(x1: f32, y1: f32, x2_val: f32, y2_val: f32, x3_val: f32, y3_val: f32) ShapeConfig {
+        return .{
+            .shape_type = .triangle,
+            .x = x1,
+            .y = y1,
+            .x2 = x2_val,
+            .y2 = y2_val,
+            .x3 = x3_val,
+            .y3 = y3_val,
+        };
+    }
+
+    /// Create a regular polygon shape config
+    pub fn polygon(center_x: f32, center_y: f32, num_sides: i32, r: f32) ShapeConfig {
+        return .{
+            .shape_type = .polygon,
+            .x = center_x,
+            .y = center_y,
+            .sides = num_sides,
+            .radius = r,
+        };
+    }
 };
 
 /// Internal sprite data with rendering info
@@ -180,20 +271,37 @@ fn nameToKey(name: []const u8) AnimNameKey {
 
 /// Visual rendering engine with raylib backend
 pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize) type {
+    return VisualEngineWithShapes(BackendType, max_sprites, 1000);
+}
+
+/// Visual rendering engine with configurable sprite and shape limits
+pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: usize, comptime max_shapes: usize) type {
     const Renderer = renderer_mod.RendererWith(BackendType);
     const Camera = camera_mod.CameraWith(BackendType);
     const Storage = GenericSpriteStorage(InternalSpriteData, max_sprites);
+    const ShapeStorage = GenericShapeStorage(max_shapes);
+    const InternalShapeData = shape_storage.InternalShapeData;
+
+    // Render item for unified z-sorting of sprites and shapes
+    const RenderItem = union(enum) {
+        sprite: SpriteId,
+        shape: ShapeId,
+    };
 
     return struct {
         const Self = @This();
         pub const Backend = BackendType;
-        pub const SpriteStorage = Storage;
+        pub const SpriteStorageType = Storage;
+        pub const ShapeStorageType = ShapeStorage;
 
         allocator: std.mem.Allocator,
         renderer: Renderer,
 
         // Sprite storage (uses GenericSpriteStorage for generational indices)
         storage: Storage,
+
+        // Shape storage (uses GenericSpriteStorage for generational indices)
+        shape_storage: ShapeStorage,
 
         // Animation registry - maps animation names to their definitions
         animation_registry: std.AutoArrayHashMapUnmanaged(AnimNameKey, AnimationInfo),
@@ -212,8 +320,8 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
         owns_window: bool = false,
         clear_color: BackendType.Color = BackendType.color(40, 40, 40, 255),
 
-        // Render buffer for z-sorting
-        render_buffer: [max_sprites]SpriteId = undefined,
+        // Render buffer for z-sorting (sprites + shapes)
+        render_buffer: [max_sprites + max_shapes]RenderItem = undefined,
 
         pub fn init(allocator: std.mem.Allocator, config: EngineConfig) !Self {
             // Initialize window if configured
@@ -231,6 +339,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
                 .allocator = allocator,
                 .renderer = Renderer.init(allocator),
                 .storage = try Storage.init(allocator),
+                .shape_storage = try ShapeStorage.init(allocator),
                 .animation_registry = .empty,
                 .owns_window = owns_window,
                 .clear_color = BackendType.color(
@@ -252,6 +361,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
         pub fn deinit(self: *Self) void {
             self.renderer.deinit();
             self.storage.deinit();
+            self.shape_storage.deinit();
             self.animation_registry.deinit(self.allocator);
             if (self.owns_window) {
                 BackendType.closeWindow();
@@ -290,7 +400,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
         pub fn addSprite(self: *Self, config: SpriteConfig) !SpriteId {
             const slot = try self.storage.allocSlot();
 
-            self.storage.sprites[slot.index] = InternalSpriteData{
+            self.storage.items[slot.index] = InternalSpriteData{
                 .x = config.x,
                 .y = config.y,
                 .z_index = config.z_index,
@@ -312,7 +422,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
                 .active = true,
             };
 
-            self.storage.sprites[slot.index].setSpriteName(config.sprite_name);
+            self.storage.items[slot.index].setSpriteName(config.sprite_name);
 
             return SpriteId{ .index = slot.index, .generation = slot.generation };
         }
@@ -333,98 +443,238 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
 
         pub fn setPosition(self: *Self, id: SpriteId, x: f32, y: f32) bool {
             if (!self.isValid(id)) return false;
-            self.storage.sprites[id.index].x = x;
-            self.storage.sprites[id.index].y = y;
+            self.storage.items[id.index].x = x;
+            self.storage.items[id.index].y = y;
             return true;
         }
 
         pub fn getPosition(self: *const Self, id: SpriteId) ?Position {
             if (!self.isValid(id)) return null;
-            return Position{ .x = self.storage.sprites[id.index].x, .y = self.storage.sprites[id.index].y };
+            return Position{ .x = self.storage.items[id.index].x, .y = self.storage.items[id.index].y };
         }
 
         pub fn setVisible(self: *Self, id: SpriteId, visible: bool) bool {
             if (!self.isValid(id)) return false;
-            self.storage.sprites[id.index].visible = visible;
+            self.storage.items[id.index].visible = visible;
             return true;
         }
 
         pub fn setZIndex(self: *Self, id: SpriteId, z_index: u8) bool {
             if (!self.isValid(id)) return false;
-            self.storage.sprites[id.index].z_index = z_index;
+            self.storage.items[id.index].z_index = z_index;
             return true;
         }
 
         pub fn setScale(self: *Self, id: SpriteId, scale: f32) bool {
             if (!self.isValid(id)) return false;
-            self.storage.sprites[id.index].scale = scale;
+            self.storage.items[id.index].scale = scale;
             return true;
         }
 
         pub fn setRotation(self: *Self, id: SpriteId, rotation: f32) bool {
             if (!self.isValid(id)) return false;
-            self.storage.sprites[id.index].rotation = rotation;
+            self.storage.items[id.index].rotation = rotation;
             return true;
         }
 
         pub fn setFlip(self: *Self, id: SpriteId, flip_x: bool, flip_y: bool) bool {
             if (!self.isValid(id)) return false;
-            self.storage.sprites[id.index].flip_x = flip_x;
-            self.storage.sprites[id.index].flip_y = flip_y;
+            self.storage.items[id.index].flip_x = flip_x;
+            self.storage.items[id.index].flip_y = flip_y;
             return true;
         }
 
         /// Set sprite tint using a ColorConfig struct
         pub fn setTint(self: *Self, id: SpriteId, color: ColorConfig) bool {
             if (!self.isValid(id)) return false;
-            self.storage.sprites[id.index].tint_r = color.r;
-            self.storage.sprites[id.index].tint_g = color.g;
-            self.storage.sprites[id.index].tint_b = color.b;
-            self.storage.sprites[id.index].tint_a = color.a;
+            self.storage.items[id.index].tint_r = color.r;
+            self.storage.items[id.index].tint_g = color.g;
+            self.storage.items[id.index].tint_b = color.b;
+            self.storage.items[id.index].tint_a = color.a;
             return true;
         }
 
         /// Set sprite tint using individual RGBA components
         pub fn setTintRgba(self: *Self, id: SpriteId, r: u8, g: u8, b: u8, a: u8) bool {
             if (!self.isValid(id)) return false;
-            self.storage.sprites[id.index].tint_r = r;
-            self.storage.sprites[id.index].tint_g = g;
-            self.storage.sprites[id.index].tint_b = b;
-            self.storage.sprites[id.index].tint_a = a;
+            self.storage.items[id.index].tint_r = r;
+            self.storage.items[id.index].tint_g = g;
+            self.storage.items[id.index].tint_b = b;
+            self.storage.items[id.index].tint_a = a;
             return true;
         }
 
         /// Set sprite pivot point using a Pivot enum value
         pub fn setPivot(self: *Self, id: SpriteId, pivot: Pivot) bool {
             if (!self.isValid(id)) return false;
-            self.storage.sprites[id.index].pivot = pivot;
+            self.storage.items[id.index].pivot = pivot;
             return true;
         }
 
         /// Set custom pivot coordinates (0.0-1.0). Also sets pivot to .custom.
         pub fn setPivotCustom(self: *Self, id: SpriteId, pivot_x: f32, pivot_y: f32) bool {
             if (!self.isValid(id)) return false;
-            self.storage.sprites[id.index].pivot = .custom;
-            self.storage.sprites[id.index].pivot_x = pivot_x;
-            self.storage.sprites[id.index].pivot_y = pivot_y;
+            self.storage.items[id.index].pivot = .custom;
+            self.storage.items[id.index].pivot_x = pivot_x;
+            self.storage.items[id.index].pivot_y = pivot_y;
             return true;
         }
 
         /// Get the pivot point of a sprite
         pub fn getPivot(self: *const Self, id: SpriteId) ?Pivot {
             if (!self.isValid(id)) return null;
-            return self.storage.sprites[id.index].pivot;
+            return self.storage.items[id.index].pivot;
         }
 
         pub fn setSpriteName(self: *Self, id: SpriteId, name: []const u8) bool {
             if (!self.isValid(id)) return false;
-            self.storage.sprites[id.index].setSpriteName(name);
+            self.storage.items[id.index].setSpriteName(name);
             return true;
         }
 
         pub fn getSpriteName(self: *const Self, id: SpriteId) ?[]const u8 {
             if (!self.isValid(id)) return null;
-            return self.storage.sprites[id.index].getSpriteName();
+            return self.storage.items[id.index].getSpriteName();
+        }
+
+        // ==================== Shape Management ====================
+
+        /// Add a new shape to the engine
+        pub fn addShape(self: *Self, config: ShapeConfig) !ShapeId {
+            const slot = try self.shape_storage.allocSlot();
+
+            self.shape_storage.items[slot.index] = InternalShapeData{
+                .shape_type = config.shape_type,
+                .x = config.x,
+                .y = config.y,
+                .z_index = config.z_index,
+                .color_r = config.color.r,
+                .color_g = config.color.g,
+                .color_b = config.color.b,
+                .color_a = config.color.a,
+                .filled = config.filled,
+                .rotation = config.rotation,
+                .visible = config.visible,
+                .radius = config.radius,
+                .width = config.width,
+                .height = config.height,
+                .x2 = config.x2,
+                .y2 = config.y2,
+                .thickness = config.thickness,
+                .x3 = config.x3,
+                .y3 = config.y3,
+                .sides = config.sides,
+                .generation = slot.generation,
+                .active = true,
+            };
+
+            return ShapeId{ .index = slot.index, .generation = slot.generation };
+        }
+
+        /// Remove a shape by handle
+        pub fn removeShape(self: *Self, id: ShapeId) bool {
+            return self.shape_storage.remove(.{ .index = id.index, .generation = id.generation });
+        }
+
+        /// Check if a shape handle is valid
+        pub fn isShapeValid(self: *const Self, id: ShapeId) bool {
+            return self.shape_storage.isValid(.{ .index = id.index, .generation = id.generation });
+        }
+
+        /// Get number of active shapes
+        pub fn shapeCount(self: *const Self) u32 {
+            return self.shape_storage.count();
+        }
+
+        // ==================== Shape Properties ====================
+
+        /// Set shape position
+        pub fn setShapePosition(self: *Self, id: ShapeId, x: f32, y: f32) bool {
+            if (!self.isShapeValid(id)) return false;
+            self.shape_storage.items[id.index].x = x;
+            self.shape_storage.items[id.index].y = y;
+            return true;
+        }
+
+        /// Get shape position
+        pub fn getShapePosition(self: *const Self, id: ShapeId) ?Position {
+            if (!self.isShapeValid(id)) return null;
+            return Position{ .x = self.shape_storage.items[id.index].x, .y = self.shape_storage.items[id.index].y };
+        }
+
+        /// Set shape visibility
+        pub fn setShapeVisible(self: *Self, id: ShapeId, visible: bool) bool {
+            if (!self.isShapeValid(id)) return false;
+            self.shape_storage.items[id.index].visible = visible;
+            return true;
+        }
+
+        /// Set shape z-index
+        pub fn setShapeZIndex(self: *Self, id: ShapeId, z_index: u8) bool {
+            if (!self.isShapeValid(id)) return false;
+            self.shape_storage.items[id.index].z_index = z_index;
+            return true;
+        }
+
+        /// Set shape color using a ColorConfig struct
+        pub fn setShapeColor(self: *Self, id: ShapeId, color: ColorConfig) bool {
+            if (!self.isShapeValid(id)) return false;
+            self.shape_storage.items[id.index].color_r = color.r;
+            self.shape_storage.items[id.index].color_g = color.g;
+            self.shape_storage.items[id.index].color_b = color.b;
+            self.shape_storage.items[id.index].color_a = color.a;
+            return true;
+        }
+
+        /// Set shape filled state
+        pub fn setShapeFilled(self: *Self, id: ShapeId, filled: bool) bool {
+            if (!self.isShapeValid(id)) return false;
+            self.shape_storage.items[id.index].filled = filled;
+            return true;
+        }
+
+        /// Set shape rotation
+        pub fn setShapeRotation(self: *Self, id: ShapeId, rotation: f32) bool {
+            if (!self.isShapeValid(id)) return false;
+            self.shape_storage.items[id.index].rotation = rotation;
+            return true;
+        }
+
+        /// Set circle radius
+        pub fn setShapeRadius(self: *Self, id: ShapeId, radius: f32) bool {
+            if (!self.isShapeValid(id)) return false;
+            self.shape_storage.items[id.index].radius = radius;
+            return true;
+        }
+
+        /// Set rectangle dimensions
+        pub fn setShapeSize(self: *Self, id: ShapeId, width: f32, height: f32) bool {
+            if (!self.isShapeValid(id)) return false;
+            self.shape_storage.items[id.index].width = width;
+            self.shape_storage.items[id.index].height = height;
+            return true;
+        }
+
+        /// Set line end point
+        pub fn setShapeEndPoint(self: *Self, id: ShapeId, x2: f32, y2: f32) bool {
+            if (!self.isShapeValid(id)) return false;
+            self.shape_storage.items[id.index].x2 = x2;
+            self.shape_storage.items[id.index].y2 = y2;
+            return true;
+        }
+
+        /// Set line thickness
+        pub fn setShapeThickness(self: *Self, id: ShapeId, thickness: f32) bool {
+            if (!self.isShapeValid(id)) return false;
+            self.shape_storage.items[id.index].thickness = thickness;
+            return true;
+        }
+
+        /// Set polygon sides
+        pub fn setShapeSides(self: *Self, id: ShapeId, sides: i32) bool {
+            if (!self.isShapeValid(id)) return false;
+            self.shape_storage.items[id.index].sides = sides;
+            return true;
         }
 
         // ==================== Animation ====================
@@ -460,7 +710,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
         /// Use this when animation definitions are not registered, or for one-off animations.
         pub fn playAnimation(self: *Self, id: SpriteId, name: []const u8, frame_count: u16, duration: f32, looping: bool) bool {
             if (!self.isValid(id)) return false;
-            var sprite = &self.storage.sprites[id.index];
+            var sprite = &self.storage.items[id.index];
             sprite.animation_frame = 0;
             sprite.animation_elapsed = 0;
             sprite.animation_playing = true;
@@ -481,19 +731,19 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
 
         pub fn pauseAnimation(self: *Self, id: SpriteId) bool {
             if (!self.isValid(id)) return false;
-            self.storage.sprites[id.index].animation_paused = true;
+            self.storage.items[id.index].animation_paused = true;
             return true;
         }
 
         pub fn resumeAnimation(self: *Self, id: SpriteId) bool {
             if (!self.isValid(id)) return false;
-            self.storage.sprites[id.index].animation_paused = false;
+            self.storage.items[id.index].animation_paused = false;
             return true;
         }
 
         pub fn isAnimationPlaying(self: *const Self, id: SpriteId) bool {
             if (!self.isValid(id)) return false;
-            const sprite = &self.storage.sprites[id.index];
+            const sprite = &self.storage.items[id.index];
             return sprite.animation_playing and !sprite.animation_paused;
         }
 
@@ -557,7 +807,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
 
         fn updateAnimations(self: *Self, dt: f32) void {
             for (0..max_sprites) |i| {
-                var sprite = &self.storage.sprites[i];
+                var sprite = &self.storage.items[i];
                 if (!sprite.active) continue;
                 if (!sprite.animation_playing or sprite.animation_paused) continue;
                 if (sprite.animation_frame_count <= 1) continue;
@@ -656,68 +906,140 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
         }
 
         fn render(self: *Self) void {
-            // Collect visible sprites and sort by z-index
+            // Collect visible sprites and shapes, sort by z-index
             var count: usize = 0;
+
+            // Add visible sprites
             for (0..max_sprites) |i| {
-                const sprite = &self.storage.sprites[i];
+                const sprite = &self.storage.items[i];
                 if (sprite.active and sprite.visible) {
-                    self.render_buffer[count] = SpriteId{
+                    self.render_buffer[count] = .{ .sprite = SpriteId{
                         .index = @intCast(i),
                         .generation = sprite.generation,
-                    };
+                    } };
+                    count += 1;
+                }
+            }
+
+            // Add visible shapes
+            for (0..max_shapes) |i| {
+                const shape = &self.shape_storage.items[i];
+                if (shape.active and shape.visible) {
+                    self.render_buffer[count] = .{ .shape = ShapeId{
+                        .index = @intCast(i),
+                        .generation = shape.generation,
+                    } };
                     count += 1;
                 }
             }
 
             // Sort by z-index
             const slice = self.render_buffer[0..count];
-            std.mem.sort(SpriteId, slice, self, struct {
-                fn lessThan(ctx: *Self, a: SpriteId, b: SpriteId) bool {
-                    return ctx.storage.sprites[a.index].z_index < ctx.storage.sprites[b.index].z_index;
+            std.mem.sort(RenderItem, slice, self, struct {
+                fn lessThan(ctx: *Self, a: RenderItem, b: RenderItem) bool {
+                    const a_z = switch (a) {
+                        .sprite => |id| ctx.storage.items[id.index].z_index,
+                        .shape => |id| ctx.shape_storage.items[id.index].z_index,
+                    };
+                    const b_z = switch (b) {
+                        .sprite => |id| ctx.storage.items[id.index].z_index,
+                        .shape => |id| ctx.shape_storage.items[id.index].z_index,
+                    };
+                    return a_z < b_z;
                 }
             }.lessThan);
 
             // Begin camera mode
             self.renderer.beginCameraMode();
 
-            // Render sprites
-            for (slice) |id| {
-                const sprite = &self.storage.sprites[id.index];
-                const tint = BackendType.color(sprite.tint_r, sprite.tint_g, sprite.tint_b, sprite.tint_a);
-                
-                const draw_opts: Renderer.DrawOptions = .{
-                    .offset_x = sprite.offset_x,
-                    .offset_y = sprite.offset_y,
-                    .scale = sprite.scale,
-                    .rotation = sprite.rotation,
-                    .tint = tint,
-                    .flip_x = sprite.flip_x,
-                    .flip_y = sprite.flip_y,
-                    .pivot = sprite.pivot,
-                    .pivot_x = sprite.pivot_x,
-                    .pivot_y = sprite.pivot_y,
-                };
-
-                // Viewport culling - skip if sprite is outside camera view
-                if (!self.renderer.shouldRenderSprite(
-                    sprite.getSpriteName(),
-                    sprite.x,
-                    sprite.y,
-                    draw_opts,
-                )) {
-                    continue;
+            // Render all items in z-order
+            for (slice) |item| {
+                switch (item) {
+                    .sprite => |id| self.renderSprite(id),
+                    .shape => |id| self.renderShape(id),
                 }
-
-                self.renderer.drawSprite(
-                    sprite.getSpriteName(),
-                    sprite.x,
-                    sprite.y,
-                    draw_opts,
-                );
             }
 
             // End camera mode
             self.renderer.endCameraMode();
+        }
+
+        fn renderSprite(self: *Self, id: SpriteId) void {
+            const sprite = &self.storage.items[id.index];
+            const tint = BackendType.color(sprite.tint_r, sprite.tint_g, sprite.tint_b, sprite.tint_a);
+
+            const draw_opts: Renderer.DrawOptions = .{
+                .offset_x = sprite.offset_x,
+                .offset_y = sprite.offset_y,
+                .scale = sprite.scale,
+                .rotation = sprite.rotation,
+                .tint = tint,
+                .flip_x = sprite.flip_x,
+                .flip_y = sprite.flip_y,
+                .pivot = sprite.pivot,
+                .pivot_x = sprite.pivot_x,
+                .pivot_y = sprite.pivot_y,
+            };
+
+            // Viewport culling - skip if sprite is outside camera view
+            if (!self.renderer.shouldRenderSprite(
+                sprite.getSpriteName(),
+                sprite.x,
+                sprite.y,
+                draw_opts,
+            )) {
+                return;
+            }
+
+            self.renderer.drawSprite(
+                sprite.getSpriteName(),
+                sprite.x,
+                sprite.y,
+                draw_opts,
+            );
+        }
+
+        fn renderShape(self: *Self, id: ShapeId) void {
+            const shape = &self.shape_storage.items[id.index];
+            const col = BackendType.color(shape.color_r, shape.color_g, shape.color_b, shape.color_a);
+
+            switch (shape.shape_type) {
+                .circle => {
+                    if (shape.filled) {
+                        BackendType.drawCircle(shape.x, shape.y, shape.radius, col);
+                    } else {
+                        BackendType.drawCircleLines(shape.x, shape.y, shape.radius, col);
+                    }
+                },
+                .rectangle => {
+                    if (shape.filled) {
+                        BackendType.drawRectangleV(shape.x, shape.y, shape.width, shape.height, col);
+                    } else {
+                        BackendType.drawRectangleLinesV(shape.x, shape.y, shape.width, shape.height, col);
+                    }
+                },
+                .line => {
+                    if (shape.thickness > 1) {
+                        BackendType.drawLineEx(shape.x, shape.y, shape.x2, shape.y2, shape.thickness, col);
+                    } else {
+                        BackendType.drawLine(shape.x, shape.y, shape.x2, shape.y2, col);
+                    }
+                },
+                .triangle => {
+                    if (shape.filled) {
+                        BackendType.drawTriangle(shape.x, shape.y, shape.x2, shape.y2, shape.x3, shape.y3, col);
+                    } else {
+                        BackendType.drawTriangleLines(shape.x, shape.y, shape.x2, shape.y2, shape.x3, shape.y3, col);
+                    }
+                },
+                .polygon => {
+                    if (shape.filled) {
+                        BackendType.drawPoly(shape.x, shape.y, shape.sides, shape.radius, shape.rotation, col);
+                    } else {
+                        BackendType.drawPolyLines(shape.x, shape.y, shape.sides, shape.radius, shape.rotation, col);
+                    }
+                },
+            }
         }
 
         // ==================== Atlas Management ====================

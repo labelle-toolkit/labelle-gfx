@@ -477,6 +477,68 @@ pub fn Backend(comptime Impl: type) type {
                 );
             }
         }
+
+        // Shape primitives
+
+        pub inline fn drawRectangleV(x: f32, y: f32, width: f32, height: f32, col: Color) void {
+            if (@hasDecl(Impl, "drawRectangleV")) {
+                Impl.drawRectangleV(x, y, width, height, col);
+            }
+        }
+
+        pub inline fn drawRectangleLinesV(x: f32, y: f32, width: f32, height: f32, col: Color) void {
+            if (@hasDecl(Impl, "drawRectangleLinesV")) {
+                Impl.drawRectangleLinesV(x, y, width, height, col);
+            }
+        }
+
+        pub inline fn drawCircle(center_x: f32, center_y: f32, radius: f32, col: Color) void {
+            if (@hasDecl(Impl, "drawCircle")) {
+                Impl.drawCircle(center_x, center_y, radius, col);
+            }
+        }
+
+        pub inline fn drawCircleLines(center_x: f32, center_y: f32, radius: f32, col: Color) void {
+            if (@hasDecl(Impl, "drawCircleLines")) {
+                Impl.drawCircleLines(center_x, center_y, radius, col);
+            }
+        }
+
+        pub inline fn drawLine(start_x: f32, start_y: f32, end_x: f32, end_y: f32, col: Color) void {
+            if (@hasDecl(Impl, "drawLine")) {
+                Impl.drawLine(start_x, start_y, end_x, end_y, col);
+            }
+        }
+
+        pub inline fn drawLineEx(start_x: f32, start_y: f32, end_x: f32, end_y: f32, thickness: f32, col: Color) void {
+            if (@hasDecl(Impl, "drawLineEx")) {
+                Impl.drawLineEx(start_x, start_y, end_x, end_y, thickness, col);
+            }
+        }
+
+        pub inline fn drawTriangle(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: Color) void {
+            if (@hasDecl(Impl, "drawTriangle")) {
+                Impl.drawTriangle(x1, y1, x2, y2, x3, y3, col);
+            }
+        }
+
+        pub inline fn drawTriangleLines(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: Color) void {
+            if (@hasDecl(Impl, "drawTriangleLines")) {
+                Impl.drawTriangleLines(x1, y1, x2, y2, x3, y3, col);
+            }
+        }
+
+        pub inline fn drawPoly(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
+            if (@hasDecl(Impl, "drawPoly")) {
+                Impl.drawPoly(center_x, center_y, sides, radius, rotation, col);
+            }
+        }
+
+        pub inline fn drawPolyLines(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
+            if (@hasDecl(Impl, "drawPolyLines")) {
+                Impl.drawPolyLines(center_x, center_y, sides, radius, rotation, col);
+            }
+        }
     };
 }
 

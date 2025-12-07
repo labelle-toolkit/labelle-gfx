@@ -20,7 +20,7 @@ const DefaultSpriteStorage = gfx.sprite_storage.DefaultSpriteStorage;
 fn addSpriteToStorage(storage: *DefaultSpriteStorage, config: SpriteConfig) !SpriteId {
     const slot = try storage.allocSlot();
 
-    storage.sprites[slot.index] = SpriteData{
+    storage.items[slot.index] = SpriteData{
         .x = config.x,
         .y = config.y,
         .z_index = config.z_index,
