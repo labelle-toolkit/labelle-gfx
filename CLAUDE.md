@@ -28,7 +28,7 @@ labelle/
 │   ├── backend/                # Backend abstraction (raylib, sokol, mock)
 │   └── tools/                  # CLI tools (converter)
 ├── tests/                      # Test files (zspec)
-├── examples/                   # Example applications (01-12)
+├── examples/                   # Example applications (01-14)
 ├── fixtures/                   # Test assets (sprite atlases, .zon files)
 └── .github/workflows/          # CI configuration
 ```
@@ -147,6 +147,49 @@ Also available on TextureManager for lower-level usage:
 ```zig
 try renderer.texture_manager.loadSprite("player", "assets/player.png");
 ```
+
+### Tiled Map Editor (.tmx) Support
+
+Load and render tilemaps from Tiled Map Editor:
+
+```zig
+const gfx = @import("labelle");
+
+// Load tilemap from TMX file
+var tilemap = try gfx.TileMap.load(allocator, "assets/level1.tmx");
+defer tilemap.deinit();
+
+// Create renderer (loads tileset textures)
+var map_renderer = try gfx.TileMapRenderer.init(allocator, &tilemap);
+defer map_renderer.deinit();
+
+// In game loop - draw all layers with camera offset
+map_renderer.drawAllLayers(camera_x, camera_y, .{
+    .scale = 2.0,
+    .tint = gfx.DefaultBackend.white,
+});
+
+// Or draw specific layer
+map_renderer.drawLayer("background", camera_x, camera_y, .{});
+
+// Access objects for game logic
+if (tilemap.getObjectLayer("entities")) |layer| {
+    for (layer.objects) |obj| {
+        if (std.mem.eql(u8, obj.obj_type, "spawn")) {
+            // Create entity at obj.x, obj.y
+        }
+    }
+}
+```
+
+Supported TMX features:
+- Orthogonal tilemaps
+- Multiple tile layers and object layers
+- CSV-encoded tile data
+- External tilesets (.tsx files)
+- Tile flip flags (horizontal, vertical, diagonal)
+- Spacing and margin in tilesets
+- Viewport culling (only visible tiles rendered)
 
 ### Pivot Points (Anchors)
 
@@ -313,7 +356,7 @@ zig build test
 # Run specific example
 zig build run-example-01
 zig build run-example-02
-# ... through run-example-12
+# ... through run-example-14
 
 # Run converter tool
 zig build converter -- input.json -o output.zon
@@ -353,6 +396,7 @@ pub const AnimationTests = struct {
 | 11_visual_engine | Visual engine with rendering |
 | 12_comptime_animations | Comptime animation definitions |
 | 13_pivot_points | Pivot point/anchor support |
+| 14_tile_map | Tiled Map Editor (.tmx) support |
 
 ## Common Patterns
 
@@ -399,7 +443,7 @@ var engine = try MyGfx.VisualEngine.init(...);
 
 - **CI workflow**: Builds, tests, and runs examples to capture screenshots
 - **Coverage workflow**: Runs test coverage
-- Screenshots are generated for examples 01-12 and compared in PRs
+- Screenshots are generated for examples 01-14 and compared in PRs
 
 ## Important Notes
 
@@ -417,4 +461,4 @@ var engine = try MyGfx.VisualEngine.init(...);
 1. Run `zig build test` to ensure tests pass
 2. Run `zig build` to check compilation
 3. Update examples if API changes
-4. CI expects all 13 example screenshots to be generated
+4. CI expects all 14 example screenshots to be generated

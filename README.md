@@ -27,6 +27,8 @@ A 2D graphics library for Zig games using [raylib](https://www.raylib.com/) for 
 - **Z-Index Layering** - Proper draw order for 2D games
 - **Backend Abstraction** - Support for raylib (default) and sokol backends
 - **Scoped Logging** - Configurable logging following labelle-toolkit pattern
+- **Single Sprite Loading** - Load individual images without atlas (SingleSprite API)
+- **Tiled Map Editor Support** - Load and render TMX tilemaps with external tilesets
 
 ## Quick Start
 
@@ -153,6 +155,9 @@ zig build run-example-12
 
 # Pivot points / anchors
 zig build run-example-13
+
+# Tiled map editor (.tmx) support
+zig build run-example-14
 ```
 
 ## API Overview
@@ -184,6 +189,26 @@ gfx.ZIndex.ui          // 70
 | `TemporalFade` | Time-of-day based alpha |
 | `Flash` | Quick color pulse |
 
+### Tilemap
+
+```zig
+const gfx = @import("labelle");
+
+// Load TMX tilemap
+var map = try gfx.TileMap.load(allocator, "assets/level.tmx");
+defer map.deinit();
+
+// Create renderer
+var renderer = try gfx.TileMapRenderer.init(allocator, &map);
+defer renderer.deinit();
+
+// Draw all layers with camera offset
+renderer.drawAllLayers(camera_x, camera_y, .{ .scale = 2.0 });
+
+// Or draw specific layer
+renderer.drawLayer("background", camera_x, camera_y, .{});
+```
+
 ### Logging
 
 ```zig
@@ -212,7 +237,7 @@ labelle/
 │   ├── backend/                # Backend abstraction
 │   └── tools/                  # CLI tools (converter)
 ├── tests/                      # Test files (zspec)
-├── examples/                   # Example applications (01-13)
+├── examples/                   # Example applications (01-14)
 └── fixtures/                   # Test assets
 ```
 
