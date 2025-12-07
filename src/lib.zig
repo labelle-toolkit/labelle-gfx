@@ -172,11 +172,21 @@ pub const FlashWith = effects.FlashWith;
 // Self-contained rendering engine (recommended for new projects)
 pub const rendering_engine = @import("engine/rendering_engine.zig");
 pub const visual_engine = @import("engine/visual_engine.zig");
+pub const retained_engine = @import("engine/retained_engine.zig");
 pub const sprite_storage = @import("engine/sprite_storage.zig");
 pub const shape_storage = @import("engine/shape_storage.zig");
 pub const z_index_buckets = @import("engine/z_index_buckets.zig");
 pub const scene = @import("engine/scene.zig");
 pub const animation_def = @import("animation_def.zig");
+
+// Re-export RetainedEngine types at top level
+pub const RetainedEngine = retained_engine.RetainedEngine;
+pub const EntityId = retained_engine.EntityId;
+pub const TextureId = retained_engine.TextureId;
+pub const FontId = retained_engine.FontId;
+pub const SpriteVisual = retained_engine.SpriteVisual;
+pub const ShapeVisual = retained_engine.ShapeVisual;
+pub const TextVisual = retained_engine.TextVisual;
 
 // Re-export VisualEngine at top level for convenience
 pub const VisualEngine = visual_engine.VisualEngine;
