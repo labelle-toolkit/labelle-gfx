@@ -1,6 +1,6 @@
 .{
     .name = .labelle,
-    .version = "0.9.0",
+    .version = "0.10.0",
     .fingerprint = 0x48858534228fb5d9,
     .minimum_zig_version = "0.15.1",
 

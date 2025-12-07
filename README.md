@@ -29,6 +29,8 @@ A 2D graphics library for Zig games using [raylib](https://www.raylib.com/) for 
 - **Scoped Logging** - Configurable logging following labelle-toolkit pattern
 - **Single Sprite Loading** - Load individual images without atlas (SingleSprite API)
 - **Tiled Map Editor Support** - Load and render TMX tilemaps with external tilesets
+- **Shape Primitives** - Draw circles, rectangles, lines, triangles, and polygons
+- **Scene Loading** - Load scenes from .zon files with sprites and shapes
 
 ## Quick Start
 
@@ -158,6 +160,9 @@ zig build run-example-13
 
 # Tiled map editor (.tmx) support
 zig build run-example-14
+
+# Shape primitives
+zig build run-example-15
 ```
 
 ## API Overview
@@ -169,6 +174,7 @@ zig build run-example-14
 | `Position` | x, y coordinates (from zig-utils Vector2) |
 | `Sprite` | Static sprite (name, z_index, tint, scale, rotation, flip) |
 | `Animation(T)` | Animated sprite with config-based enum |
+| `Shape` | Primitive shapes (circle, rectangle, line, triangle, polygon) |
 
 ### Z-Index Layers
 
@@ -209,6 +215,23 @@ renderer.drawAllLayers(camera_x, camera_y, .{ .scale = 2.0 });
 renderer.drawLayer("background", camera_x, camera_y, .{});
 ```
 
+### Shape Primitives
+
+```zig
+const gfx = @import("labelle");
+
+// Create shapes with helper functions
+const circle = try engine.addShape(gfx.ShapeConfig.circle(100, 100, 50));
+const rect = try engine.addShape(gfx.ShapeConfig.rectangle(200, 50, 80, 60));
+const line = try engine.addShape(gfx.ShapeConfig.line(0, 0, 100, 100));
+const tri = try engine.addShape(gfx.ShapeConfig.triangle(300, 100, 350, 0, 400, 100));
+const hex = try engine.addShape(gfx.ShapeConfig.polygon(500, 100, 6, 40));
+
+// Modify properties
+_ = engine.setShapeColor(circle, .{ .r = 255, .g = 0, .b = 0, .a = 255 });
+_ = engine.setShapeFilled(rect, false);  // Outline only
+```
+
 ### Logging
 
 ```zig
@@ -237,7 +260,7 @@ labelle/
 │   ├── backend/                # Backend abstraction
 │   └── tools/                  # CLI tools (converter)
 ├── tests/                      # Test files (zspec)
-├── examples/                   # Example applications (01-14)
+├── examples/                   # Example applications (01-15)
 └── fixtures/                   # Test assets
 ```
 
