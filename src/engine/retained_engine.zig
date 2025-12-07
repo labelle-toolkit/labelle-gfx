@@ -426,7 +426,9 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
             self.texts.deinit();
             self.z_buckets.deinit();
             self.texture_manager.deinit();
-            if (self.owns_window) {
+            // Only close window if we own it AND it was successfully initialized
+            // This prevents crashes when GLFW fails to init (e.g., on headless systems)
+            if (self.owns_window and BackendType.isWindowReady()) {
                 BackendType.closeWindow();
             }
         }

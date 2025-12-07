@@ -363,7 +363,9 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
             self.shape_storage.deinit();
             self.animation_registry.deinit(self.allocator);
             self.z_buckets.deinit();
-            if (self.owns_window) {
+            // Only close window if we own it AND it was successfully initialized
+            // This prevents crashes when GLFW fails to init (e.g., on headless systems)
+            if (self.owns_window and BackendType.isWindowReady()) {
                 BackendType.closeWindow();
             }
         }

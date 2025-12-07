@@ -322,6 +322,14 @@ pub fn Backend(comptime Impl: type) type {
             }
         }
 
+        /// Check if window was successfully initialized
+        pub inline fn isWindowReady() bool {
+            if (@hasDecl(Impl, "isWindowReady")) {
+                return Impl.isWindowReady();
+            }
+            return true; // Default to true for backends without this check
+        }
+
         /// Check if window should close
         pub inline fn windowShouldClose() bool {
             if (@hasDecl(Impl, "windowShouldClose")) {

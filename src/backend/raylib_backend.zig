@@ -119,6 +119,11 @@ pub const RaylibBackend = struct {
         rl.closeWindow();
     }
 
+    /// Check if window was successfully initialized
+    pub fn isWindowReady() bool {
+        return rl.isWindowReady();
+    }
+
     /// Check if window should close
     pub fn windowShouldClose() bool {
         return rl.windowShouldClose();
