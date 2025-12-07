@@ -76,6 +76,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "13_pivot_points", .path = "examples/13_pivot_points/main.zig", .desc = "Pivot point/anchor support for sprites" },
         .{ .name = "14_tile_map", .path = "examples/14_tile_map/main.zig", .desc = "Tiled Map Editor (.tmx) support" },
         .{ .name = "15_shapes", .path = "examples/15_shapes/main.zig", .desc = "Shape primitives (circle, rect, line, triangle, polygon)" },
+        .{ .name = "16_retained_engine", .path = "examples/16_retained_engine.zig", .desc = "Retained mode rendering with EntityId-based API" },
     };
 
     // Example 12: Comptime animations (needs .zon imports)

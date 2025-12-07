@@ -13,6 +13,7 @@ pub const culling_test = @import("culling_test.zig");
 pub const pivot_test = @import("pivot_test.zig");
 pub const single_sprite_test = @import("single_sprite_test.zig");
 pub const shape_test = @import("shape_test.zig");
+pub const z_index_buckets_test = @import("z_index_buckets_test.zig");
 
 test {
     // Run all tests from imported modules

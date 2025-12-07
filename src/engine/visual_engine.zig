@@ -31,6 +31,7 @@
 const std = @import("std");
 const sprite_storage = @import("sprite_storage.zig");
 const shape_storage = @import("shape_storage.zig");
+const z_index_buckets = @import("z_index_buckets.zig");
 const GenericSpriteStorage = sprite_storage.GenericSpriteStorage;
 const GenericShapeStorage = shape_storage.GenericShapeStorage;
 
@@ -282,11 +283,8 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
     const ShapeStorage = GenericShapeStorage(max_shapes);
     const InternalShapeData = shape_storage.InternalShapeData;
 
-    // Render item for unified z-sorting of sprites and shapes
-    const RenderItem = union(enum) {
-        sprite: SpriteId,
-        shape: ShapeId,
-    };
+    // Z-index bucket storage for efficient ordered rendering
+    const ZBuckets = z_index_buckets.ZIndexBuckets(max_sprites + max_shapes);
 
     return struct {
         const Self = @This();
@@ -320,8 +318,8 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
         owns_window: bool = false,
         clear_color: BackendType.Color = BackendType.color(40, 40, 40, 255),
 
-        // Render buffer for z-sorting (sprites + shapes)
-        render_buffer: [max_sprites + max_shapes]RenderItem = undefined,
+        // Z-index bucket storage for efficient ordered rendering (no per-frame sorting)
+        z_buckets: ZBuckets,
 
         pub fn init(allocator: std.mem.Allocator, config: EngineConfig) !Self {
             // Initialize window if configured
@@ -348,6 +346,7 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
                     config.clear_color.b,
                     config.clear_color.a,
                 ),
+                .z_buckets = ZBuckets.init(allocator),
             };
 
             // Load atlases
@@ -363,6 +362,7 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
             self.storage.deinit();
             self.shape_storage.deinit();
             self.animation_registry.deinit(self.allocator);
+            self.z_buckets.deinit();
             if (self.owns_window) {
                 BackendType.closeWindow();
             }
@@ -399,6 +399,11 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
 
         pub fn addSprite(self: *Self, config: SpriteConfig) !SpriteId {
             const slot = try self.storage.allocSlot();
+            errdefer {
+                // Rollback: free the allocated slot if z_bucket insert fails
+                self.storage.items[slot.index].active = false;
+                self.storage.free_list.append(self.allocator, slot.index) catch {};
+            }
 
             self.storage.items[slot.index] = InternalSpriteData{
                 .x = config.x,
@@ -424,10 +429,23 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
 
             self.storage.items[slot.index].setSpriteName(config.sprite_name);
 
-            return SpriteId{ .index = slot.index, .generation = slot.generation };
+            const id = SpriteId{ .index = slot.index, .generation = slot.generation };
+
+            // Add to z-index bucket for efficient ordered rendering
+            try self.z_buckets.insert(.{ .sprite = id }, config.z_index);
+
+            return id;
         }
 
         pub fn removeSprite(self: *Self, id: SpriteId) bool {
+            if (!self.isValid(id)) return false;
+
+            // Remove from z-index bucket
+            const z_index = self.storage.items[id.index].z_index;
+            const removed_from_bucket = self.z_buckets.remove(.{ .sprite = id }, z_index);
+            // Assert: if sprite is valid, it must exist in the z_bucket
+            std.debug.assert(removed_from_bucket);
+
             return self.storage.remove(id);
         }
 
@@ -461,6 +479,13 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
 
         pub fn setZIndex(self: *Self, id: SpriteId, z_index: u8) bool {
             if (!self.isValid(id)) return false;
+
+            const old_z = self.storage.items[id.index].z_index;
+            if (old_z != z_index) {
+                // Update z-index bucket
+                self.z_buckets.changeZIndex(.{ .sprite = id }, old_z, z_index) catch return false;
+            }
+
             self.storage.items[id.index].z_index = z_index;
             return true;
         }
@@ -542,6 +567,11 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
         /// Add a new shape to the engine
         pub fn addShape(self: *Self, config: ShapeConfig) !ShapeId {
             const slot = try self.shape_storage.allocSlot();
+            errdefer {
+                // Rollback: free the allocated slot if z_bucket insert fails
+                self.shape_storage.items[slot.index].active = false;
+                self.shape_storage.free_list.append(self.allocator, slot.index) catch {};
+            }
 
             self.shape_storage.items[slot.index] = InternalShapeData{
                 .shape_type = config.shape_type,
@@ -568,11 +598,24 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
                 .active = true,
             };
 
-            return ShapeId{ .index = slot.index, .generation = slot.generation };
+            const id = ShapeId{ .index = slot.index, .generation = slot.generation };
+
+            // Add to z-index bucket for efficient ordered rendering
+            try self.z_buckets.insert(.{ .shape = id }, config.z_index);
+
+            return id;
         }
 
         /// Remove a shape by handle
         pub fn removeShape(self: *Self, id: ShapeId) bool {
+            if (!self.isShapeValid(id)) return false;
+
+            // Remove from z-index bucket
+            const z_index = self.shape_storage.items[id.index].z_index;
+            const removed_from_bucket = self.z_buckets.remove(.{ .shape = id }, z_index);
+            // Assert: if shape is valid, it must exist in the z_bucket
+            std.debug.assert(removed_from_bucket);
+
             return self.shape_storage.remove(.{ .index = id.index, .generation = id.generation });
         }
 
@@ -612,6 +655,13 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
         /// Set shape z-index
         pub fn setShapeZIndex(self: *Self, id: ShapeId, z_index: u8) bool {
             if (!self.isShapeValid(id)) return false;
+
+            const old_z = self.shape_storage.items[id.index].z_index;
+            if (old_z != z_index) {
+                // Update z-index bucket
+                self.z_buckets.changeZIndex(.{ .shape = id }, old_z, z_index) catch return false;
+            }
+
             self.shape_storage.items[id.index].z_index = z_index;
             return true;
         }
@@ -906,57 +956,25 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
         }
 
         fn render(self: *Self) void {
-            // Collect visible sprites and shapes, sort by z-index
-            var count: usize = 0;
-
-            // Add visible sprites
-            for (0..max_sprites) |i| {
-                const sprite = &self.storage.items[i];
-                if (sprite.active and sprite.visible) {
-                    self.render_buffer[count] = .{ .sprite = SpriteId{
-                        .index = @intCast(i),
-                        .generation = sprite.generation,
-                    } };
-                    count += 1;
-                }
-            }
-
-            // Add visible shapes
-            for (0..max_shapes) |i| {
-                const shape = &self.shape_storage.items[i];
-                if (shape.active and shape.visible) {
-                    self.render_buffer[count] = .{ .shape = ShapeId{
-                        .index = @intCast(i),
-                        .generation = shape.generation,
-                    } };
-                    count += 1;
-                }
-            }
-
-            // Sort by z-index
-            const slice = self.render_buffer[0..count];
-            std.mem.sort(RenderItem, slice, self, struct {
-                fn lessThan(ctx: *Self, a: RenderItem, b: RenderItem) bool {
-                    const a_z = switch (a) {
-                        .sprite => |id| ctx.storage.items[id.index].z_index,
-                        .shape => |id| ctx.shape_storage.items[id.index].z_index,
-                    };
-                    const b_z = switch (b) {
-                        .sprite => |id| ctx.storage.items[id.index].z_index,
-                        .shape => |id| ctx.shape_storage.items[id.index].z_index,
-                    };
-                    return a_z < b_z;
-                }
-            }.lessThan);
-
             // Begin camera mode
             self.renderer.beginCameraMode();
 
-            // Render all items in z-order
-            for (slice) |item| {
+            // Iterate z-index buckets in order (no sorting needed)
+            var iter = self.z_buckets.iterator();
+            while (iter.next()) |item| {
                 switch (item) {
-                    .sprite => |id| self.renderSprite(id),
-                    .shape => |id| self.renderShape(id),
+                    .sprite => |id| {
+                        // Skip invisible sprites
+                        if (self.isValid(id) and self.storage.items[id.index].visible) {
+                            self.renderSprite(id);
+                        }
+                    },
+                    .shape => |id| {
+                        // Skip invisible shapes
+                        if (self.isShapeValid(id) and self.shape_storage.items[id.index].visible) {
+                            self.renderShape(id);
+                        }
+                    },
                 }
             }
 

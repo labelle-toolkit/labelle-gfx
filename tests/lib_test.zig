@@ -12,6 +12,7 @@ pub const systems_test = @import("systems_test.zig");
 pub const visual_engine_test = @import("visual_engine_test.zig");
 pub const single_sprite_test = @import("single_sprite_test.zig");
 pub const tilemap_test = @import("tilemap_test.zig");
+pub const z_index_buckets_test = @import("z_index_buckets_test.zig");
 
 // Entry point for zspec
 comptime {
