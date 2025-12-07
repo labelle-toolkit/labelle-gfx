@@ -547,31 +547,50 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 
         // ==================== Position Management ====================
 
-        /// Update position for any entity (sprite, shape, or text)
+        /// Update position for any entity (sprite, shape, or text).
+        /// Silently returns if the entity doesn't exist.
         pub fn updatePosition(self: *Self, id: EntityId, pos: Position) void {
-            if (self.sprites.getPtr(id)) |entry| {
-                entry.position = pos;
-                return;
+            // Check sprites first (most common case)
+            if (self.sprites.count() > 0) {
+                if (self.sprites.getPtr(id)) |entry| {
+                    entry.position = pos;
+                    return;
+                }
             }
-            if (self.shapes.getPtr(id)) |entry| {
-                entry.position = pos;
-                return;
+            // Check shapes
+            if (self.shapes.count() > 0) {
+                if (self.shapes.getPtr(id)) |entry| {
+                    entry.position = pos;
+                    return;
+                }
             }
-            if (self.texts.getPtr(id)) |entry| {
-                entry.position = pos;
-                return;
+            // Check texts
+            if (self.texts.count() > 0) {
+                if (self.texts.getPtr(id)) |entry| {
+                    entry.position = pos;
+                    return;
+                }
             }
+            // Entity not found - silently return (no-op)
         }
 
+        /// Get position for any entity (sprite, shape, or text).
+        /// Returns null if the entity doesn't exist.
         pub fn getPosition(self: *const Self, id: EntityId) ?Position {
-            if (self.sprites.get(id)) |entry| {
-                return entry.position;
+            if (self.sprites.count() > 0) {
+                if (self.sprites.get(id)) |entry| {
+                    return entry.position;
+                }
             }
-            if (self.shapes.get(id)) |entry| {
-                return entry.position;
+            if (self.shapes.count() > 0) {
+                if (self.shapes.get(id)) |entry| {
+                    return entry.position;
+                }
             }
-            if (self.texts.get(id)) |entry| {
-                return entry.position;
+            if (self.texts.count() > 0) {
+                if (self.texts.get(id)) |entry| {
+                    return entry.position;
+                }
             }
             return null;
         }
