@@ -143,6 +143,15 @@ pub const single_sprite = @import("texture/single_sprite.zig");
 pub const SingleSprite = single_sprite.SingleSprite;
 pub const SingleSpriteWith = single_sprite.SingleSpriteWith;
 
+// Tilemap support (TMX format)
+pub const tilemap = @import("texture/tilemap/tilemap.zig");
+pub const TileMap = tilemap.TileMap;
+pub const TileMapRenderer = tilemap.TileMapRenderer;
+pub const TileMapRendererWith = tilemap.TileMapRendererWith;
+pub const TileLayer = tilemap.TileLayer;
+pub const ObjectLayer = tilemap.ObjectLayer;
+pub const MapObject = tilemap.MapObject;
+
 // Camera exports
 pub const camera = @import("camera/camera.zig");
 pub const Camera = camera.Camera;
@@ -227,6 +236,9 @@ pub fn withBackend(comptime Impl: type) type {
         pub const Fade = effects.Fade;
         pub const TemporalFade = effects.TemporalFade;
         pub const Flash = effects.FlashWith(B);
+
+        // Tilemap
+        pub const TileMapRenderer = tilemap.TileMapRendererWith(B);
 
         // Engine namespace for Input and UI static helpers
         pub const Engine = engine_mod.EngineWith(B);
