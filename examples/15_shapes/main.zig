@@ -125,7 +125,7 @@ pub fn main() !void {
 
         // Bouncing rectangle
         const bounce_y = 370 + @sin(time * 4) * 20;
-        _ = engine.setShapePosition(animated_rect, 450, bounce_y);
+        _ = engine.setShapePosition(animated_rect, .{ .x = 450, .y = bounce_y });
 
         // Color-shifting line
         const r: u8 = @intFromFloat((@sin(time * 2) + 1) * 127);

@@ -33,6 +33,7 @@
 
 const std = @import("std");
 const z_index_buckets = @import("z_index_buckets.zig");
+const components = @import("../components/components.zig");
 
 // Backend imports
 const backend_mod = @import("../backend/backend.zig");
@@ -89,11 +90,8 @@ pub const FontId = enum(u32) {
 // Position Type
 // ============================================
 
-/// 2D position
-pub const Position = struct {
-    x: f32 = 0,
-    y: f32 = 0,
-};
+/// 2D position from zig-utils (Vector2 with rich math operations)
+pub const Position = components.Position;
 
 // ============================================
 // Color Type

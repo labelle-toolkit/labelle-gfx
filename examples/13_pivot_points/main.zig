@@ -62,8 +62,7 @@ pub fn main() !void {
     // Center pivot (default) - sprite centered at position
     const center_sprite = try engine.addSprite(.{
         .sprite_name = "idle_0001",
-        .x = start_x,
-        .y = baseline_y,
+        .position = .{ .x = start_x, .y = baseline_y },
         .z_index = ZIndex.characters,
         .scale = 2.0,
         .pivot = .center,
@@ -73,8 +72,7 @@ pub fn main() !void {
     // Bottom-center pivot - feet at position (good for characters)
     const bottom_center_sprite = try engine.addSprite(.{
         .sprite_name = "idle_0001",
-        .x = start_x + spacing,
-        .y = baseline_y,
+        .position = .{ .x = start_x + spacing, .y = baseline_y },
         .z_index = ZIndex.characters,
         .scale = 2.0,
         .pivot = .bottom_center,
@@ -84,8 +82,7 @@ pub fn main() !void {
     // Bottom-left pivot - corner at position (good for tiles/rooms)
     const bottom_left_sprite = try engine.addSprite(.{
         .sprite_name = "idle_0001",
-        .x = start_x + spacing * 2,
-        .y = baseline_y,
+        .position = .{ .x = start_x + spacing * 2, .y = baseline_y },
         .z_index = ZIndex.characters,
         .scale = 2.0,
         .pivot = .bottom_left,
@@ -95,8 +92,7 @@ pub fn main() !void {
     // Top-left pivot
     const top_left_sprite = try engine.addSprite(.{
         .sprite_name = "idle_0001",
-        .x = start_x + spacing * 3,
-        .y = baseline_y,
+        .position = .{ .x = start_x + spacing * 3, .y = baseline_y },
         .z_index = ZIndex.characters,
         .scale = 2.0,
         .pivot = .top_left,
@@ -106,8 +102,7 @@ pub fn main() !void {
     // Custom pivot (0.1, 0.9) - near handle position
     const custom_sprite = try engine.addSprite(.{
         .sprite_name = "idle_0001",
-        .x = start_x + spacing * 4,
-        .y = baseline_y,
+        .position = .{ .x = start_x + spacing * 4, .y = baseline_y },
         .z_index = ZIndex.characters,
         .scale = 2.0,
         .pivot = .custom,
@@ -125,8 +120,7 @@ pub fn main() !void {
     for (tile_names, 0..) |name, i| {
         _ = try engine.addSprite(.{
             .sprite_name = name,
-            .x = 100 + @as(f32, @floatFromInt(i)) * 48, // 32 * 1.5 = 48
-            .y = tile_y,
+            .position = .{ .x = 100 + @as(f32, @floatFromInt(i)) * 48, .y = tile_y }, // 32 * 1.5 = 48
             .z_index = ZIndex.floor,
             .scale = 1.5,
             .pivot = .bottom_left, // Perfect for tile-based placement
@@ -142,8 +136,7 @@ pub fn main() !void {
     for (item_names, 0..) |name, i| {
         items[i] = try engine.addSprite(.{
             .sprite_name = name,
-            .x = 150 + @as(f32, @floatFromInt(i)) * 100,
-            .y = 150,
+            .position = .{ .x = 150 + @as(f32, @floatFromInt(i)) * 100, .y = 150 },
             .z_index = ZIndex.items,
             .scale = 2.0,
             .pivot = .center, // Center pivot for nice rotation
@@ -156,8 +149,7 @@ pub fn main() !void {
 
     const rotating_sprite = try engine.addSprite(.{
         .sprite_name = "idle_0001",
-        .x = 650,
-        .y = 350,
+        .position = .{ .x = 650, .y = 350 },
         .z_index = ZIndex.effects,
         .scale = 2.5,
         .pivot = .bottom_center,

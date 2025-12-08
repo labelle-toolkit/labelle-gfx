@@ -70,8 +70,7 @@ pub fn main() !void {
     // Create player sprite
     const player = try engine.addSprite(.{
         .sprite_name = "idle_0001",
-        .x = 400,
-        .y = 300,
+        .position = .{ .x = 400, .y = 300 },
         .z_index = ZIndex.characters,
         .scale = 4.0,
         .pivot = .bottom_center,
@@ -167,7 +166,7 @@ pub fn main() !void {
         }
 
         // Update sprite position and flip
-        _ = engine.setPosition(player, player_x, 300);
+        _ = engine.setPosition(player, .{ .x = player_x, .y = 300 });
         _ = engine.setFlip(player, flip_x, false);
 
         // Begin frame

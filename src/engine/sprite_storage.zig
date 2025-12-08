@@ -33,6 +33,7 @@
 //! ```
 
 const std = @import("std");
+const components = @import("../components/components.zig");
 
 /// Opaque handle to a sprite
 pub const SpriteId = struct {
@@ -40,11 +41,8 @@ pub const SpriteId = struct {
     generation: u32,
 };
 
-/// Position struct
-pub const Position = struct {
-    x: f32,
-    y: f32,
-};
+/// Position struct from zig-utils (Vector2 with rich math operations)
+pub const Position = components.Position;
 
 /// Z-index layer constants for draw ordering
 pub const ZIndex = struct {
@@ -116,8 +114,8 @@ pub const SpriteData = struct {
 pub const SpriteConfig = struct {
     sheet: []const u8 = "",
     animation: []const u8 = "",
-    x: f32 = 0,
-    y: f32 = 0,
+    /// Position of the sprite in world coordinates
+    position: Position = .{},
     z_index: u8 = ZIndex.characters,
     scale: f32 = 1.0,
     rotation: f32 = 0,

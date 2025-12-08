@@ -39,8 +39,8 @@ pub const VisualEngineAnimationTests = struct {
 
     test "SpriteConfig defaults" {
         const config = gfx.visual_engine.SpriteConfig{ .pivot = .center };
-        try expect.equal(config.x, 0);
-        try expect.equal(config.y, 0);
+        try expect.equal(config.position.x, 0);
+        try expect.equal(config.position.y, 0);
         try expect.equal(config.scale, 1.0);
         try expect.equal(config.rotation, 0);
         try expect.toBeTrue(config.visible);

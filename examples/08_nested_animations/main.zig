@@ -69,8 +69,7 @@ pub fn main() !void {
     // Create wizard sprite
     const wizard = try engine.addSprite(.{
         .sprite_name = "wizard/drink_0001",
-        .x = 250,
-        .y = 300,
+        .position = .{ .x = 250, .y = 300 },
         .z_index = ZIndex.characters,
         .scale = 4.0,
         .pivot = .bottom_center,
@@ -80,8 +79,7 @@ pub fn main() !void {
     // Create thief sprite
     const thief = try engine.addSprite(.{
         .sprite_name = "thief/attack_0001",
-        .x = 550,
-        .y = 300,
+        .position = .{ .x = 550, .y = 300 },
         .z_index = ZIndex.characters,
         .scale = 4.0,
         .pivot = .bottom_center,

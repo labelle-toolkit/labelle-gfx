@@ -54,8 +54,7 @@ pub fn main() !void {
     // Create player sprite with animation
     const player = try engine.addSprite(.{
         .sprite_name = "idle_0001",
-        .x = 400,
-        .y = 300,
+        .position = .{ .x = 400, .y = 300 },
         .z_index = ZIndex.characters,
         .scale = 3.0,
         .pivot = .bottom_center,
@@ -68,8 +67,7 @@ pub fn main() !void {
     for (item_names, 0..) |item_name, i| {
         _ = try engine.addSprite(.{
             .sprite_name = item_name,
-            .x = 100 + @as(f32, @floatFromInt(i)) * 100,
-            .y = 500,
+            .position = .{ .x = 100 + @as(f32, @floatFromInt(i)) * 100, .y = 500 },
             .z_index = ZIndex.items,
             .scale = 2.0,
             .pivot = .center,
@@ -81,8 +79,7 @@ pub fn main() !void {
     for (0..6) |i| {
         _ = try engine.addSprite(.{
             .sprite_name = tile_names[i],
-            .x = 100 + @as(f32, @floatFromInt(i)) * 100,
-            .y = 550,
+            .position = .{ .x = 100 + @as(f32, @floatFromInt(i)) * 100, .y = 550 },
             .z_index = ZIndex.floor,
             .scale = 1.5,
             .pivot = .bottom_left,
@@ -152,7 +149,7 @@ pub fn main() !void {
         }
 
         // Update player
-        _ = engine.setPosition(player, player_x, 300);
+        _ = engine.setPosition(player, .{ .x = player_x, .y = 300 });
         _ = engine.setFlip(player, flip_x, false);
 
         // Rendering

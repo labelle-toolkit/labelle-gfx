@@ -57,8 +57,7 @@ pub fn main() !void {
     for (0..5) |i| {
         _ = try engine.addSprite(.{
             .sprite_name = "grass",
-            .x = 100 + @as(f32, @floatFromInt(i)) * 150,
-            .y = 450,
+            .position = .{ .x = 100 + @as(f32, @floatFromInt(i)) * 150, .y = 450 },
             .z_index = ZIndex.floor,
             .scale = 2.0,
             .pivot = .bottom_left,
@@ -68,8 +67,7 @@ pub fn main() !void {
     // Items (z=30) - static sprite
     _ = try engine.addSprite(.{
         .sprite_name = "coin",
-        .x = 200,
-        .y = 350,
+        .position = .{ .x = 200, .y = 350 },
         .z_index = ZIndex.items,
         .scale = 2.0,
         .pivot = .center,
@@ -78,8 +76,7 @@ pub fn main() !void {
     // Player character (z=40) with animation
     const player = try engine.addSprite(.{
         .sprite_name = "idle_0001",
-        .x = 400,
-        .y = 350,
+        .position = .{ .x = 400, .y = 350 },
         .z_index = ZIndex.characters,
         .scale = 3.0,
         .pivot = .bottom_center,
@@ -90,8 +87,7 @@ pub fn main() !void {
     // Enemy character (z=40) with animation
     const enemy = try engine.addSprite(.{
         .sprite_name = "walk_0001",
-        .x = 600,
-        .y = 350,
+        .position = .{ .x = 600, .y = 350 },
         .z_index = ZIndex.characters,
         .scale = 3.0,
         .pivot = .bottom_center,
@@ -142,7 +138,7 @@ pub fn main() !void {
         // Update player position
         player_x += player_vel * dt;
         player_x = @max(50, @min(750, player_x));
-        _ = engine.setPosition(player, player_x, 350);
+        _ = engine.setPosition(player, .{ .x = player_x, .y = 350 });
         _ = engine.setFlip(player, flip_x, false);
 
         // Enemy patrol (simple bounce)
@@ -151,7 +147,7 @@ pub fn main() !void {
             _ = engine.setFlip(enemy, enemy_vel > 0, false);
         }
         enemy_x += enemy_vel * dt;
-        _ = engine.setPosition(enemy, enemy_x, 350);
+        _ = engine.setPosition(enemy, .{ .x = enemy_x, .y = 350 });
 
         // Rendering with VisualEngine API
         engine.beginFrame();

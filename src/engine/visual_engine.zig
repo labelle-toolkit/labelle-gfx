@@ -95,8 +95,8 @@ pub const EngineConfig = struct {
 /// Sprite configuration for adding sprites
 pub const SpriteConfig = struct {
     sprite_name: []const u8 = "",
-    x: f32 = 0,
-    y: f32 = 0,
+    /// Position of the sprite in world coordinates
+    position: Position = .{},
     z_index: u8 = ZIndex.characters,
     scale: f32 = 1.0,
     rotation: f32 = 0,
@@ -118,8 +118,8 @@ pub const SpriteConfig = struct {
 /// Shape configuration for adding shapes
 pub const ShapeConfig = struct {
     shape_type: ShapeType = .circle,
-    x: f32 = 0,
-    y: f32 = 0,
+    /// Position of the shape in world coordinates
+    position: Position = .{},
     z_index: u8 = ZIndex.effects,
     color: ColorConfig = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
     filled: bool = true,
@@ -133,14 +133,16 @@ pub const ShapeConfig = struct {
     width: f32 = 0,
     height: f32 = 0,
 
-    // Line properties
-    x2: f32 = 0,
-    y2: f32 = 0,
+    // Line properties (end point in world coordinates)
+    end_x: f32 = 0,
+    end_y: f32 = 0,
     thickness: f32 = 1,
 
-    // Triangle properties (uses x,y as first point, x2,y2 as second)
-    x3: f32 = 0,
-    y3: f32 = 0,
+    // Triangle properties (p2 and p3 in world coordinates)
+    p2_x: f32 = 0,
+    p2_y: f32 = 0,
+    p3_x: f32 = 0,
+    p3_y: f32 = 0,
 
     // Polygon properties (regular polygon)
     sides: i32 = 6,
@@ -149,8 +151,7 @@ pub const ShapeConfig = struct {
     pub fn circle(center_x: f32, center_y: f32, r: f32) ShapeConfig {
         return .{
             .shape_type = .circle,
-            .x = center_x,
-            .y = center_y,
+            .position = .{ .x = center_x, .y = center_y },
             .radius = r,
         };
     }
@@ -159,21 +160,19 @@ pub const ShapeConfig = struct {
     pub fn rectangle(rect_x: f32, rect_y: f32, w: f32, h: f32) ShapeConfig {
         return .{
             .shape_type = .rectangle,
-            .x = rect_x,
-            .y = rect_y,
+            .position = .{ .x = rect_x, .y = rect_y },
             .width = w,
             .height = h,
         };
     }
 
     /// Create a line shape config
-    pub fn line(start_x: f32, start_y: f32, end_x: f32, end_y: f32) ShapeConfig {
+    pub fn line(start_x: f32, start_y: f32, end_x_val: f32, end_y_val: f32) ShapeConfig {
         return .{
             .shape_type = .line,
-            .x = start_x,
-            .y = start_y,
-            .x2 = end_x,
-            .y2 = end_y,
+            .position = .{ .x = start_x, .y = start_y },
+            .end_x = end_x_val,
+            .end_y = end_y_val,
         };
     }
 
@@ -181,12 +180,11 @@ pub const ShapeConfig = struct {
     pub fn triangle(x1: f32, y1: f32, x2_val: f32, y2_val: f32, x3_val: f32, y3_val: f32) ShapeConfig {
         return .{
             .shape_type = .triangle,
-            .x = x1,
-            .y = y1,
-            .x2 = x2_val,
-            .y2 = y2_val,
-            .x3 = x3_val,
-            .y3 = y3_val,
+            .position = .{ .x = x1, .y = y1 },
+            .p2_x = x2_val,
+            .p2_y = y2_val,
+            .p3_x = x3_val,
+            .p3_y = y3_val,
         };
     }
 
@@ -194,8 +192,7 @@ pub const ShapeConfig = struct {
     pub fn polygon(center_x: f32, center_y: f32, num_sides: i32, r: f32) ShapeConfig {
         return .{
             .shape_type = .polygon,
-            .x = center_x,
-            .y = center_y,
+            .position = .{ .x = center_x, .y = center_y },
             .sides = num_sides,
             .radius = r,
         };
@@ -408,8 +405,8 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
             }
 
             self.storage.items[slot.index] = InternalSpriteData{
-                .x = config.x,
-                .y = config.y,
+                .x = config.position.x,
+                .y = config.position.y,
                 .z_index = config.z_index,
                 .scale = config.scale,
                 .rotation = config.rotation,
@@ -461,16 +458,18 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
 
         // ==================== Sprite Properties ====================
 
-        pub fn setPosition(self: *Self, id: SpriteId, x: f32, y: f32) bool {
+        /// Set sprite position
+        pub fn setPosition(self: *Self, id: SpriteId, pos: Position) bool {
             if (!self.isValid(id)) return false;
-            self.storage.items[id.index].x = x;
-            self.storage.items[id.index].y = y;
+            self.storage.items[id.index].x = pos.x;
+            self.storage.items[id.index].y = pos.y;
             return true;
         }
 
+        /// Get sprite position
         pub fn getPosition(self: *const Self, id: SpriteId) ?Position {
             if (!self.isValid(id)) return null;
-            return Position{ .x = self.storage.items[id.index].x, .y = self.storage.items[id.index].y };
+            return .{ .x = self.storage.items[id.index].x, .y = self.storage.items[id.index].y };
         }
 
         pub fn setVisible(self: *Self, id: SpriteId, visible: bool) bool {
@@ -577,8 +576,8 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
 
             self.shape_storage.items[slot.index] = InternalShapeData{
                 .shape_type = config.shape_type,
-                .x = config.x,
-                .y = config.y,
+                .x = config.position.x,
+                .y = config.position.y,
                 .z_index = config.z_index,
                 .color_r = config.color.r,
                 .color_g = config.color.g,
@@ -590,11 +589,12 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
                 .radius = config.radius,
                 .width = config.width,
                 .height = config.height,
-                .x2 = config.x2,
-                .y2 = config.y2,
+                // x2/y2 used for line end point or triangle's second vertex
+                .x2 = if (config.shape_type == .line) config.end_x else config.p2_x,
+                .y2 = if (config.shape_type == .line) config.end_y else config.p2_y,
                 .thickness = config.thickness,
-                .x3 = config.x3,
-                .y3 = config.y3,
+                .x3 = config.p3_x,
+                .y3 = config.p3_y,
                 .sides = config.sides,
                 .generation = slot.generation,
                 .active = true,
@@ -634,17 +634,17 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
         // ==================== Shape Properties ====================
 
         /// Set shape position
-        pub fn setShapePosition(self: *Self, id: ShapeId, x: f32, y: f32) bool {
+        pub fn setShapePosition(self: *Self, id: ShapeId, pos: Position) bool {
             if (!self.isShapeValid(id)) return false;
-            self.shape_storage.items[id.index].x = x;
-            self.shape_storage.items[id.index].y = y;
+            self.shape_storage.items[id.index].x = pos.x;
+            self.shape_storage.items[id.index].y = pos.y;
             return true;
         }
 
         /// Get shape position
         pub fn getShapePosition(self: *const Self, id: ShapeId) ?Position {
             if (!self.isShapeValid(id)) return null;
-            return Position{ .x = self.shape_storage.items[id.index].x, .y = self.shape_storage.items[id.index].y };
+            return .{ .x = self.shape_storage.items[id.index].x, .y = self.shape_storage.items[id.index].y };
         }
 
         /// Set shape visibility
@@ -708,10 +708,10 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
         }
 
         /// Set line end point
-        pub fn setShapeEndPoint(self: *Self, id: ShapeId, x2: f32, y2: f32) bool {
+        pub fn setShapeEndPoint(self: *Self, id: ShapeId, end_pos: Position) bool {
             if (!self.isShapeValid(id)) return false;
-            self.shape_storage.items[id.index].x2 = x2;
-            self.shape_storage.items[id.index].y2 = y2;
+            self.shape_storage.items[id.index].x2 = end_pos.x;
+            self.shape_storage.items[id.index].y2 = end_pos.y;
             return true;
         }
 

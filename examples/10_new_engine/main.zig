@@ -34,8 +34,7 @@ pub fn main() !void {
 
     // Add sprites - engine owns them internally
     const player = try engine.addSprite(.{
-        .x = 400,
-        .y = 300,
+        .position = .{ .x = 400, .y = 300 },
         .z_index = ZIndex.characters,
         .scale = 2.0,
     });
@@ -44,8 +43,7 @@ pub fn main() !void {
     var items: [6]SpriteId = undefined;
     for (0..6) |i| {
         items[i] = try engine.addSprite(.{
-            .x = 100 + @as(f32, @floatFromInt(i)) * 120,
-            .y = 500,
+            .position = .{ .x = 100 + @as(f32, @floatFromInt(i)) * 120, .y = 500 },
             .z_index = ZIndex.items,
             .scale = 1.5,
         });
@@ -54,8 +52,7 @@ pub fn main() !void {
     // Add floor tiles
     for (0..8) |i| {
         _ = try engine.addSprite(.{
-            .x = 50 + @as(f32, @floatFromInt(i)) * 100,
-            .y = 550,
+            .position = .{ .x = 50 + @as(f32, @floatFromInt(i)) * 100, .y = 550 },
             .z_index = ZIndex.floor,
         });
     }
@@ -91,7 +88,7 @@ pub fn main() !void {
         }
 
         // Update player position via engine
-        _ = engine.setPosition(player, player_x, player_y);
+        _ = engine.setPosition(player, .{ .x = player_x, .y = player_y });
 
         // Animation control example
         if (frame_count == 50) {
@@ -107,9 +104,9 @@ pub fn main() !void {
 
         // Make an item bounce
         if (frame_count % 30 < 15) {
-            _ = engine.setPosition(items[0], 100, 490);
+            _ = engine.setPosition(items[0], .{ .x = 100, .y = 490 });
         } else {
-            _ = engine.setPosition(items[0], 100, 500);
+            _ = engine.setPosition(items[0], .{ .x = 100, .y = 500 });
         }
 
         // Single tick() updates everything: animations, camera, rendering

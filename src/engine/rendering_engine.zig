@@ -150,8 +150,8 @@ pub fn RenderingEngine(comptime max_sprites: usize) type {
             const slot = try self.storage.allocSlot();
 
             self.storage.items[slot.index] = SpriteData{
-                .x = config.x,
-                .y = config.y,
+                .x = config.position.x,
+                .y = config.position.y,
                 .z_index = config.z_index,
                 .scale = config.scale,
                 .rotation = config.rotation,
@@ -178,13 +178,21 @@ pub fn RenderingEngine(comptime max_sprites: usize) type {
         }
 
         /// Set sprite position
-        pub fn setPosition(self: *Self, id: SpriteId, x: f32, y: f32) bool {
-            return self.storage.setPosition(id, x, y);
+        pub fn setPosition(self: *Self, id: SpriteId, pos: Position) bool {
+            if (self.storage.get(id)) |sprite| {
+                sprite.x = pos.x;
+                sprite.y = pos.y;
+                return true;
+            }
+            return false;
         }
 
         /// Get sprite position
         pub fn getPosition(self: *const Self, id: SpriteId) ?Position {
-            return self.storage.getPosition(id);
+            if (self.storage.getConst(id)) |sprite| {
+                return .{ .x = sprite.x, .y = sprite.y };
+            }
+            return null;
         }
 
         /// Set sprite visibility
