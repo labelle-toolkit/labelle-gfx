@@ -451,6 +451,23 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
             try self.texture_manager.loadAtlas(name, json_path, texture_path);
         }
 
+        /// Load an atlas from comptime .zon frame data (no JSON parsing at runtime).
+        /// The frames parameter should be a comptime import of a *_frames.zon file.
+        ///
+        /// Example:
+        /// ```zig
+        /// const character_frames = @import("characters_frames.zon");
+        /// try engine.loadAtlasComptime("characters", character_frames, "characters.png");
+        /// ```
+        pub fn loadAtlasComptime(
+            self: *Self,
+            name: []const u8,
+            comptime frames: anytype,
+            texture_path: [:0]const u8,
+        ) !void {
+            try self.texture_manager.loadAtlasComptime(name, frames, texture_path);
+        }
+
         // ==================== Sprite Management ====================
 
         pub fn createSprite(self: *Self, id: EntityId, visual: SpriteVisual, pos: Position) void {
