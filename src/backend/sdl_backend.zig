@@ -9,12 +9,12 @@
 //!
 //! ## Optional Extensions
 //!
-//! **SDL_image** - For loading PNG/JPG textures from files, link `sdl2_image`:
+//! **SDL_image** - For loading PNG/JPG textures from files:
 //! ```zig
-//! exe.linkSystemLibrary("sdl2_image");
+//! sdl_sdk.link(exe, .dynamic, .SDL2_image);
 //! ```
 //!
-//! **SDL_ttf** - For text rendering, link `sdl2_ttf`:
+//! **SDL_ttf** - For text rendering:
 //! ```zig
 //! sdl_sdk.link(exe, .dynamic, .SDL2_ttf);
 //! ```
@@ -149,7 +149,7 @@ pub const SdlBackend = struct {
 
     /// Load texture from file path (requires SDL2_image to be linked)
     /// Supports PNG, JPG, BMP, and other formats via SDL_image.
-    /// If SDL2_image is not linked, this will fail at runtime with a linker error.
+    /// If SDL2_image is not linked, this will fail at build time (unresolved symbols).
     pub fn loadTexture(path: [:0]const u8) !Texture {
         const ren = renderer orelse return backend.BackendError.TextureLoadFailed;
 
@@ -162,7 +162,12 @@ pub const SdlBackend = struct {
         };
 
         // Query texture dimensions
-        const info = tex.query() catch return backend.BackendError.TextureLoadFailed;
+        const info = tex.query() catch |err| {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.print("SDL texture query failed for '{s}': {}\n", .{ path, err });
+            }
+            return backend.BackendError.TextureLoadFailed;
+        };
 
         return Texture{
             .handle = tex,
@@ -402,6 +407,9 @@ pub const SdlBackend = struct {
             if (@import("builtin").mode == .Debug) {
                 std.debug.print("SDL_image init failed (library may not be linked)\n", .{});
             }
+            // Don't set sdl_image_initialized on failure
+            last_frame_time = sdl.getPerformanceCounter();
+            return;
         };
         sdl_image_initialized = true;
 
