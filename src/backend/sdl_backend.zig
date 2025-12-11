@@ -190,8 +190,12 @@ pub const SdlBackend = struct {
         const transformed = applyCameraTransform(dest);
 
         // Apply tint via color modulation
-        texture.handle.setColorMod(tint.toSdl()) catch {};
-        texture.handle.setAlphaMod(tint.a) catch {};
+        texture.handle.setColorMod(tint.toSdl()) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL setColorMod failed: {}\n", .{err});
+        };
+        texture.handle.setAlphaMod(tint.a) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL setAlphaMod failed: {}\n", .{err});
+        };
 
         // Setup center point for rotation
         const center = sdl.PointF{
@@ -207,11 +211,17 @@ pub const SdlBackend = struct {
             rotation,
             center,
             .none,
-        ) catch {};
+        ) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL copyExF failed: {}\n", .{err});
+        };
 
         // Reset color mod
-        texture.handle.resetColorMod() catch {};
-        texture.handle.setAlphaMod(255) catch {};
+        texture.handle.resetColorMod() catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL resetColorMod failed: {}\n", .{err});
+        };
+        texture.handle.setAlphaMod(255) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL setAlphaMod reset failed: {}\n", .{err});
+        };
     }
 
     // =========================================================================
@@ -315,15 +325,15 @@ pub const SdlBackend = struct {
     // OPTIONAL: WINDOW MANAGEMENT
     // =========================================================================
 
-    pub fn initWindow(width: i32, height: i32, title: [*:0]const u8) void {
+    pub fn initWindow(width: i32, height: i32, title: [*:0]const u8) !void {
         screen_width = width;
         screen_height = height;
         should_quit = false;
 
         // Initialize SDL
-        sdl.init(.{ .video = true, .events = true }) catch {
-            std.debug.print("SDL init failed\n", .{});
-            return;
+        sdl.init(.{ .video = true, .events = true }) catch |err| {
+            std.debug.print("SDL init failed: {}\n", .{err});
+            return backend.BackendError.InitializationFailed;
         };
 
         // Create window
@@ -334,16 +344,16 @@ pub const SdlBackend = struct {
             @intCast(width),
             @intCast(height),
             .{ .vis = .shown },
-        ) catch {
-            std.debug.print("SDL window creation failed\n", .{});
-            return;
+        ) catch |err| {
+            std.debug.print("SDL window creation failed: {}\n", .{err});
+            return backend.BackendError.InitializationFailed;
         };
 
         // Create renderer
         if (window) |w| {
-            renderer = sdl.createRenderer(w, null, .{ .accelerated = true, .present_vsync = true }) catch {
-                std.debug.print("SDL renderer creation failed\n", .{});
-                return;
+            renderer = sdl.createRenderer(w, null, .{ .accelerated = true, .present_vsync = true }) catch |err| {
+                std.debug.print("SDL renderer creation failed: {}\n", .{err});
+                return backend.BackendError.InitializationFailed;
             };
         }
 
@@ -410,8 +420,12 @@ pub const SdlBackend = struct {
 
     pub fn clearBackground(col: Color) void {
         if (renderer) |ren| {
-            ren.setColor(col.toSdl()) catch {};
-            ren.clear() catch {};
+            ren.setColor(col.toSdl()) catch |err| {
+                if (@import("builtin").mode == .Debug) std.debug.print("SDL setColor failed: {}\n", .{err});
+            };
+            ren.clear() catch |err| {
+                if (@import("builtin").mode == .Debug) std.debug.print("SDL clear failed: {}\n", .{err});
+            };
         }
     }
 
@@ -552,14 +566,22 @@ pub const SdlBackend = struct {
 
     pub fn drawRectangle(x: i32, y: i32, w: i32, h: i32, col: Color) void {
         const ren = renderer orelse return;
-        ren.setColor(col.toSdl()) catch {};
-        ren.fillRect(sdl.Rectangle{ .x = x, .y = y, .width = w, .height = h }) catch {};
+        ren.setColor(col.toSdl()) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL setColor failed: {}\n", .{err});
+        };
+        ren.fillRect(sdl.Rectangle{ .x = x, .y = y, .width = w, .height = h }) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL fillRect failed: {}\n", .{err});
+        };
     }
 
     pub fn drawRectangleLines(x: i32, y: i32, w: i32, h: i32, col: Color) void {
         const ren = renderer orelse return;
-        ren.setColor(col.toSdl()) catch {};
-        ren.drawRect(sdl.Rectangle{ .x = x, .y = y, .width = w, .height = h }) catch {};
+        ren.setColor(col.toSdl()) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL setColor failed: {}\n", .{err});
+        };
+        ren.drawRect(sdl.Rectangle{ .x = x, .y = y, .width = w, .height = h }) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL drawRect failed: {}\n", .{err});
+        };
     }
 
     pub fn drawRectangleRec(rec: Rectangle, col: Color) void {
@@ -582,8 +604,12 @@ pub const SdlBackend = struct {
 
     pub fn drawLine(start_x: f32, start_y: f32, end_x: f32, end_y: f32, col: Color) void {
         const ren = renderer orelse return;
-        ren.setColor(col.toSdl()) catch {};
-        ren.drawLineF(start_x, start_y, end_x, end_y) catch {};
+        ren.setColor(col.toSdl()) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL setColor failed: {}\n", .{err});
+        };
+        ren.drawLineF(start_x, start_y, end_x, end_y) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL drawLineF failed: {}\n", .{err});
+        };
     }
 
     pub fn drawLineEx(start_x: f32, start_y: f32, end_x: f32, end_y: f32, thickness: f32, col: Color) void {
@@ -594,61 +620,89 @@ pub const SdlBackend = struct {
 
     pub fn drawCircle(center_x: f32, center_y: f32, radius: f32, col: Color) void {
         const ren = renderer orelse return;
-        ren.setColor(col.toSdl()) catch {};
+        ren.setColor(col.toSdl()) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL setColor failed: {}\n", .{err});
+        };
 
         // Midpoint circle algorithm for filled circle
         const cx: i32 = @intFromFloat(center_x);
         const cy: i32 = @intFromFloat(center_y);
-        const r: i32 = @intFromFloat(radius);
+        const rad: i32 = @intFromFloat(radius);
 
-        var x: i32 = r;
-        var y: i32 = 0;
-        var err: i32 = 0;
+        var px: i32 = rad;
+        var py: i32 = 0;
+        var decision: i32 = 0;
 
-        while (x >= y) {
+        while (px >= py) {
             // Draw horizontal lines for filled circle
-            ren.drawLine(cx - x, cy + y, cx + x, cy + y) catch {};
-            ren.drawLine(cx - x, cy - y, cx + x, cy - y) catch {};
-            ren.drawLine(cx - y, cy + x, cx + y, cy + x) catch {};
-            ren.drawLine(cx - y, cy - x, cx + y, cy - x) catch {};
+            ren.drawLine(cx - px, cy + py, cx + px, cy + py) catch |e| {
+                if (@import("builtin").mode == .Debug) std.debug.print("SDL drawLine failed: {}\n", .{e});
+            };
+            ren.drawLine(cx - px, cy - py, cx + px, cy - py) catch |e| {
+                if (@import("builtin").mode == .Debug) std.debug.print("SDL drawLine failed: {}\n", .{e});
+            };
+            ren.drawLine(cx - py, cy + px, cx + py, cy + px) catch |e| {
+                if (@import("builtin").mode == .Debug) std.debug.print("SDL drawLine failed: {}\n", .{e});
+            };
+            ren.drawLine(cx - py, cy - px, cx + py, cy - px) catch |e| {
+                if (@import("builtin").mode == .Debug) std.debug.print("SDL drawLine failed: {}\n", .{e});
+            };
 
-            y += 1;
-            err += 1 + 2 * y;
-            if (2 * (err - x) + 1 > 0) {
-                x -= 1;
-                err += 1 - 2 * x;
+            py += 1;
+            decision += 1 + 2 * py;
+            if (2 * (decision - px) + 1 > 0) {
+                px -= 1;
+                decision += 1 - 2 * px;
             }
         }
     }
 
     pub fn drawCircleLines(center_x: f32, center_y: f32, radius: f32, col: Color) void {
         const ren = renderer orelse return;
-        ren.setColor(col.toSdl()) catch {};
+        ren.setColor(col.toSdl()) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL setColor failed: {}\n", .{err});
+        };
 
         // Midpoint circle algorithm
         const cx: i32 = @intFromFloat(center_x);
         const cy: i32 = @intFromFloat(center_y);
-        const r: i32 = @intFromFloat(radius);
+        const rad: i32 = @intFromFloat(radius);
 
-        var x: i32 = r;
-        var y: i32 = 0;
-        var err: i32 = 0;
+        var px: i32 = rad;
+        var py: i32 = 0;
+        var decision: i32 = 0;
 
-        while (x >= y) {
-            ren.drawPoint(cx + x, cy + y) catch {};
-            ren.drawPoint(cx + y, cy + x) catch {};
-            ren.drawPoint(cx - y, cy + x) catch {};
-            ren.drawPoint(cx - x, cy + y) catch {};
-            ren.drawPoint(cx - x, cy - y) catch {};
-            ren.drawPoint(cx - y, cy - x) catch {};
-            ren.drawPoint(cx + y, cy - x) catch {};
-            ren.drawPoint(cx + x, cy - y) catch {};
+        while (px >= py) {
+            ren.drawPoint(cx + px, cy + py) catch |e| {
+                if (@import("builtin").mode == .Debug) std.debug.print("SDL drawPoint failed: {}\n", .{e});
+            };
+            ren.drawPoint(cx + py, cy + px) catch |e| {
+                if (@import("builtin").mode == .Debug) std.debug.print("SDL drawPoint failed: {}\n", .{e});
+            };
+            ren.drawPoint(cx - py, cy + px) catch |e| {
+                if (@import("builtin").mode == .Debug) std.debug.print("SDL drawPoint failed: {}\n", .{e});
+            };
+            ren.drawPoint(cx - px, cy + py) catch |e| {
+                if (@import("builtin").mode == .Debug) std.debug.print("SDL drawPoint failed: {}\n", .{e});
+            };
+            ren.drawPoint(cx - px, cy - py) catch |e| {
+                if (@import("builtin").mode == .Debug) std.debug.print("SDL drawPoint failed: {}\n", .{e});
+            };
+            ren.drawPoint(cx - py, cy - px) catch |e| {
+                if (@import("builtin").mode == .Debug) std.debug.print("SDL drawPoint failed: {}\n", .{e});
+            };
+            ren.drawPoint(cx + py, cy - px) catch |e| {
+                if (@import("builtin").mode == .Debug) std.debug.print("SDL drawPoint failed: {}\n", .{e});
+            };
+            ren.drawPoint(cx + px, cy - py) catch |e| {
+                if (@import("builtin").mode == .Debug) std.debug.print("SDL drawPoint failed: {}\n", .{e});
+            };
 
-            y += 1;
-            err += 1 + 2 * y;
-            if (2 * (err - x) + 1 > 0) {
-                x -= 1;
-                err += 1 - 2 * x;
+            py += 1;
+            decision += 1 + 2 * py;
+            if (2 * (decision - px) + 1 > 0) {
+                px -= 1;
+                decision += 1 - 2 * px;
             }
         }
     }
@@ -663,7 +717,9 @@ pub const SdlBackend = struct {
             .{ .position = .{ .x = x3, .y = y3 }, .color = col.toSdl() },
         };
 
-        ren.drawGeometry(null, &vertices, null) catch {};
+        ren.drawGeometry(null, &vertices, null) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL drawGeometry failed: {}\n", .{err});
+        };
     }
 
     pub fn drawTriangleLines(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: Color) void {
@@ -676,9 +732,9 @@ pub const SdlBackend = struct {
         if (sides < 3) return;
         const ren = renderer orelse return;
 
-        // Build triangle fan vertices
+        // Build triangle fan vertices (center + outer vertices, so max 31 sides to fit 32 vertices)
         const sides_usize: usize = @intCast(sides);
-        var vertices: [32]sdl.Vertex = undefined; // Max 32 sides
+        var vertices: [32]sdl.Vertex = undefined;
         const actual_sides = @min(sides_usize, 31);
 
         const angle_step = 2.0 * std.math.pi / @as(f32, @floatFromInt(actual_sides));
@@ -712,16 +768,19 @@ pub const SdlBackend = struct {
             idx += 3;
         }
 
-        ren.drawGeometry(null, vertices[0 .. actual_sides + 1], indices[0..idx]) catch {};
+        ren.drawGeometry(null, vertices[0 .. actual_sides + 1], indices[0..idx]) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL drawGeometry failed: {}\n", .{err});
+        };
     }
 
     pub fn drawPolyLines(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
+        if (sides < 3) return;
+        const sides_usize: usize = @intCast(sides);
         const sides_f: f32 = @floatFromInt(sides);
         const angle_step = 2.0 * std.math.pi / sides_f;
         const rot_rad = rotation * std.math.pi / 180.0;
 
-        var i: i32 = 0;
-        while (i < sides) : (i += 1) {
+        for (0..sides_usize) |i| {
             const angle1 = @as(f32, @floatFromInt(i)) * angle_step + rot_rad;
             const angle2 = @as(f32, @floatFromInt(i + 1)) * angle_step + rot_rad;
 

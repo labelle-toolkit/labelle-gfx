@@ -31,7 +31,7 @@ const Animation = SdlGfx.AnimationT(AnimType);
 
 pub fn main() !void {
     // Initialize SDL backend window
-    gfx.SdlBackend.initWindow(800, 600, "Example 17: SDL Backend");
+    try gfx.SdlBackend.initWindow(800, 600, "Example 17: SDL Backend");
     defer gfx.SdlBackend.closeWindow();
 
     if (!gfx.SdlBackend.isWindowReady()) {
