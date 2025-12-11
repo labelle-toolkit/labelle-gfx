@@ -31,6 +31,12 @@ pub fn build(b: *std.Build) void {
     });
     const sokol = sokol_dep.module("sokol");
 
+    // SDL dependency (optional backend)
+    // SDL.zig uses an Sdk pattern - we import its build.zig and call init
+    const SdlSdk = @import("sdl");
+    const sdl_sdk = SdlSdk.init(b, .{ .dep_name = "sdl" });
+    const sdl = sdl_sdk.getWrapperModule();
+
     // Main library module
     const lib_mod = b.addModule("labelle", .{
         .root_source_file = b.path("src/lib.zig"),
@@ -40,6 +46,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zig_utils", .module = zig_utils },
             .{ .name = "raylib", .module = raylib },
             .{ .name = "sokol", .module = sokol },
+            .{ .name = "sdl2", .module = sdl },
         },
     });
 
@@ -55,6 +62,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "zig_utils", .module = zig_utils },
                 .{ .name = "raylib", .module = raylib },
                 .{ .name = "sokol", .module = sokol },
+                .{ .name = "sdl2", .module = sdl },
             },
         }),
     });
@@ -159,6 +167,34 @@ pub fn build(b: *std.Build) void {
         run_step.dependOn(&run_cmd.step);
 
         const full_run_step = b.step("run-09_sokol_backend", "Sokol backend example");
+        full_run_step.dependOn(&run_cmd.step);
+    }
+
+    // SDL backend example (requires SDL linking)
+    {
+        const sdl_example_mod = b.createModule(.{
+            .root_source_file = b.path("examples/17_sdl_backend/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "labelle", .module = lib_mod },
+                .{ .name = "sdl2", .module = sdl },
+            },
+        });
+
+        const sdl_example = b.addExecutable(.{
+            .name = "17_sdl_backend",
+            .root_module = sdl_example_mod,
+        });
+
+        // Link SDL2 library using the SDK
+        sdl_sdk.link(sdl_example, .dynamic, .SDL2);
+
+        const run_cmd = b.addRunArtifact(sdl_example);
+        const run_step = b.step("run-example-17", "SDL backend example");
+        run_step.dependOn(&run_cmd.step);
+
+        const full_run_step = b.step("run-17_sdl_backend", "SDL backend example");
         full_run_step.dependOn(&run_cmd.step);
     }
 

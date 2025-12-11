@@ -77,6 +77,8 @@ pub const mock_backend = @import("backend/mock_backend.zig");
 pub const MockBackend = mock_backend.MockBackend;
 pub const sokol_backend = @import("backend/sokol_backend.zig");
 pub const SokolBackend = sokol_backend.SokolBackend;
+pub const sdl_backend = @import("backend/sdl_backend.zig");
+pub const SdlBackend = sdl_backend.SdlBackend;
 
 // Default backend (raylib)
 pub const DefaultBackend = Backend(RaylibBackend);
