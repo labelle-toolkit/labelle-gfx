@@ -25,6 +25,19 @@ pub const SdlBackend = struct {
     var frame_time: f32 = 1.0 / 60.0;
     var should_quit: bool = false;
 
+    // Input state tracking for isKeyPressed/isKeyReleased
+    // SDL scancodes go up to ~512, use a bitset for previous frame state
+    const NUM_SCANCODES = 512;
+    var prev_key_state: [NUM_SCANCODES]bool = [_]bool{false} ** NUM_SCANCODES;
+    var curr_key_state: [NUM_SCANCODES]bool = [_]bool{false} ** NUM_SCANCODES;
+
+    // Mouse button state tracking
+    var prev_mouse_state: struct { left: bool = false, right: bool = false, middle: bool = false } = .{};
+    var curr_mouse_state: struct { left: bool = false, right: bool = false, middle: bool = false } = .{};
+
+    // Mouse wheel accumulator (reset each frame)
+    var mouse_wheel_delta: f32 = 0;
+
     // =========================================================================
     // REQUIRED TYPES
     // =========================================================================
@@ -389,6 +402,10 @@ pub const SdlBackend = struct {
                 .quit => {
                     should_quit = true;
                 },
+                .mouse_wheel => |wheel| {
+                    // Accumulate mouse wheel delta (Y axis is typical scroll)
+                    mouse_wheel_delta += @floatFromInt(wheel.delta_y);
+                },
                 else => {},
             }
         }
@@ -420,6 +437,34 @@ pub const SdlBackend = struct {
         const freq = sdl.getPerformanceFrequency();
         frame_time = @as(f32, @floatFromInt(now - last_frame_time)) / @as(f32, @floatFromInt(freq));
         last_frame_time = now;
+
+        // Update input state for isKeyPressed/isKeyReleased detection
+        updateInputState();
+    }
+
+    /// Update input state tracking (called at beginning of each frame)
+    fn updateInputState() void {
+        // Copy current state to previous state
+        @memcpy(&prev_key_state, &curr_key_state);
+        prev_mouse_state = curr_mouse_state;
+
+        // Reset mouse wheel delta (accumulated during event polling)
+        mouse_wheel_delta = 0;
+
+        // Capture current keyboard state
+        const keyboard_state = sdl.getKeyboardState();
+        for (0..NUM_SCANCODES) |i| {
+            // SDL scancodes are contiguous, check if pressed
+            curr_key_state[i] = keyboard_state.isPressed(@enumFromInt(i));
+        }
+
+        // Capture current mouse state
+        const mouse = sdl.getMouseState();
+        curr_mouse_state = .{
+            .left = mouse.left,
+            .right = mouse.right,
+            .middle = mouse.middle,
+        };
     }
 
     pub fn endDrawing() void {
@@ -517,35 +562,45 @@ pub const SdlBackend = struct {
     }
 
     pub fn isKeyDown(key: backend.KeyboardKey) bool {
-        const keyboard_state = sdl.getKeyboardState();
-        return keyboard_state.isPressed(mapKeyToScancode(key));
+        const scancode = mapKeyToScancode(key);
+        const idx = @intFromEnum(scancode);
+        if (idx >= NUM_SCANCODES) return false;
+        return curr_key_state[idx];
     }
 
     pub fn isKeyPressed(key: backend.KeyboardKey) bool {
-        _ = key;
-        // SDL doesn't have built-in "pressed this frame" - would need state tracking
-        return false;
+        // Key pressed this frame = down now AND was not down last frame
+        const scancode = mapKeyToScancode(key);
+        const idx = @intFromEnum(scancode);
+        if (idx >= NUM_SCANCODES) return false;
+        return curr_key_state[idx] and !prev_key_state[idx];
     }
 
     pub fn isKeyReleased(key: backend.KeyboardKey) bool {
-        _ = key;
-        // SDL doesn't have built-in "released this frame" - would need state tracking
-        return false;
+        // Key released this frame = not down now AND was down last frame
+        const scancode = mapKeyToScancode(key);
+        const idx = @intFromEnum(scancode);
+        if (idx >= NUM_SCANCODES) return false;
+        return !curr_key_state[idx] and prev_key_state[idx];
     }
 
     pub fn isMouseButtonDown(button: backend.MouseButton) bool {
-        const state = sdl.getMouseState();
         return switch (button) {
-            .left => state.left,
-            .right => state.right,
-            .middle => state.middle,
+            .left => curr_mouse_state.left,
+            .right => curr_mouse_state.right,
+            .middle => curr_mouse_state.middle,
             else => false,
         };
     }
 
     pub fn isMouseButtonPressed(button: backend.MouseButton) bool {
-        _ = button;
-        return false;
+        // Button pressed this frame = down now AND was not down last frame
+        return switch (button) {
+            .left => curr_mouse_state.left and !prev_mouse_state.left,
+            .right => curr_mouse_state.right and !prev_mouse_state.right,
+            .middle => curr_mouse_state.middle and !prev_mouse_state.middle,
+            else => false,
+        };
     }
 
     pub fn getMousePosition() Vector2 {
@@ -557,8 +612,7 @@ pub const SdlBackend = struct {
     }
 
     pub fn getMouseWheelMove() f32 {
-        // SDL wheel is event-based, would need to track in event loop
-        return 0;
+        return mouse_wheel_delta;
     }
 
     // =========================================================================
