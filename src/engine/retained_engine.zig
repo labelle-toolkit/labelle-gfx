@@ -40,6 +40,7 @@ const backend_mod = @import("../backend/backend.zig");
 const raylib_backend = @import("../backend/raylib_backend.zig");
 const texture_manager_mod = @import("../texture/texture_manager.zig");
 const camera_mod = @import("../camera/camera.zig");
+const camera_manager_mod = @import("../camera/camera_manager.zig");
 
 // ============================================
 // Core ID Types
@@ -346,15 +347,19 @@ const ZBuckets = struct {
 
 pub fn RetainedEngineWith(comptime BackendType: type) type {
     const Camera = camera_mod.CameraWith(BackendType);
+    const CameraManager = camera_manager_mod.CameraManagerWith(BackendType);
     const TextureManager = texture_manager_mod.TextureManagerWith(BackendType);
 
     return struct {
         const Self = @This();
         pub const Backend = BackendType;
+        pub const SplitScreenLayout = camera_manager_mod.SplitScreenLayout;
 
         allocator: std.mem.Allocator,
         texture_manager: TextureManager,
         camera: Camera,
+        camera_manager: CameraManager,
+        multi_camera_enabled: bool,
 
         // Internal storage - keyed by EntityId
         sprites: std.AutoArrayHashMap(EntityId, SpriteEntry),
@@ -403,6 +408,8 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
                 .allocator = allocator,
                 .texture_manager = TextureManager.init(allocator),
                 .camera = Camera.init(),
+                .camera_manager = CameraManager.init(),
+                .multi_camera_enabled = false,
                 .sprites = std.AutoArrayHashMap(EntityId, SpriteEntry).init(allocator),
                 .shapes = std.AutoArrayHashMap(EntityId, ShapeEntry).init(allocator),
                 .texts = std.AutoArrayHashMap(EntityId, TextEntry).init(allocator),
@@ -628,23 +635,69 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 
         // ==================== Camera ====================
 
+        /// Get the primary camera (single-camera mode or primary in multi-camera mode)
         pub fn getCamera(self: *Self) *Camera {
+            if (self.multi_camera_enabled) {
+                return self.camera_manager.getPrimaryCamera();
+            }
             return &self.camera;
         }
 
         pub fn setCameraPosition(self: *Self, x: f32, y: f32) void {
-            self.camera.x = x;
-            self.camera.y = y;
+            self.getCamera().setPosition(x, y);
         }
 
         pub fn setZoom(self: *Self, zoom: f32) void {
-            self.camera.setZoom(zoom);
+            self.getCamera().setZoom(zoom);
+        }
+
+        // ==================== Multi-Camera ====================
+
+        /// Get the camera manager for multi-camera control
+        pub fn getCameraManager(self: *Self) *CameraManager {
+            return &self.camera_manager;
+        }
+
+        /// Get a specific camera by index (0-3)
+        pub fn getCameraAt(self: *Self, index: u2) *Camera {
+            return self.camera_manager.getCamera(index);
+        }
+
+        /// Enable multi-camera mode with a split-screen layout
+        pub fn setupSplitScreen(self: *Self, layout: SplitScreenLayout) void {
+            self.multi_camera_enabled = true;
+            self.camera_manager.setupSplitScreen(layout);
+        }
+
+        /// Disable multi-camera mode and return to single-camera
+        pub fn disableMultiCamera(self: *Self) void {
+            self.multi_camera_enabled = false;
+        }
+
+        /// Check if multi-camera mode is enabled
+        pub fn isMultiCameraEnabled(self: *const Self) bool {
+            return self.multi_camera_enabled;
+        }
+
+        /// Set active cameras using a bitmask (bit N = camera N active)
+        pub fn setActiveCameras(self: *Self, mask: u4) void {
+            self.multi_camera_enabled = true;
+            self.camera_manager.setActiveMask(mask);
         }
 
         // ==================== Rendering ====================
 
         /// Render all stored visuals - no arguments needed
         pub fn render(self: *Self) void {
+            if (self.multi_camera_enabled) {
+                self.renderMultiCamera();
+            } else {
+                self.renderSingleCamera();
+            }
+        }
+
+        /// Render with a single camera (original behavior)
+        fn renderSingleCamera(self: *Self) void {
             // Begin camera mode
             self.beginCameraMode();
 
@@ -662,6 +715,114 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 
             // End camera mode
             self.endCameraMode();
+        }
+
+        /// Render with multiple cameras
+        fn renderMultiCamera(self: *Self) void {
+            var cam_iter = self.camera_manager.activeIterator();
+            while (cam_iter.next()) |cam| {
+                // Begin camera mode with viewport clipping
+                if (cam.screen_viewport) |vp| {
+                    BackendType.beginScissorMode(vp.x, vp.y, vp.width, vp.height);
+                }
+                BackendType.beginMode2D(cam.toBackend());
+
+                // Get viewport for culling
+                const viewport = cam.getViewport();
+
+                // Render all visuals for this camera with per-camera culling
+                var iter = self.z_buckets.iterator();
+                while (iter.next()) |item| {
+                    if (!self.isVisible(item)) continue;
+
+                    switch (item.item_type) {
+                        .sprite => {
+                            if (self.shouldRenderSpriteInViewport(item.entity_id, viewport)) {
+                                self.renderSprite(item.entity_id);
+                            }
+                        },
+                        .shape => {
+                            if (self.shouldRenderShapeInViewport(item.entity_id, viewport)) {
+                                self.renderShape(item.entity_id);
+                            }
+                        },
+                        .text => self.renderText(item.entity_id),
+                    }
+                }
+
+                // End camera mode
+                BackendType.endMode2D();
+                if (cam.screen_viewport != null) {
+                    BackendType.endScissorMode();
+                }
+            }
+        }
+
+        /// Check if sprite should be rendered in the given viewport
+        fn shouldRenderSpriteInViewport(self: *Self, id: EntityId, viewport: Camera.ViewportRect) bool {
+            const entry = self.sprites.get(id) orelse return false;
+            const visual = entry.visual;
+            const pos = entry.position;
+
+            // Get sprite dimensions
+            if (visual.sprite_name.len > 0) {
+                if (self.texture_manager.findSprite(visual.sprite_name)) |result| {
+                    const sprite = result.sprite;
+                    const scaled_width = @as(f32, @floatFromInt(sprite.width)) * visual.scale;
+                    const scaled_height = @as(f32, @floatFromInt(sprite.height)) * visual.scale;
+
+                    // Sprite is centered, so calculate bounds
+                    const half_w = scaled_width / 2.0;
+                    const half_h = scaled_height / 2.0;
+                    return viewport.overlapsRect(pos.x - half_w, pos.y - half_h, scaled_width, scaled_height);
+                }
+            }
+            return true; // Render if no sprite data found
+        }
+
+        const ShapeBounds = struct { x: f32, y: f32, w: f32, h: f32 };
+
+        /// Check if shape should be rendered in the given viewport
+        fn shouldRenderShapeInViewport(self: *const Self, id: EntityId, viewport: Camera.ViewportRect) bool {
+            const entry = self.shapes.get(id) orelse return false;
+            const visual = entry.visual;
+            const pos = entry.position;
+
+            // Calculate bounds based on shape type
+            const bounds: ShapeBounds = switch (visual.shape) {
+                .circle => |c| .{
+                    .x = pos.x - c.radius,
+                    .y = pos.y - c.radius,
+                    .w = c.radius * 2,
+                    .h = c.radius * 2,
+                },
+                .rectangle => |r| .{
+                    .x = pos.x,
+                    .y = pos.y,
+                    .w = r.width,
+                    .h = r.height,
+                },
+                .line => |l| .{
+                    .x = @min(pos.x, pos.x + l.end.x),
+                    .y = @min(pos.y, pos.y + l.end.y),
+                    .w = @abs(l.end.x) + l.thickness,
+                    .h = @abs(l.end.y) + l.thickness,
+                },
+                .triangle => |t| .{
+                    .x = @min(pos.x, @min(pos.x + t.p2.x, pos.x + t.p3.x)),
+                    .y = @min(pos.y, @min(pos.y + t.p2.y, pos.y + t.p3.y)),
+                    .w = @max(pos.x, @max(pos.x + t.p2.x, pos.x + t.p3.x)) - @min(pos.x, @min(pos.x + t.p2.x, pos.x + t.p3.x)),
+                    .h = @max(pos.y, @max(pos.y + t.p2.y, pos.y + t.p3.y)) - @min(pos.y, @min(pos.y + t.p2.y, pos.y + t.p3.y)),
+                },
+                .polygon => |p| .{
+                    .x = pos.x - p.radius,
+                    .y = pos.y - p.radius,
+                    .w = p.radius * 2,
+                    .h = p.radius * 2,
+                },
+            };
+
+            return viewport.overlapsRect(bounds.x, bounds.y, bounds.w, bounds.h);
         }
 
         fn isVisible(self: *const Self, item: RenderItem) bool {

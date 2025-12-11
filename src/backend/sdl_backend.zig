@@ -1020,4 +1020,24 @@ pub const SdlBackend = struct {
         _ = texture;
         return true; // SDL textures are always valid if they exist
     }
+
+    // =========================================================================
+    // VIEWPORT/SCISSOR FUNCTIONS (for multi-camera support)
+    // =========================================================================
+
+    /// Begin scissor mode - clips rendering to specified rectangle
+    pub fn beginScissorMode(x: i32, y: i32, w: i32, h: i32) void {
+        const ren = renderer orelse return;
+        ren.setClipRect(sdl.Rectangle{ .x = x, .y = y, .width = w, .height = h }) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL setClipRect failed: {}\n", .{err});
+        };
+    }
+
+    /// End scissor mode - restores full-screen rendering
+    pub fn endScissorMode() void {
+        const ren = renderer orelse return;
+        ren.setClipRect(null) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL setClipRect(null) failed: {}\n", .{err});
+        };
+    }
 };

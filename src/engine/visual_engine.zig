@@ -41,6 +41,7 @@ const raylib_backend = @import("../backend/raylib_backend.zig");
 const renderer_mod = @import("../renderer/renderer.zig");
 const texture_manager_mod = @import("../texture/texture_manager.zig");
 const camera_mod = @import("../camera/camera.zig");
+const camera_manager_mod = @import("../camera/camera_manager.zig");
 const animation_def = @import("../animation_def.zig");
 const components = @import("../components/components.zig");
 
@@ -276,6 +277,7 @@ pub fn VisualEngineWith(comptime BackendType: type, comptime max_sprites: usize)
 pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: usize, comptime max_shapes: usize) type {
     const Renderer = renderer_mod.RendererWith(BackendType);
     const Camera = camera_mod.CameraWith(BackendType);
+    const CameraManager = camera_manager_mod.CameraManagerWith(BackendType);
     const Storage = GenericSpriteStorage(InternalSpriteData, max_sprites);
     const ShapeStorage = GenericShapeStorage(max_shapes);
     const InternalShapeData = shape_storage.InternalShapeData;
@@ -288,6 +290,7 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
         pub const Backend = BackendType;
         pub const SpriteStorageType = Storage;
         pub const ShapeStorageType = ShapeStorage;
+        pub const SplitScreenLayout = camera_manager_mod.SplitScreenLayout;
 
         allocator: std.mem.Allocator,
         renderer: Renderer,
@@ -307,6 +310,10 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
         camera_pan_target_x: ?f32 = null,
         camera_pan_target_y: ?f32 = null,
         camera_pan_speed: f32 = 200,
+
+        // Multi-camera support
+        camera_manager: CameraManager,
+        multi_camera_enabled: bool = false,
 
         // Callbacks
         on_animation_complete: ?OnAnimationComplete = null,
@@ -336,6 +343,7 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
                 .storage = try Storage.init(allocator),
                 .shape_storage = try ShapeStorage.init(allocator),
                 .animation_registry = .empty,
+                .camera_manager = CameraManager.init(),
                 .owns_window = owns_window,
                 .clear_color = BackendType.color(
                     config.clear_color.r,
@@ -846,7 +854,44 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
         }
 
         pub fn getCamera(self: *Self) *Camera {
+            if (self.multi_camera_enabled) {
+                return self.camera_manager.getPrimaryCamera();
+            }
             return &self.renderer.camera;
+        }
+
+        // ==================== Multi-Camera ====================
+
+        /// Get the camera manager for multi-camera control
+        pub fn getCameraManager(self: *Self) *CameraManager {
+            return &self.camera_manager;
+        }
+
+        /// Get a specific camera by index (0-3)
+        pub fn getCameraAt(self: *Self, index: u2) *Camera {
+            return self.camera_manager.getCamera(index);
+        }
+
+        /// Enable multi-camera mode with a split-screen layout
+        pub fn setupSplitScreen(self: *Self, layout: SplitScreenLayout) void {
+            self.multi_camera_enabled = true;
+            self.camera_manager.setupSplitScreen(layout);
+        }
+
+        /// Disable multi-camera mode and return to single-camera
+        pub fn disableMultiCamera(self: *Self) void {
+            self.multi_camera_enabled = false;
+        }
+
+        /// Check if multi-camera mode is enabled
+        pub fn isMultiCameraEnabled(self: *const Self) bool {
+            return self.multi_camera_enabled;
+        }
+
+        /// Set active cameras using a bitmask (bit N = camera N active)
+        pub fn setActiveCameras(self: *Self, mask: u4) void {
+            self.multi_camera_enabled = true;
+            self.camera_manager.setActiveMask(mask);
         }
 
         // ==================== Main Loop ====================
@@ -958,6 +1003,15 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
         }
 
         fn render(self: *Self) void {
+            if (self.multi_camera_enabled) {
+                self.renderMultiCamera();
+            } else {
+                self.renderSingleCamera();
+            }
+        }
+
+        /// Render with a single camera (original behavior)
+        fn renderSingleCamera(self: *Self) void {
             // Begin camera mode
             self.renderer.beginCameraMode();
 
@@ -984,6 +1038,41 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
             self.renderer.endCameraMode();
         }
 
+        /// Render with multiple cameras
+        fn renderMultiCamera(self: *Self) void {
+            var cam_iter = self.camera_manager.activeIterator();
+            while (cam_iter.next()) |cam| {
+                // Begin camera mode with viewport clipping
+                if (cam.screen_viewport) |vp| {
+                    BackendType.beginScissorMode(vp.x, vp.y, vp.width, vp.height);
+                }
+                BackendType.beginMode2D(cam.toBackend());
+
+                // Render all visuals for this camera with per-camera culling
+                var iter = self.z_buckets.iterator();
+                while (iter.next()) |item| {
+                    switch (item) {
+                        .sprite => |id| {
+                            if (self.isValid(id) and self.storage.items[id.index].visible) {
+                                self.renderSpriteForCamera(id, cam);
+                            }
+                        },
+                        .shape => |id| {
+                            if (self.isShapeValid(id) and self.shape_storage.items[id.index].visible) {
+                                self.renderShapeForCamera(id, cam);
+                            }
+                        },
+                    }
+                }
+
+                // End camera mode
+                BackendType.endMode2D();
+                if (cam.screen_viewport != null) {
+                    BackendType.endScissorMode();
+                }
+            }
+        }
+
         fn renderSprite(self: *Self, id: SpriteId) void {
             const sprite = &self.storage.items[id.index];
             const tint = BackendType.color(sprite.tint_r, sprite.tint_g, sprite.tint_b, sprite.tint_a);
@@ -1003,6 +1092,43 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
 
             // Viewport culling - skip if sprite is outside camera view
             if (!self.renderer.shouldRenderSprite(
+                sprite.getSpriteName(),
+                sprite.x,
+                sprite.y,
+                draw_opts,
+            )) {
+                return;
+            }
+
+            self.renderer.drawSprite(
+                sprite.getSpriteName(),
+                sprite.x,
+                sprite.y,
+                draw_opts,
+            );
+        }
+
+        /// Render sprite with culling against a specific camera (for multi-camera mode)
+        fn renderSpriteForCamera(self: *Self, id: SpriteId, cam: *Camera) void {
+            const sprite = &self.storage.items[id.index];
+            const tint = BackendType.color(sprite.tint_r, sprite.tint_g, sprite.tint_b, sprite.tint_a);
+
+            const draw_opts: Renderer.DrawOptions = .{
+                .offset_x = sprite.offset_x,
+                .offset_y = sprite.offset_y,
+                .scale = sprite.scale,
+                .rotation = sprite.rotation,
+                .tint = tint,
+                .flip_x = sprite.flip_x,
+                .flip_y = sprite.flip_y,
+                .pivot = sprite.pivot,
+                .pivot_x = sprite.pivot_x,
+                .pivot_y = sprite.pivot_y,
+            };
+
+            // Viewport culling against the specific camera
+            if (!self.renderer.shouldRenderSpriteForCamera(
+                cam,
                 sprite.getSpriteName(),
                 sprite.x,
                 sprite.y,
@@ -1060,6 +1186,98 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
                     }
                 },
             }
+        }
+
+        /// Render shape with culling against a specific camera (for multi-camera mode)
+        fn renderShapeForCamera(self: *Self, id: ShapeId, cam: *Camera) void {
+            const shape = &self.shape_storage.items[id.index];
+
+            // Calculate shape bounds for culling
+            const bounds = self.getShapeBounds(shape);
+            const viewport = cam.getViewport();
+
+            // Skip if shape is outside camera viewport
+            if (!viewport.overlapsRect(bounds.x, bounds.y, bounds.width, bounds.height)) {
+                return;
+            }
+
+            // Render the shape
+            const col = BackendType.color(shape.color_r, shape.color_g, shape.color_b, shape.color_a);
+
+            switch (shape.shape_type) {
+                .circle => {
+                    if (shape.filled) {
+                        BackendType.drawCircle(shape.x, shape.y, shape.radius, col);
+                    } else {
+                        BackendType.drawCircleLines(shape.x, shape.y, shape.radius, col);
+                    }
+                },
+                .rectangle => {
+                    if (shape.filled) {
+                        BackendType.drawRectangleV(shape.x, shape.y, shape.width, shape.height, col);
+                    } else {
+                        BackendType.drawRectangleLinesV(shape.x, shape.y, shape.width, shape.height, col);
+                    }
+                },
+                .line => {
+                    if (shape.thickness > 1) {
+                        BackendType.drawLineEx(shape.x, shape.y, shape.x2, shape.y2, shape.thickness, col);
+                    } else {
+                        BackendType.drawLine(shape.x, shape.y, shape.x2, shape.y2, col);
+                    }
+                },
+                .triangle => {
+                    if (shape.filled) {
+                        BackendType.drawTriangle(shape.x, shape.y, shape.x2, shape.y2, shape.x3, shape.y3, col);
+                    } else {
+                        BackendType.drawTriangleLines(shape.x, shape.y, shape.x2, shape.y2, shape.x3, shape.y3, col);
+                    }
+                },
+                .polygon => {
+                    if (shape.filled) {
+                        BackendType.drawPoly(shape.x, shape.y, shape.sides, shape.radius, shape.rotation, col);
+                    } else {
+                        BackendType.drawPolyLines(shape.x, shape.y, shape.sides, shape.radius, shape.rotation, col);
+                    }
+                },
+            }
+        }
+
+        /// Calculate the bounding box of a shape for culling
+        fn getShapeBounds(self: *const Self, shape: *const InternalShapeData) struct { x: f32, y: f32, width: f32, height: f32 } {
+            _ = self;
+            return switch (shape.shape_type) {
+                .circle => .{
+                    .x = shape.x - shape.radius,
+                    .y = shape.y - shape.radius,
+                    .width = shape.radius * 2,
+                    .height = shape.radius * 2,
+                },
+                .rectangle => .{
+                    .x = shape.x,
+                    .y = shape.y,
+                    .width = shape.width,
+                    .height = shape.height,
+                },
+                .line => .{
+                    .x = @min(shape.x, shape.x2),
+                    .y = @min(shape.y, shape.y2),
+                    .width = @abs(shape.x2 - shape.x) + shape.thickness,
+                    .height = @abs(shape.y2 - shape.y) + shape.thickness,
+                },
+                .triangle => .{
+                    .x = @min(shape.x, @min(shape.x2, shape.x3)),
+                    .y = @min(shape.y, @min(shape.y2, shape.y3)),
+                    .width = @max(shape.x, @max(shape.x2, shape.x3)) - @min(shape.x, @min(shape.x2, shape.x3)),
+                    .height = @max(shape.y, @max(shape.y2, shape.y3)) - @min(shape.y, @min(shape.y2, shape.y3)),
+                },
+                .polygon => .{
+                    .x = shape.x - shape.radius,
+                    .y = shape.y - shape.radius,
+                    .width = shape.radius * 2,
+                    .height = shape.radius * 2,
+                },
+            };
         }
 
         // ==================== Atlas Management ====================

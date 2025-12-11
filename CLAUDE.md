@@ -411,6 +411,68 @@ gfx.ZIndex.effects     // 50
 gfx.ZIndex.ui          // 70
 ```
 
+### Multi-Camera Support
+
+Render the scene from multiple viewpoints for split-screen, minimap, or picture-in-picture:
+
+```zig
+const gfx = @import("labelle");
+
+var engine = try gfx.RetainedEngine.init(allocator, .{
+    .window = .{ .width = 800, .height = 600, .title = "Split Screen" },
+});
+defer engine.deinit();
+
+// Setup split-screen layout
+engine.setupSplitScreen(.vertical_split);  // Side-by-side cameras
+
+// Control individual cameras
+engine.getCameraAt(0).setPosition(player1_x, player1_y);  // Left viewport
+engine.getCameraAt(1).setPosition(player2_x, player2_y);  // Right viewport
+
+// Game loop - renders scene once per active camera
+while (engine.isRunning()) {
+    engine.beginFrame();
+    engine.render();
+    engine.endFrame();
+}
+```
+
+**Split-screen layouts:**
+- `.single` - Single fullscreen camera (default)
+- `.vertical_split` - Two cameras side by side
+- `.horizontal_split` - Two cameras stacked vertically
+- `.quadrant` - Four cameras in quadrants
+
+**Manual viewport setup (for minimap, PiP):**
+
+```zig
+// Main camera (fullscreen)
+var main_cam = engine.getCameraAt(0);
+main_cam.screen_viewport = null;  // null = fullscreen
+main_cam.setZoom(2.0);
+
+// Minimap camera (corner overlay)
+var minimap = engine.getCameraAt(1);
+minimap.screen_viewport = .{ .x = 600, .y = 10, .width = 190, .height = 140 };
+minimap.setZoom(0.2);  // Zoomed out view
+
+engine.setActiveCameras(0b0011);  // Enable cameras 0 and 1
+```
+
+**ScreenViewport helpers:**
+
+```zig
+const vp = gfx.ScreenViewport;
+
+// Preset viewports
+const left = vp.leftHalf(screen_w, screen_h);
+const right = vp.rightHalf(screen_w, screen_h);
+const top = vp.topHalf(screen_w, screen_h);
+const bottom = vp.bottomHalf(screen_w, screen_h);
+const quad = vp.quadrant(screen_w, screen_h, 0);  // 0-3 for each quadrant
+```
+
 ### Logging
 
 Scoped logging following the labelle-toolkit pattern:
@@ -489,6 +551,7 @@ pub const AnimationTests = struct {
 | 14_tile_map | Tiled Map Editor (.tmx) support |
 | 15_shapes | Shape primitives (circle, rect, line, triangle, polygon) |
 | 16_retained_engine | RetainedEngine with EntityId-based API |
+| 18_multi_camera | Multi-camera support for split-screen and minimap |
 
 ## Common Patterns
 

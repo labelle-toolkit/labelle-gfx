@@ -277,4 +277,16 @@ pub const RaylibBackend = struct {
     pub fn drawPolyLines(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
         rl.drawPolyLinesEx(.{ .x = center_x, .y = center_y }, sides, radius, rotation, 1.0, col);
     }
+
+    // Viewport/Scissor functions (for multi-camera support)
+
+    /// Begin scissor mode - clips rendering to specified rectangle
+    pub fn beginScissorMode(x: i32, y: i32, width: i32, height: i32) void {
+        rl.beginScissorMode(x, y, width, height);
+    }
+
+    /// End scissor mode - restores full-screen rendering
+    pub fn endScissorMode() void {
+        rl.endScissorMode();
+    }
 };

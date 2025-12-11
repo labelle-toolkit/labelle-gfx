@@ -6,6 +6,48 @@
 const backend_mod = @import("../backend/backend.zig");
 const raylib_backend = @import("../backend/raylib_backend.zig");
 
+/// Screen viewport rectangle (pixel coordinates)
+pub const ScreenViewport = struct {
+    x: i32 = 0,
+    y: i32 = 0,
+    width: i32,
+    height: i32,
+
+    /// Create a viewport for left half of screen (vertical split)
+    pub fn leftHalf(screen_width: i32, screen_height: i32) ScreenViewport {
+        return .{ .x = 0, .y = 0, .width = @divTrunc(screen_width, 2), .height = screen_height };
+    }
+
+    /// Create a viewport for right half of screen (vertical split)
+    pub fn rightHalf(screen_width: i32, screen_height: i32) ScreenViewport {
+        const half = @divTrunc(screen_width, 2);
+        return .{ .x = half, .y = 0, .width = screen_width - half, .height = screen_height };
+    }
+
+    /// Create a viewport for top half of screen (horizontal split)
+    pub fn topHalf(screen_width: i32, screen_height: i32) ScreenViewport {
+        return .{ .x = 0, .y = 0, .width = screen_width, .height = @divTrunc(screen_height, 2) };
+    }
+
+    /// Create a viewport for bottom half of screen (horizontal split)
+    pub fn bottomHalf(screen_width: i32, screen_height: i32) ScreenViewport {
+        const half = @divTrunc(screen_height, 2);
+        return .{ .x = 0, .y = half, .width = screen_width, .height = screen_height - half };
+    }
+
+    /// Create a viewport for one quadrant (0=top-left, 1=top-right, 2=bottom-left, 3=bottom-right)
+    pub fn quadrant(screen_width: i32, screen_height: i32, index: u2) ScreenViewport {
+        const half_w = @divTrunc(screen_width, 2);
+        const half_h = @divTrunc(screen_height, 2);
+        return switch (index) {
+            0 => .{ .x = 0, .y = 0, .width = half_w, .height = half_h },
+            1 => .{ .x = half_w, .y = 0, .width = screen_width - half_w, .height = half_h },
+            2 => .{ .x = 0, .y = half_h, .width = half_w, .height = screen_height - half_h },
+            3 => .{ .x = half_w, .y = half_h, .width = screen_width - half_w, .height = screen_height - half_h },
+        };
+    }
+};
+
 /// 2D Camera with pan, zoom, bounds, and viewport culling support (with custom backend support)
 pub fn CameraWith(comptime BackendType: type) type {
     return struct {
@@ -25,6 +67,8 @@ pub fn CameraWith(comptime BackendType: type) type {
         max_zoom: f32 = 3.0,
         /// World bounds (optional - set all to 0 to disable)
         bounds: Bounds = .{},
+        /// Screen viewport (null = fullscreen)
+        screen_viewport: ?ScreenViewport = null,
 
         pub const Bounds = struct {
             min_x: f32 = 0,
@@ -60,15 +104,25 @@ pub fn CameraWith(comptime BackendType: type) type {
             self.y = screen_height / 2.0;
         }
 
+        /// Get the viewport dimensions (uses screen_viewport if set, otherwise full screen)
+        pub fn getViewportDimensions(self: *const Self) struct { width: f32, height: f32 } {
+            if (self.screen_viewport) |vp| {
+                return .{ .width = @floatFromInt(vp.width), .height = @floatFromInt(vp.height) };
+            }
+            return .{
+                .width = @floatFromInt(BackendType.getScreenWidth()),
+                .height = @floatFromInt(BackendType.getScreenHeight()),
+            };
+        }
+
         /// Convert to backend Camera2D type
         pub fn toBackend(self: *const Self) BackendType.Camera2D {
-            const screen_width: f32 = @floatFromInt(BackendType.getScreenWidth());
-            const screen_height: f32 = @floatFromInt(BackendType.getScreenHeight());
+            const dims = self.getViewportDimensions();
 
             return .{
                 .offset = .{
-                    .x = screen_width / 2.0,
-                    .y = screen_height / 2.0,
+                    .x = dims.width / 2.0,
+                    .y = dims.height / 2.0,
                 },
                 .target = .{ .x = self.x, .y = self.y },
                 .rotation = self.rotation,
@@ -147,27 +201,25 @@ pub fn CameraWith(comptime BackendType: type) type {
         /// Get the viewport rectangle in world coordinates
         /// This represents the visible area of the game world
         pub fn getViewport(self: *const Self) ViewportRect {
-            const screen_width: f32 = @floatFromInt(BackendType.getScreenWidth());
-            const screen_height: f32 = @floatFromInt(BackendType.getScreenHeight());
-            const half_width = (screen_width / 2.0) / self.zoom;
-            const half_height = (screen_height / 2.0) / self.zoom;
+            const dims = self.getViewportDimensions();
+            const half_width = (dims.width / 2.0) / self.zoom;
+            const half_height = (dims.height / 2.0) / self.zoom;
 
             return .{
                 .x = self.x - half_width,
                 .y = self.y - half_height,
-                .width = screen_width / self.zoom,
-                .height = screen_height / self.zoom,
+                .width = dims.width / self.zoom,
+                .height = dims.height / self.zoom,
             };
         }
 
         fn clampToBounds(self: *Self) void {
             if (!self.bounds.isEnabled()) return;
 
-            // Calculate visible area based on zoom
-            const screen_width: f32 = @floatFromInt(BackendType.getScreenWidth());
-            const screen_height: f32 = @floatFromInt(BackendType.getScreenHeight());
-            const half_width = (screen_width / 2.0) / self.zoom;
-            const half_height = (screen_height / 2.0) / self.zoom;
+            // Calculate visible area based on zoom and viewport dimensions
+            const dims = self.getViewportDimensions();
+            const half_width = (dims.width / 2.0) / self.zoom;
+            const half_height = (dims.height / 2.0) / self.zoom;
 
             // Clamp position
             self.x = @max(self.bounds.min_x + half_width, @min(self.bounds.max_x - half_width, self.x));

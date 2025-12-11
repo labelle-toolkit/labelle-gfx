@@ -547,6 +547,22 @@ pub fn Backend(comptime Impl: type) type {
                 Impl.drawPolyLines(center_x, center_y, sides, radius, rotation, col);
             }
         }
+
+        // Viewport/Scissor functions (for multi-camera support)
+
+        /// Begin scissor mode - clips rendering to specified rectangle
+        pub inline fn beginScissorMode(x: i32, y: i32, width: i32, height: i32) void {
+            if (@hasDecl(Impl, "beginScissorMode")) {
+                Impl.beginScissorMode(x, y, width, height);
+            }
+        }
+
+        /// End scissor mode - restores full-screen rendering
+        pub inline fn endScissorMode() void {
+            if (@hasDecl(Impl, "endScissorMode")) {
+                Impl.endScissorMode();
+            }
+        }
     };
 }
 

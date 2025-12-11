@@ -265,6 +265,27 @@ pub const MockBackend = struct {
 
     pub fn drawRectangleLines(_: i32, _: i32, _: i32, _: i32, _: Color) void {}
 
+    // Viewport/Scissor functions (for multi-camera support)
+    threadlocal var scissor_rect: ?struct { x: i32, y: i32, w: i32, h: i32 } = null;
+
+    pub fn beginScissorMode(x: i32, y: i32, w: i32, h: i32) void {
+        scissor_rect = .{ .x = x, .y = y, .w = w, .h = h };
+    }
+
+    pub fn endScissorMode() void {
+        scissor_rect = null;
+    }
+
+    /// Test helper: check if scissor mode is active
+    pub fn isInScissorMode() bool {
+        return scissor_rect != null;
+    }
+
+    /// Test helper: get current scissor rect
+    pub fn getScissorRect() ?struct { x: i32, y: i32, w: i32, h: i32 } {
+        return scissor_rect;
+    }
+
     // Test helpers
 
     /// Mock sprite data for creating test atlases

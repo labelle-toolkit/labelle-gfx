@@ -220,6 +220,78 @@ pub fn RendererWith(comptime BackendType: type) type {
             BackendType.endMode2D();
         }
 
+        /// Begin camera mode with viewport clipping (for multi-camera rendering)
+        /// This sets up scissor clipping to the camera's screen_viewport, then enters camera mode.
+        pub fn beginCameraModeWithViewport(_: *Self, cam: *Camera) void {
+            if (cam.screen_viewport) |vp| {
+                BackendType.beginScissorMode(vp.x, vp.y, vp.width, vp.height);
+            }
+            BackendType.beginMode2D(cam.toBackend());
+        }
+
+        /// End camera mode with viewport clipping
+        pub fn endCameraModeWithViewport(_: *Self, cam: *Camera) void {
+            BackendType.endMode2D();
+            if (cam.screen_viewport != null) {
+                BackendType.endScissorMode();
+            }
+        }
+
+        /// Check if a sprite should be rendered based on a specific camera's viewport
+        /// This allows viewport culling with any camera, not just the renderer's internal camera.
+        pub fn shouldRenderSpriteForCamera(
+            self: *Self,
+            cam: *const Camera,
+            sprite_name: []const u8,
+            x: f32,
+            y: f32,
+            options: DrawOptions,
+        ) bool {
+            // Get sprite data to determine dimensions
+            const found = self.texture_manager.findSprite(sprite_name) orelse return true;
+            const sprite = found.sprite;
+
+            // Get viewport from the provided camera
+            const viewport = cam.getViewport();
+            if (viewport.width <= 0 or viewport.height <= 0) {
+                return true;
+            }
+
+            // Calculate actual sprite dimensions accounting for scale and rotation
+            var width: f32 = undefined;
+            var height: f32 = undefined;
+
+            if (sprite.rotated) {
+                width = @as(f32, @floatFromInt(sprite.height)) * options.scale;
+                height = @as(f32, @floatFromInt(sprite.width)) * options.scale;
+            } else {
+                width = @as(f32, @floatFromInt(sprite.width)) * options.scale;
+                height = @as(f32, @floatFromInt(sprite.height)) * options.scale;
+            }
+
+            // Calculate sprite bounds in world space based on pivot
+            const pivot_origin = options.pivot.getOrigin(width, height, options.pivot_x, options.pivot_y);
+
+            const sprite_x = x + options.offset_x - pivot_origin.x;
+            const sprite_y = y + options.offset_y - pivot_origin.y;
+
+            // Add trim offset if sprite is trimmed
+            var final_x = sprite_x;
+            var final_y = sprite_y;
+            if (sprite.trimmed) {
+                final_x += @as(f32, @floatFromInt(sprite.offset_x)) * options.scale;
+                final_y += @as(f32, @floatFromInt(sprite.offset_y)) * options.scale;
+            }
+
+            // Check overlap
+            return viewport.overlapsRect(final_x, final_y, width, height);
+        }
+
+        /// Get the viewport from the renderer's camera (convenience method)
+        pub fn getViewport(self: *const Self) camera_mod.CameraWith(BackendType).ViewportRect {
+            return self.camera.getViewport();
+        }
+
         /// Get the texture manager for advanced operations
         pub fn getTextureManager(self: *Self) *TextureManager {
             return &self.texture_manager;

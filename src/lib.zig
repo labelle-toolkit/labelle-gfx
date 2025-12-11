@@ -163,6 +163,11 @@ pub const MapObject = tilemap.MapObject;
 pub const camera = @import("camera/camera.zig");
 pub const Camera = camera.Camera;
 pub const CameraWith = camera.CameraWith;
+pub const ScreenViewport = camera.ScreenViewport;
+pub const camera_manager = @import("camera/camera_manager.zig");
+pub const CameraManager = camera_manager.CameraManagerWith(DefaultBackend);
+pub const CameraManagerWith = camera_manager.CameraManagerWith;
+pub const SplitScreenLayout = camera_manager.SplitScreenLayout;
 
 // Effects exports
 pub const effects = @import("effects/effects.zig");
@@ -258,6 +263,9 @@ pub fn withBackend(comptime Impl: type) type {
 
         // Camera
         pub const Camera = camera.CameraWith(B);
+        pub const ScreenViewport = camera.ScreenViewport;
+        pub const CameraManager = camera_manager.CameraManagerWith(B);
+        pub const SplitScreenLayout = camera_manager.SplitScreenLayout;
 
         // Effects
         pub const Fade = effects.Fade;
