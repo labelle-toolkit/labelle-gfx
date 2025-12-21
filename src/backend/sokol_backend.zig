@@ -419,51 +419,6 @@ pub const SokolBackend = struct {
         // No-op: sokol clears via pass action, not a separate function call
     }
 
-    // Input functions
-
-    /// Check if key is currently pressed down
-    pub fn isKeyDown(key: backend_mod.KeyboardKey) bool {
-        // sokol_app uses event callbacks for input
-        // This would require tracking key state in the event handler
-        _ = key;
-        return false;
-    }
-
-    /// Check if key was pressed this frame
-    pub fn isKeyPressed(key: backend_mod.KeyboardKey) bool {
-        _ = key;
-        return false;
-    }
-
-    /// Check if key was released this frame
-    pub fn isKeyReleased(key: backend_mod.KeyboardKey) bool {
-        _ = key;
-        return false;
-    }
-
-    /// Check if mouse button is down
-    pub fn isMouseButtonDown(button: backend_mod.MouseButton) bool {
-        _ = button;
-        return false;
-    }
-
-    /// Check if mouse button was pressed this frame
-    pub fn isMouseButtonPressed(button: backend_mod.MouseButton) bool {
-        _ = button;
-        return false;
-    }
-
-    /// Get mouse position
-    pub fn getMousePosition() Vector2 {
-        // Would need to track from event callbacks
-        return .{ .x = 0, .y = 0 };
-    }
-
-    /// Get mouse wheel movement
-    pub fn getMouseWheelMove() f32 {
-        return 0;
-    }
-
     // UI/Drawing functions
 
     /// Draw text

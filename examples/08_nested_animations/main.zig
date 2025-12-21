@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const gfx = @import("labelle");
+const rl = @import("raylib");
 
 const VisualEngine = gfx.visual_engine.VisualEngine;
 const SpriteId = gfx.visual_engine.SpriteId;
@@ -100,22 +101,22 @@ pub fn main() !void {
         const dt = engine.getDeltaTime();
 
         // Keyboard input to switch animations
-        if (gfx.Engine.Input.isPressed(.one)) {
+        if (rl.isKeyPressed(.one)) {
             wizard_anim_idx = 0;
             const anim = wizard_anims[0];
             _ = engine.playAnimation(wizard, anim.path, anim.frames, anim.duration, true);
         }
-        if (gfx.Engine.Input.isPressed(.two)) {
+        if (rl.isKeyPressed(.two)) {
             wizard_anim_idx = 1;
             const anim = wizard_anims[1];
             _ = engine.playAnimation(wizard, anim.path, anim.frames, anim.duration, true);
         }
-        if (gfx.Engine.Input.isPressed(.three)) {
+        if (rl.isKeyPressed(.three)) {
             thief_anim_idx = 0;
             const anim = thief_anims[0];
             _ = engine.playAnimation(thief, anim.path, anim.frames, anim.duration, true);
         }
-        if (gfx.Engine.Input.isPressed(.four)) {
+        if (rl.isKeyPressed(.four)) {
             thief_anim_idx = 1;
             const anim = thief_anims[1];
             _ = engine.playAnimation(thief, anim.path, anim.frames, anim.duration, true);

@@ -5,12 +5,13 @@
 //! - Camera pan and zoom
 //! - World bounds
 //! - Screen to world coordinate conversion
-//! - Using Engine.Input for controls
+//! - Using raylib for controls
 //!
 //! Run with: zig build run-example-04
 
 const std = @import("std");
 const gfx = @import("labelle");
+const rl = @import("raylib");
 
 pub fn main() !void {
     // CI test mode - hidden window, auto-screenshot and exit
@@ -71,44 +72,44 @@ pub fn main() !void {
         }
         const dt = engine.getDeltaTime();
 
-        // Camera pan with arrow keys using Engine.Input
+        // Camera pan with arrow keys
         const pan_speed: f32 = 400.0;
-        if (gfx.Engine.Input.isDown(.left) or gfx.Engine.Input.isDown(.a)) {
+        if (rl.isKeyDown(.left) or rl.isKeyDown(.a)) {
             camera_x -= pan_speed * dt;
         }
-        if (gfx.Engine.Input.isDown(.right) or gfx.Engine.Input.isDown(.d)) {
+        if (rl.isKeyDown(.right) or rl.isKeyDown(.d)) {
             camera_x += pan_speed * dt;
         }
-        if (gfx.Engine.Input.isDown(.up) or gfx.Engine.Input.isDown(.w)) {
+        if (rl.isKeyDown(.up) or rl.isKeyDown(.w)) {
             camera_y -= pan_speed * dt;
         }
-        if (gfx.Engine.Input.isDown(.down) or gfx.Engine.Input.isDown(.s)) {
+        if (rl.isKeyDown(.down) or rl.isKeyDown(.s)) {
             camera_y += pan_speed * dt;
         }
 
         // Zoom with mouse wheel
-        const wheel = gfx.Engine.Input.getMouseWheel();
+        const wheel = rl.getMouseWheelMove();
         if (wheel != 0) {
             camera_zoom = @max(min_zoom, @min(max_zoom, camera_zoom + wheel * 0.1));
         }
 
         // Zoom with +/- keys
-        if (gfx.Engine.Input.isDown(.equal)) {
+        if (rl.isKeyDown(.equal)) {
             camera_zoom = @min(max_zoom, camera_zoom + dt);
         }
-        if (gfx.Engine.Input.isDown(.minus)) {
+        if (rl.isKeyDown(.minus)) {
             camera_zoom = @max(min_zoom, camera_zoom - dt);
         }
 
         // Reset camera with R
-        if (gfx.Engine.Input.isPressed(.r)) {
+        if (rl.isKeyPressed(.r)) {
             camera_x = 400;
             camera_y = 300;
             camera_zoom = 1.0;
         }
 
         // Toggle bounds with B
-        if (gfx.Engine.Input.isPressed(.b)) {
+        if (rl.isKeyPressed(.b)) {
             bounds_enabled = !bounds_enabled;
         }
 
@@ -119,7 +120,7 @@ pub fn main() !void {
         }
 
         // Get mouse position (simple screen coords for this demo)
-        const mouse_screen = gfx.Engine.Input.getMousePosition();
+        const mouse_screen = rl.getMousePosition();
 
         engine.beginFrame();
 

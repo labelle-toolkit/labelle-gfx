@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const gfx = @import("labelle");
+const rl = @import("raylib");
 
 const VisualEngine = gfx.visual_engine.VisualEngine;
 const SpriteId = gfx.visual_engine.SpriteId;
@@ -105,20 +106,20 @@ pub fn main() !void {
         var running = false;
         var jumping = false;
 
-        if (gfx.Engine.Input.isDown(.left) or gfx.Engine.Input.isDown(.a)) {
+        if (rl.isKeyDown(.left) or rl.isKeyDown(.a)) {
             moving = true;
             flip_x = true;
             player_x -= 150 * dt;
         }
-        if (gfx.Engine.Input.isDown(.right) or gfx.Engine.Input.isDown(.d)) {
+        if (rl.isKeyDown(.right) or rl.isKeyDown(.d)) {
             moving = true;
             flip_x = false;
             player_x += 150 * dt;
         }
-        if (gfx.Engine.Input.isDown(.left_shift)) {
+        if (rl.isKeyDown(.left_shift)) {
             running = true;
         }
-        if (gfx.Engine.Input.isPressed(.space)) {
+        if (rl.isKeyPressed(.space)) {
             jumping = true;
         }
 

@@ -229,35 +229,6 @@ pub const MockBackend = struct {
 
     pub fn takeScreenshot(_: [*:0]const u8) void {}
 
-    // Input (no-op for testing)
-    pub fn isKeyDown(_: anytype) bool {
-        return false;
-    }
-
-    pub fn isKeyPressed(_: anytype) bool {
-        return false;
-    }
-
-    pub fn isKeyReleased(_: anytype) bool {
-        return false;
-    }
-
-    pub fn isMouseButtonDown(_: anytype) bool {
-        return false;
-    }
-
-    pub fn isMouseButtonPressed(_: anytype) bool {
-        return false;
-    }
-
-    pub fn getMousePosition() Vector2 {
-        return .{ .x = 0, .y = 0 };
-    }
-
-    pub fn getMouseWheelMove() f32 {
-        return 0;
-    }
-
     // Drawing (no-op for testing)
     pub fn drawText(_: [*:0]const u8, _: i32, _: i32, _: i32, _: Color) void {}
 

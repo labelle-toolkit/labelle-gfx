@@ -39,23 +39,9 @@ pub const SdlBackend = struct {
     var screen_height: i32 = 600;
     var last_frame_time: u64 = 0;
     var frame_time: f32 = 1.0 / 60.0;
-    var should_quit: bool = false;
     var sdl_image_initialized: bool = false;
     var sdl_ttf_initialized: bool = false;
     var default_font: ?sdl_ttf.Font = null;
-
-    // Input state tracking for isKeyPressed/isKeyReleased
-    // SDL scancodes go up to ~512, use a bitset for previous frame state
-    const NUM_SCANCODES = 512;
-    var prev_key_state: [NUM_SCANCODES]bool = [_]bool{false} ** NUM_SCANCODES;
-    var curr_key_state: [NUM_SCANCODES]bool = [_]bool{false} ** NUM_SCANCODES;
-
-    // Mouse button state tracking
-    var prev_mouse_state: struct { left: bool = false, right: bool = false, middle: bool = false } = .{};
-    var curr_mouse_state: struct { left: bool = false, right: bool = false, middle: bool = false } = .{};
-
-    // Mouse wheel accumulator (reset each frame)
-    var mouse_wheel_delta: f32 = 0;
 
     // =========================================================================
     // REQUIRED TYPES
@@ -390,7 +376,6 @@ pub const SdlBackend = struct {
     pub fn initWindow(width: i32, height: i32, title: [*:0]const u8) !void {
         screen_width = width;
         screen_height = height;
-        should_quit = false;
 
         // Initialize SDL
         sdl.init(.{ .video = true, .events = true }) catch |err| {
@@ -470,22 +455,9 @@ pub const SdlBackend = struct {
         return window != null and renderer != null;
     }
 
-    pub fn windowShouldClose() bool {
-        // Poll events and check for quit
-        while (sdl.pollEvent()) |event| {
-            switch (event) {
-                .quit => {
-                    should_quit = true;
-                },
-                .mouse_wheel => |wheel| {
-                    // Accumulate mouse wheel delta (Y axis is typical scroll)
-                    mouse_wheel_delta += @floatFromInt(wheel.delta_y);
-                },
-                else => {},
-            }
-        }
-        return should_quit;
-    }
+    // Note: windowShouldClose is intentionally not implemented for SDL backend.
+    // Applications using SDL should manage their own event loop and quit condition,
+    // which is the standard pattern for SDL applications.
 
     pub fn setTargetFPS(fps: i32) void {
         _ = fps;
@@ -512,43 +484,12 @@ pub const SdlBackend = struct {
         const freq = sdl.getPerformanceFrequency();
         frame_time = @as(f32, @floatFromInt(now - last_frame_time)) / @as(f32, @floatFromInt(freq));
         last_frame_time = now;
-
-        // Update input state for isKeyPressed/isKeyReleased detection
-        updateInputState();
-    }
-
-    /// Update input state tracking (called at beginning of each frame)
-    fn updateInputState() void {
-        // Copy current state to previous state
-        @memcpy(&prev_key_state, &curr_key_state);
-        prev_mouse_state = curr_mouse_state;
-
-        // Note: mouse_wheel_delta is reset in endDrawing() so user code can read
-        // the accumulated value during the frame
-
-        // Capture current keyboard state
-        const keyboard_state = sdl.getKeyboardState();
-        for (0..NUM_SCANCODES) |i| {
-            // SDL scancodes are contiguous, check if pressed
-            curr_key_state[i] = keyboard_state.isPressed(@enumFromInt(i));
-        }
-
-        // Capture current mouse state
-        const mouse = sdl.getMouseState();
-        curr_mouse_state = .{
-            .left = mouse.left,
-            .right = mouse.right,
-            .middle = mouse.middle,
-        };
     }
 
     pub fn endDrawing() void {
         if (renderer) |ren| {
             ren.present();
         }
-        // Reset mouse wheel delta at end of frame so it's available to user code
-        // between beginDrawing() and endDrawing()
-        mouse_wheel_delta = 0;
     }
 
     pub fn clearBackground(col: Color) void {
@@ -564,139 +505,6 @@ pub const SdlBackend = struct {
 
     pub fn getFrameTime() f32 {
         return frame_time;
-    }
-
-    // =========================================================================
-    // OPTIONAL: INPUT HANDLING
-    // =========================================================================
-
-    fn mapKeyToScancode(key: backend.KeyboardKey) sdl.Scancode {
-        return switch (key) {
-            .space => .space,
-            .escape => .escape,
-            .enter => .@"return",
-            .tab => .tab,
-            .backspace => .backspace,
-            .up => .up,
-            .down => .down,
-            .left => .left,
-            .right => .right,
-            .a => .a,
-            .b => .b,
-            .c => .c,
-            .d => .d,
-            .e => .e,
-            .f => .f,
-            .g => .g,
-            .h => .h,
-            .i => .i,
-            .j => .j,
-            .k => .k,
-            .l => .l,
-            .m => .m,
-            .n => .n,
-            .o => .o,
-            .p => .p,
-            .q => .q,
-            .r => .r,
-            .s => .s,
-            .t => .t,
-            .u => .u,
-            .v => .v,
-            .w => .w,
-            .x => .x,
-            .y => .y,
-            .z => .z,
-            .zero => .@"0",
-            .one => .@"1",
-            .two => .@"2",
-            .three => .@"3",
-            .four => .@"4",
-            .five => .@"5",
-            .six => .@"6",
-            .seven => .@"7",
-            .eight => .@"8",
-            .nine => .@"9",
-            .f1 => .f1,
-            .f2 => .f2,
-            .f3 => .f3,
-            .f4 => .f4,
-            .f5 => .f5,
-            .f6 => .f6,
-            .f7 => .f7,
-            .f8 => .f8,
-            .f9 => .f9,
-            .f10 => .f10,
-            .f11 => .f11,
-            .f12 => .f12,
-            .left_shift => .left_shift,
-            .left_control => .left_control,
-            .left_alt => .left_alt,
-            .right_shift => .right_shift,
-            .right_control => .right_control,
-            .right_alt => .right_alt,
-            else => .unknown,
-        };
-    }
-
-    pub fn isKeyDown(key: backend.KeyboardKey) bool {
-        const scancode = mapKeyToScancode(key);
-        // Unknown scancode means the key is not mapped - return false
-        if (scancode == .unknown) return false;
-        const idx = @intFromEnum(scancode);
-        if (idx >= NUM_SCANCODES) return false;
-        return curr_key_state[idx];
-    }
-
-    pub fn isKeyPressed(key: backend.KeyboardKey) bool {
-        // Key pressed this frame = down now AND was not down last frame
-        const scancode = mapKeyToScancode(key);
-        // Unknown scancode means the key is not mapped - return false
-        if (scancode == .unknown) return false;
-        const idx = @intFromEnum(scancode);
-        if (idx >= NUM_SCANCODES) return false;
-        return curr_key_state[idx] and !prev_key_state[idx];
-    }
-
-    pub fn isKeyReleased(key: backend.KeyboardKey) bool {
-        // Key released this frame = not down now AND was down last frame
-        const scancode = mapKeyToScancode(key);
-        // Unknown scancode means the key is not mapped - return false
-        if (scancode == .unknown) return false;
-        const idx = @intFromEnum(scancode);
-        if (idx >= NUM_SCANCODES) return false;
-        return !curr_key_state[idx] and prev_key_state[idx];
-    }
-
-    pub fn isMouseButtonDown(button: backend.MouseButton) bool {
-        return switch (button) {
-            .left => curr_mouse_state.left,
-            .right => curr_mouse_state.right,
-            .middle => curr_mouse_state.middle,
-            else => false,
-        };
-    }
-
-    pub fn isMouseButtonPressed(button: backend.MouseButton) bool {
-        // Button pressed this frame = down now AND was not down last frame
-        return switch (button) {
-            .left => curr_mouse_state.left and !prev_mouse_state.left,
-            .right => curr_mouse_state.right and !prev_mouse_state.right,
-            .middle => curr_mouse_state.middle and !prev_mouse_state.middle,
-            else => false,
-        };
-    }
-
-    pub fn getMousePosition() Vector2 {
-        const state = sdl.getMouseState();
-        return Vector2{
-            .x = @floatFromInt(state.x),
-            .y = @floatFromInt(state.y),
-        };
-    }
-
-    pub fn getMouseWheelMove() f32 {
-        return mouse_wheel_delta;
     }
 
     // =========================================================================

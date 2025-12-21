@@ -63,51 +63,13 @@ pub const EngineConfig = struct {
     clear_color: ?raylib_backend.RaylibBackend.Color = null,
 };
 
-/// Engine namespace for Input and UI static helpers.
+/// Engine namespace for UI static helpers.
 /// This type only serves as a namespace for static utilities.
 /// For actual sprite management and rendering, use VisualEngine.
 pub fn EngineWith(comptime BackendType: type) type {
     return struct {
         const Self = @This();
         pub const Backend = BackendType;
-
-        /// Input helper for keyboard and mouse input
-        pub const Input = struct {
-            /// Check if a key is currently held down
-            pub fn isDown(key: backend_mod.KeyboardKey) bool {
-                return BackendType.isKeyDown(key);
-            }
-
-            /// Check if a key was pressed this frame
-            pub fn isPressed(key: backend_mod.KeyboardKey) bool {
-                return BackendType.isKeyPressed(key);
-            }
-
-            /// Check if a key was released this frame
-            pub fn isReleased(key: backend_mod.KeyboardKey) bool {
-                return BackendType.isKeyReleased(key);
-            }
-
-            /// Check if a mouse button is currently held down
-            pub fn isMouseDown(button: backend_mod.MouseButton) bool {
-                return BackendType.isMouseButtonDown(button);
-            }
-
-            /// Check if a mouse button was pressed this frame
-            pub fn isMousePressed(button: backend_mod.MouseButton) bool {
-                return BackendType.isMouseButtonPressed(button);
-            }
-
-            /// Get the current mouse position
-            pub fn getMousePosition() BackendType.Vector2 {
-                return BackendType.getMousePosition();
-            }
-
-            /// Get mouse wheel movement this frame
-            pub fn getMouseWheel() f32 {
-                return BackendType.getMouseWheelMove();
-            }
-        };
 
         /// UI helper for drawing text, rectangles, and progress bars
         pub const UI = struct {

@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const gfx = @import("labelle");
+const rl = @import("raylib");
 
 const VisualEngine = gfx.visual_engine.VisualEngine;
 
@@ -70,15 +71,15 @@ pub fn main() !void {
         if (game_hour >= 24.0) game_hour -= 24.0;
 
         // Time controls
-        if (gfx.Engine.Input.isDown(.up)) {
+        if (rl.isKeyDown(.up)) {
             time_speed = @min(10.0, time_speed + 1.0 * dt);
         }
-        if (gfx.Engine.Input.isDown(.down)) {
+        if (rl.isKeyDown(.down)) {
             time_speed = @max(0.1, time_speed - 1.0 * dt);
         }
 
         // Reset fades with R
-        if (gfx.Engine.Input.isPressed(.r)) {
+        if (rl.isKeyPressed(.r)) {
             fade_in.alpha = 0;
             fade_in.target_alpha = 1.0;
             fade_out.alpha = 1.0;
@@ -86,7 +87,7 @@ pub fn main() !void {
         }
 
         // Trigger flash with F
-        if (gfx.Engine.Input.isPressed(.f)) {
+        if (rl.isKeyPressed(.f)) {
             flash.remaining = flash.duration;
             flash_active = true;
         }

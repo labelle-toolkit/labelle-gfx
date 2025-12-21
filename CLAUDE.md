@@ -115,17 +115,22 @@ while (engine.isRunning()) {
 }
 ```
 
-### Input and UI Helpers
+### UI Helpers
 
-The Engine namespace provides static helpers for input and UI:
+The Engine namespace provides static helpers for UI:
 
 ```zig
-// Check keyboard input
-if (gfx.Engine.Input.isDown(.left)) { ... }
-if (gfx.Engine.Input.isPressed(.space)) { ... }
-
 // Draw UI text
 gfx.Engine.UI.text("Hello", .{ .x = 10, .y = 10, .size = 20, .color = gfx.Color.white });
+```
+
+For keyboard/mouse input, use raylib directly:
+
+```zig
+const rl = @import("raylib");
+
+if (rl.isKeyDown(.left)) { ... }
+if (rl.isKeyPressed(.space)) { ... }
 ```
 
 ### Animation System (config-based)

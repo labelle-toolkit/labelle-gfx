@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const gfx = @import("labelle");
+const rl = @import("raylib");
 
 pub fn main() !void {
     // CI test mode - hidden window, auto-screenshot and exit
@@ -93,16 +94,16 @@ pub fn main() !void {
         const dt = gfx.DefaultBackend.getFrameTime();
 
         // Handle input
-        if (gfx.Engine.Input.isDown(.left) or gfx.Engine.Input.isDown(.a)) {
+        if (rl.isKeyDown(.left) or rl.isKeyDown(.a)) {
             camera_x -= camera_speed * dt;
         }
-        if (gfx.Engine.Input.isDown(.right) or gfx.Engine.Input.isDown(.d)) {
+        if (rl.isKeyDown(.right) or rl.isKeyDown(.d)) {
             camera_x += camera_speed * dt;
         }
-        if (gfx.Engine.Input.isDown(.up) or gfx.Engine.Input.isDown(.w)) {
+        if (rl.isKeyDown(.up) or rl.isKeyDown(.w)) {
             camera_y -= camera_speed * dt;
         }
-        if (gfx.Engine.Input.isDown(.down) or gfx.Engine.Input.isDown(.s)) {
+        if (rl.isKeyDown(.down) or rl.isKeyDown(.s)) {
             camera_y += camera_speed * dt;
         }
 
