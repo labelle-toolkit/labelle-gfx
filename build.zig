@@ -50,6 +50,12 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Re-export dependency modules so downstream packages can reuse them
+    // This prevents Zig 0.15's "file exists in multiple modules" error
+    // by allowing downstream packages to use our module references
+    b.modules.put("sdl", sdl) catch @panic("OOM");
+    b.modules.put("raylib", raylib) catch @panic("OOM");
+
     // Static library for linking
     const lib = b.addLibrary(.{
         .linkage = .static,
