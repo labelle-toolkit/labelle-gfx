@@ -23,7 +23,7 @@ A 2D graphics library for Zig games using [raylib](https://www.raylib.com/) for 
 - **Camera System** - Pan, zoom, bounds, and coordinate conversion
 - **Pivot Points** - Configurable anchor points for sprite positioning and rotation
 - **Viewport Culling** - Automatic frustum culling skips off-screen sprites for better performance
-- **Input/UI Helpers** - Static helpers for keyboard input and UI text rendering
+- **UI Helpers** - Static helpers for UI text rendering
 - **Visual Effects** - Fade, temporal fade, flash effects
 - **Z-Index Bucket Optimization** - O(n) rendering via pre-sorted buckets (no per-frame sorting)
 - **Multi-Camera Support** - Split-screen, minimap, and picture-in-picture rendering
