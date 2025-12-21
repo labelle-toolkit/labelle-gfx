@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const gfx = @import("labelle");
+const rl = @import("raylib");
 
 pub fn main() !void {
     // CI test mode - hidden window, auto-screenshot and exit
@@ -62,10 +63,10 @@ pub fn main() !void {
         }
 
         // Handle input
-        if (gfx.Engine.Input.isPressed(.left)) {
+        if (rl.isKeyPressed(.left)) {
             if (selected_atlas > 0) selected_atlas -= 1;
         }
-        if (gfx.Engine.Input.isPressed(.right)) {
+        if (rl.isKeyPressed(.right)) {
             if (selected_atlas < demo_atlases.len - 1) selected_atlas += 1;
         }
 

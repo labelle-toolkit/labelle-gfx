@@ -5,12 +5,13 @@
 //! - Creating and updating animations with custom animation types
 //! - Animation types and transitions
 //! - Frame-based sprite animation
-//! - Using Engine.Input for keyboard handling
+//! - Using raylib for keyboard handling
 //!
 //! Run with: zig build run-example-02
 
 const std = @import("std");
 const gfx = @import("labelle");
+const rl = @import("raylib");
 
 // Define animation types for this example with config
 const AnimType = enum {
@@ -69,20 +70,20 @@ pub fn main() !void {
         }
         const dt = engine.getDeltaTime();
 
-        // Handle input for animation switching using Engine.Input
-        if (gfx.Engine.Input.isPressed(.one)) {
+        // Handle input for animation switching
+        if (rl.isKeyPressed(.one)) {
             current_type = .idle;
             animation.play(.idle);
         }
-        if (gfx.Engine.Input.isPressed(.two)) {
+        if (rl.isKeyPressed(.two)) {
             current_type = .walk;
             animation.play(.walk);
         }
-        if (gfx.Engine.Input.isPressed(.three)) {
+        if (rl.isKeyPressed(.three)) {
             current_type = .run;
             animation.play(.run);
         }
-        if (gfx.Engine.Input.isPressed(.four)) {
+        if (rl.isKeyPressed(.four)) {
             current_type = .jump;
             animation.play(.jump);
         }

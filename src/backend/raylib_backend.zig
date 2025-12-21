@@ -167,43 +167,6 @@ pub const RaylibBackend = struct {
         rl.clearBackground(col);
     }
 
-    // Input functions
-
-    /// Check if key is down
-    pub fn isKeyDown(key: backend.KeyboardKey) bool {
-        return rl.isKeyDown(@enumFromInt(@intFromEnum(key)));
-    }
-
-    /// Check if key was pressed this frame
-    pub fn isKeyPressed(key: backend.KeyboardKey) bool {
-        return rl.isKeyPressed(@enumFromInt(@intFromEnum(key)));
-    }
-
-    /// Check if key was released this frame
-    pub fn isKeyReleased(key: backend.KeyboardKey) bool {
-        return rl.isKeyReleased(@enumFromInt(@intFromEnum(key)));
-    }
-
-    /// Check if mouse button is down
-    pub fn isMouseButtonDown(button: backend.MouseButton) bool {
-        return rl.isMouseButtonDown(@enumFromInt(@intFromEnum(button)));
-    }
-
-    /// Check if mouse button was pressed
-    pub fn isMouseButtonPressed(button: backend.MouseButton) bool {
-        return rl.isMouseButtonPressed(@enumFromInt(@intFromEnum(button)));
-    }
-
-    /// Get mouse position
-    pub fn getMousePosition() Vector2 {
-        return rl.getMousePosition();
-    }
-
-    /// Get mouse wheel movement
-    pub fn getMouseWheelMove() f32 {
-        return rl.getMouseWheelMove();
-    }
-
     // UI/Drawing functions
 
     /// Draw text

@@ -66,8 +66,6 @@ pub const log = @import("log.zig");
 pub const backend = @import("backend/backend.zig");
 pub const Backend = backend.Backend;
 pub const BackendError = backend.BackendError;
-pub const KeyboardKey = backend.KeyboardKey;
-pub const MouseButton = backend.MouseButton;
 pub const ConfigFlags = backend.ConfigFlags;
 
 // Backend implementations
@@ -83,7 +81,7 @@ pub const SdlBackend = sdl_backend.SdlBackend;
 // Default backend (raylib)
 pub const DefaultBackend = Backend(RaylibBackend);
 
-// Engine API (provides Input and UI helpers)
+// Engine API (provides UI helpers)
 const engine_mod = @import("engine/engine.zig");
 pub const Engine = engine_mod.Engine;
 pub const EngineWith = engine_mod.EngineWith;
