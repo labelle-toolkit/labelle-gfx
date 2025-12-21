@@ -1,7 +1,7 @@
 .{
-    .name = .@"labelle-gfx",
+    .name = .labelle_gfx,
     .version = "0.15.0",
-    .fingerprint = 0x48858534228fb5d9,
+    .fingerprint = 0x348f3b5370979d59,
     .minimum_zig_version = "0.15.1",
 
     .dependencies = .{
