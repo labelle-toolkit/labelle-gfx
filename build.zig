@@ -92,6 +92,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "15_shapes", .path = "examples/15_shapes/main.zig", .desc = "Shape primitives (circle, rect, line, triangle, polygon)" },
         .{ .name = "16_retained_engine", .path = "examples/16_retained_engine.zig", .desc = "Retained mode rendering with EntityId-based API" },
         .{ .name = "18_multi_camera", .path = "examples/18_multi_camera.zig", .desc = "Multi-camera support for split-screen and minimap" },
+        .{ .name = "19_layers", .path = "examples/19_layers.zig", .desc = "Canvas/Layer system for organized rendering passes" },
     };
 
     // Example 12: Comptime animations (needs .zon imports)
