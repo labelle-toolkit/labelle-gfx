@@ -201,7 +201,12 @@ pub fn LayerMask(comptime LayerEnum: type) type {
         /// Initialize with all layers enabled
         pub fn all() Self {
             // Only set bits for existing layers, not the entire integer
-            const mask: MaskInt = (@as(MaskInt, 1) << @intCast(count)) - 1;
+            // Special case: when count equals the bit width, shifting would overflow
+            const bits = @bitSizeOf(MaskInt);
+            const mask: MaskInt = if (count == bits)
+                ~@as(MaskInt, 0)
+            else
+                (@as(MaskInt, 1) << @intCast(count)) - 1;
             return .{ .mask = mask };
         }
 
