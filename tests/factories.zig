@@ -66,6 +66,8 @@ pub const SpriteVisualFactory = Factory.define(SpriteVisual, .{
     .pivot_x = 0.5,
     .pivot_y = 0.5,
     .layer = .world,
+    .size_mode = .none,
+    .container = null,
 });
 
 /// Factory for creating circle ShapeVisual with sensible defaults
@@ -133,6 +135,8 @@ pub fn spriteVisual() SpriteVisual {
         .pivot_x = 0.5,
         .pivot_y = 0.5,
         .layer = .world,
+        .size_mode = .none,
+        .container = null,
     };
 }
 

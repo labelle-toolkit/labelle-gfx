@@ -55,6 +55,8 @@ pub const FontId = types.FontId;
 pub const Position = types.Position;
 pub const Pivot = types.Pivot;
 pub const Color = types.Color;
+pub const SizeMode = types.SizeMode;
+pub const Container = types.Container;
 
 // Re-export config types
 pub const WindowConfig = config.WindowConfig;
@@ -247,6 +249,10 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             pivot_x: f32 = 0.5,
             pivot_y: f32 = 0.5,
             layer: LayerEnum = getDefaultLayer(),
+            /// Sizing mode for container-based rendering
+            size_mode: SizeMode = .none,
+            /// Container dimensions (null = infer from layer space)
+            container: ?Container = null,
         };
 
         /// Shape visual data
@@ -1001,38 +1007,209 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             if (visual.sprite_name.len > 0) {
                 if (self.texture_manager.findSprite(visual.sprite_name)) |result| {
                     const sprite = result.sprite;
+                    const sprite_w: f32 = @floatFromInt(sprite.width);
+                    const sprite_h: f32 = @floatFromInt(sprite.height);
+
                     const src_rect = BackendType.Rectangle{
                         .x = @floatFromInt(sprite.x),
                         .y = @floatFromInt(sprite.y),
-                        .width = if (visual.flip_x) -@as(f32, @floatFromInt(sprite.width)) else @as(f32, @floatFromInt(sprite.width)),
-                        .height = if (visual.flip_y) -@as(f32, @floatFromInt(sprite.height)) else @as(f32, @floatFromInt(sprite.height)),
+                        .width = if (visual.flip_x) -sprite_w else sprite_w,
+                        .height = if (visual.flip_y) -sprite_h else sprite_h,
                     };
 
-                    const scaled_width = @as(f32, @floatFromInt(sprite.width)) * visual.scale;
-                    const scaled_height = @as(f32, @floatFromInt(sprite.height)) * visual.scale;
+                    // Handle sizing modes
+                    if (visual.size_mode == .none) {
+                        // Default behavior: use scale
+                        const scaled_width = sprite_w * visual.scale;
+                        const scaled_height = sprite_h * visual.scale;
 
+                        const dest_rect = BackendType.Rectangle{
+                            .x = pos.x,
+                            .y = pos.y,
+                            .width = scaled_width,
+                            .height = scaled_height,
+                        };
+
+                        const pivot_origin = visual.pivot.getOrigin(scaled_width, scaled_height, visual.pivot_x, visual.pivot_y);
+                        const origin = BackendType.Vector2{
+                            .x = pivot_origin.x,
+                            .y = pivot_origin.y,
+                        };
+
+                        BackendType.drawTexturePro(
+                            result.atlas.texture,
+                            src_rect,
+                            dest_rect,
+                            origin,
+                            visual.rotation,
+                            tint,
+                        );
+                    } else {
+                        // Sized mode: resolve container
+                        const container = resolveContainer(visual, sprite_w, sprite_h);
+                        renderSizedSprite(result, visual, pos, src_rect, sprite_w, sprite_h, container, tint);
+                    }
+                }
+            }
+        }
+
+        fn resolveContainer(visual: SpriteVisual, sprite_w: f32, sprite_h: f32) Container {
+            if (visual.container) |c| {
+                if (c.isScreen()) {
+                    return Container{
+                        .width = @floatFromInt(BackendType.getScreenWidth()),
+                        .height = @floatFromInt(BackendType.getScreenHeight()),
+                    };
+                }
+                return c;
+            }
+            // No explicit container: use screen for screen-space layers
+            const layer_cfg = visual.layer.config();
+            if (layer_cfg.space == .screen) {
+                return Container{
+                    .width = @floatFromInt(BackendType.getScreenWidth()),
+                    .height = @floatFromInt(BackendType.getScreenHeight()),
+                };
+            }
+            // World-space with no container: fallback to sprite's natural size
+            return Container{ .width = sprite_w, .height = sprite_h };
+        }
+
+        fn renderSizedSprite(
+            result: anytype,
+            visual: SpriteVisual,
+            pos: Position,
+            src_rect: BackendType.Rectangle,
+            sprite_w: f32,
+            sprite_h: f32,
+            container: Container,
+            tint: BackendType.Color,
+        ) void {
+            const cont_w = container.width;
+            const cont_h = container.height;
+
+            // Guard against division by zero from invalid sprite dimensions
+            if (sprite_w <= 0 or sprite_h <= 0) {
+                log.warn("Skipping sized sprite render: invalid sprite dimensions ({d}x{d})", .{ sprite_w, sprite_h });
+                return;
+            }
+
+            switch (visual.size_mode) {
+                .none => unreachable, // Handled above
+                // Note: stretch, cover, contain, scale_down modes ignore visual.scale field
+                // (scale is determined by container/sprite ratio). Only repeat uses visual.scale.
+                .stretch => {
+                    // Fill container exactly (may distort)
                     const dest_rect = BackendType.Rectangle{
                         .x = pos.x,
                         .y = pos.y,
-                        .width = scaled_width,
-                        .height = scaled_height,
+                        .width = cont_w,
+                        .height = cont_h,
                     };
+                    const pivot_origin = visual.pivot.getOrigin(cont_w, cont_h, visual.pivot_x, visual.pivot_y);
+                    const origin = BackendType.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
+                    BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
+                },
+                .cover => {
+                    // Scale to cover container (may overflow)
+                    const scale_x = cont_w / sprite_w;
+                    const scale_y = cont_h / sprite_h;
+                    const scale = @max(scale_x, scale_y);
+                    const dest_w = sprite_w * scale;
+                    const dest_h = sprite_h * scale;
 
-                    const pivot_origin = visual.pivot.getOrigin(scaled_width, scaled_height, visual.pivot_x, visual.pivot_y);
-                    const origin = BackendType.Vector2{
-                        .x = pivot_origin.x,
-                        .y = pivot_origin.y,
+                    // Offset to align the sprite's pivot within the container based on size difference
+                    // pivot_x=0.5 (center) gives offset=0, aligning centers
+                    const diff_w = cont_w - dest_w;
+                    const diff_h = cont_h - dest_h;
+                    const offset_x = diff_w * (visual.pivot_x - 0.5);
+                    const offset_y = diff_h * (visual.pivot_y - 0.5);
+
+                    const dest_rect = BackendType.Rectangle{
+                        .x = pos.x - offset_x,
+                        .y = pos.y - offset_y,
+                        .width = dest_w,
+                        .height = dest_h,
                     };
+                    const pivot_origin = visual.pivot.getOrigin(dest_w, dest_h, visual.pivot_x, visual.pivot_y);
+                    const origin = BackendType.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
+                    BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
+                },
+                .contain, .scale_down => {
+                    // Scale to fit inside container (letterboxed)
+                    const scale_x = cont_w / sprite_w;
+                    const scale_y = cont_h / sprite_h;
+                    var scale = @min(scale_x, scale_y);
 
-                    BackendType.drawTexturePro(
-                        result.atlas.texture,
-                        src_rect,
-                        dest_rect,
-                        origin,
-                        visual.rotation,
-                        tint,
-                    );
-                }
+                    // scale_down: never scale up
+                    if (visual.size_mode == .scale_down) {
+                        scale = @min(scale, 1.0);
+                    }
+
+                    const dest_w = sprite_w * scale;
+                    const dest_h = sprite_h * scale;
+
+                    // Pivot determines where sprite sits in letterboxed area
+                    // pivot_x=0.5 (center) gives offset=0, centering in letterbox
+                    const padding_x = cont_w - dest_w;
+                    const padding_y = cont_h - dest_h;
+                    const offset_x = padding_x * (visual.pivot_x - 0.5);
+                    const offset_y = padding_y * (visual.pivot_y - 0.5);
+
+                    const dest_rect = BackendType.Rectangle{
+                        .x = pos.x + offset_x,
+                        .y = pos.y + offset_y,
+                        .width = dest_w,
+                        .height = dest_h,
+                    };
+                    const pivot_origin = visual.pivot.getOrigin(dest_w, dest_h, visual.pivot_x, visual.pivot_y);
+                    const origin = BackendType.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
+                    BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
+                },
+                .repeat => {
+                    // Tile sprite to fill container
+                    // Note: rotation applies per-tile, not to the tiled grid as a whole
+                    const scaled_w = sprite_w * visual.scale;
+                    const scaled_h = sprite_h * visual.scale;
+
+                    if (scaled_w <= 0 or scaled_h <= 0) {
+                        log.warn("Skipping repeat render: non-positive tile dimensions ({d}x{d})", .{ scaled_w, scaled_h });
+                        return;
+                    }
+
+                    // Calculate container's top-left based on pos and pivot
+                    // This makes repeat mode consistent with other sizing modes
+                    const container_tl_x = pos.x - cont_w * visual.pivot_x;
+                    const container_tl_y = pos.y - cont_h * visual.pivot_y;
+
+                    const cols = @as(u32, @intFromFloat(@ceil(cont_w / scaled_w)));
+                    const rows = @as(u32, @intFromFloat(@ceil(cont_h / scaled_h)));
+
+                    // Limit tile count to prevent performance issues or overflow
+                    const max_tiles: u32 = 10000;
+                    if (cols * rows > max_tiles) {
+                        log.warn("Repeat tile count ({d}x{d}={d}) exceeds limit ({d}), skipping", .{ cols, rows, cols * rows, max_tiles });
+                        return;
+                    }
+
+                    var row: u32 = 0;
+                    while (row < rows) : (row += 1) {
+                        var col: u32 = 0;
+                        while (col < cols) : (col += 1) {
+                            const tile_x = container_tl_x + @as(f32, @floatFromInt(col)) * scaled_w;
+                            const tile_y = container_tl_y + @as(f32, @floatFromInt(row)) * scaled_h;
+
+                            const dest_rect = BackendType.Rectangle{
+                                .x = tile_x,
+                                .y = tile_y,
+                                .width = scaled_w,
+                                .height = scaled_h,
+                            };
+                            const origin = BackendType.Vector2{ .x = 0, .y = 0 };
+                            BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
+                        }
+                    }
+                },
             }
         }
 

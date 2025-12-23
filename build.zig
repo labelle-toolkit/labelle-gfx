@@ -93,6 +93,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "16_retained_engine", .path = "examples/16_retained_engine.zig", .desc = "Retained mode rendering with EntityId-based API" },
         .{ .name = "18_multi_camera", .path = "examples/18_multi_camera.zig", .desc = "Multi-camera support for split-screen and minimap" },
         .{ .name = "19_layers", .path = "examples/19_layers.zig", .desc = "Canvas/Layer system for organized rendering passes" },
+        .{ .name = "20_sprite_sizing", .path = "examples/20_sprite_sizing.zig", .desc = "Container-based sprite sizing (stretch, cover, contain, repeat)" },
     };
 
     // Example 12: Comptime animations (needs .zon imports)
