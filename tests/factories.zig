@@ -17,6 +17,8 @@ const MockBackend = gfx.mock_backend.MockBackend;
 const MockEngine = gfx.RetainedEngineWith(gfx.Backend(MockBackend), gfx.DefaultLayers);
 
 pub const EntityId = gfx.EntityId;
+pub const TextureId = gfx.retained_engine.TextureId;
+pub const FontId = gfx.retained_engine.FontId;
 pub const Position = gfx.retained_engine.Position;
 pub const Color = gfx.retained_engine.Color;
 pub const SpriteVisual = MockEngine.SpriteVisual;
@@ -43,6 +45,58 @@ pub const ColorFactory = Factory.define(Color, .{
     .g = 255,
     .b = 255,
     .a = 255,
+});
+
+// ============================================================================
+// Visual Factories (with union support from zspec v0.4.0)
+// ============================================================================
+
+/// Factory for creating SpriteVisual with sensible defaults
+pub const SpriteVisualFactory = Factory.define(SpriteVisual, .{
+    .texture = .invalid,
+    .sprite_name = "test_sprite",
+    .scale = 1.0,
+    .rotation = 0,
+    .tint = Color.white,
+    .z_index = 128,
+    .flip_x = false,
+    .flip_y = false,
+    .visible = true,
+    .pivot = .center,
+    .pivot_x = 0.5,
+    .pivot_y = 0.5,
+    .layer = .world,
+});
+
+/// Factory for creating circle ShapeVisual with sensible defaults
+pub const CircleShapeFactory = Factory.define(ShapeVisual, .{
+    .shape = .{ .circle = .{ .radius = 50 } },
+    .color = Color.white,
+    .z_index = 128,
+    .rotation = 0,
+    .visible = true,
+    .layer = .world,
+});
+
+/// Factory for creating rectangle ShapeVisual with sensible defaults
+pub const RectangleShapeFactory = Factory.define(ShapeVisual, .{
+    .shape = .{ .rectangle = .{ .width = 100, .height = 50 } },
+    .color = Color.white,
+    .z_index = 128,
+    .rotation = 0,
+    .visible = true,
+    .layer = .world,
+});
+
+/// Factory for creating TextVisual with sensible defaults
+pub const TextVisualFactory = Factory.define(TextVisual, .{
+    .font = .invalid,
+    .text = "Test",
+    .size = 16,
+    .color = Color.white,
+    .z_index = 128,
+    .visible = true,
+    .layer = .world,
 });
 
 // ============================================================================
@@ -249,5 +303,58 @@ pub const FactoryTests = struct {
     test "textVisualWithText creates text with custom content" {
         const text = textVisualWithText("Hello World");
         try expect.toBeTrue(std.mem.eql(u8, text.text, "Hello World"));
+    }
+
+    // Factory-based tests (using zspec v0.4.0 union support)
+
+    test "SpriteVisualFactory creates sprite with defaults" {
+        const sprite = SpriteVisualFactory.build(.{});
+        try expect.toBeTrue(std.mem.eql(u8, sprite.sprite_name, "test_sprite"));
+        try expect.equal(@as(f32, 1.0), sprite.scale);
+        try expect.equal(@as(u8, 128), sprite.z_index);
+    }
+
+    test "SpriteVisualFactory allows overriding fields" {
+        const sprite = SpriteVisualFactory.build(.{ .sprite_name = "player", .scale = 2.0 });
+        try expect.toBeTrue(std.mem.eql(u8, sprite.sprite_name, "player"));
+        try expect.equal(@as(f32, 2.0), sprite.scale);
+    }
+
+    test "CircleShapeFactory creates circle with defaults" {
+        const shape = CircleShapeFactory.build(.{});
+        switch (shape.shape) {
+            .circle => |circle| {
+                try expect.equal(@as(f32, 50), circle.radius);
+            },
+            else => return error.UnexpectedShape,
+        }
+        try expect.equal(@as(u8, 128), shape.z_index);
+    }
+
+    test "CircleShapeFactory allows overriding z_index" {
+        const shape = CircleShapeFactory.build(.{ .z_index = 200 });
+        try expect.equal(@as(u8, 200), shape.z_index);
+    }
+
+    test "RectangleShapeFactory creates rectangle with defaults" {
+        const shape = RectangleShapeFactory.build(.{});
+        switch (shape.shape) {
+            .rectangle => |rect| {
+                try expect.equal(@as(f32, 100), rect.width);
+                try expect.equal(@as(f32, 50), rect.height);
+            },
+            else => return error.UnexpectedShape,
+        }
+    }
+
+    test "TextVisualFactory creates text with defaults" {
+        const text = TextVisualFactory.build(.{});
+        try expect.toBeTrue(std.mem.eql(u8, text.text, "Test"));
+        try expect.equal(@as(f32, 16), text.size);
+    }
+
+    test "TextVisualFactory allows overriding text" {
+        const text = TextVisualFactory.build(.{ .text = "Custom" });
+        try expect.toBeTrue(std.mem.eql(u8, text.text, "Custom"));
     }
 };
