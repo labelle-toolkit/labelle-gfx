@@ -1229,10 +1229,12 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     const total_cols: u32 = @intFromFloat(cols_float);
                     const total_rows: u32 = @intFromFloat(rows_float);
 
-                    // Limit tile count to prevent performance issues or overflow
-                    const max_tiles: u32 = 10000;
-                    if (total_cols * total_rows > max_tiles) {
-                        log.warn("Repeat tile count ({d}x{d}={d}) exceeds limit ({d}), skipping", .{ total_cols, total_rows, total_cols * total_rows, max_tiles });
+                    // Limit tile count to prevent performance issues
+                    // Use u64 to prevent overflow in multiplication
+                    const max_tiles: u64 = 10000;
+                    const tile_count = @as(u64, total_cols) * @as(u64, total_rows);
+                    if (tile_count > max_tiles) {
+                        log.warn("Repeat tile count ({d}x{d}={d}) exceeds limit ({d}), skipping", .{ total_cols, total_rows, tile_count, max_tiles });
                         return;
                     }
 
