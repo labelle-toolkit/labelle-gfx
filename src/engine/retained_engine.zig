@@ -83,6 +83,9 @@ const ZBuckets = z_buckets.ZBuckets;
 const RenderItem = z_buckets.RenderItem;
 const RenderItemType = z_buckets.RenderItemType;
 
+// Visual storage
+const visual_storage = @import("visual_storage.zig");
+
 // ============================================
 // Retained Engine
 // ============================================
@@ -214,6 +217,14 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         };
 
         // ============================================
+        // Storage Types (via generic VisualStorage)
+        // ============================================
+
+        const SpriteStorage = visual_storage.VisualStorage(SpriteVisual, .sprite);
+        const ShapeStorage = visual_storage.VisualStorage(ShapeVisual, .shape);
+        const TextStorage = visual_storage.VisualStorage(TextVisual, .text);
+
+        // ============================================
         // Engine State
         // ============================================
 
@@ -223,10 +234,10 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         camera_manager: CameraManager,
         multi_camera_enabled: bool,
 
-        // Internal storage - keyed by EntityId
-        sprites: std.AutoArrayHashMap(EntityId, SpriteEntry),
-        shapes: std.AutoArrayHashMap(EntityId, ShapeEntry),
-        texts: std.AutoArrayHashMap(EntityId, TextEntry),
+        // Internal storage - using generic VisualStorage
+        sprites: SpriteStorage,
+        shapes: ShapeStorage,
+        texts: TextStorage,
 
         // Per-layer z-index bucket storage
         layer_buckets: [layer_count]ZBuckets,
@@ -246,21 +257,6 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
 
         // Texture ID counter
         next_texture_id: u32,
-
-        const SpriteEntry = struct {
-            visual: SpriteVisual,
-            position: Position,
-        };
-
-        const ShapeEntry = struct {
-            visual: ShapeVisual,
-            position: Position,
-        };
-
-        const TextEntry = struct {
-            visual: TextVisual,
-            position: Position,
-        };
 
         // ==================== Lifecycle ====================
 
@@ -300,9 +296,9 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                 .camera = Camera.init(),
                 .camera_manager = CameraManager.init(),
                 .multi_camera_enabled = false,
-                .sprites = std.AutoArrayHashMap(EntityId, SpriteEntry).init(allocator),
-                .shapes = std.AutoArrayHashMap(EntityId, ShapeEntry).init(allocator),
-                .texts = std.AutoArrayHashMap(EntityId, TextEntry).init(allocator),
+                .sprites = SpriteStorage.init(allocator),
+                .shapes = ShapeStorage.init(allocator),
+                .texts = TextStorage.init(allocator),
                 .layer_buckets = layer_buckets,
                 .layer_visibility = layer_visibility,
                 .camera_layer_masks = camera_layer_masks,
@@ -386,225 +382,70 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         // ==================== Sprite Management ====================
 
         pub fn createSprite(self: *Self, id: EntityId, visual: SpriteVisual, pos: Position) void {
-            // If sprite already exists, remove old bucket entry first to prevent duplicates
-            if (self.sprites.get(id)) |existing| {
-                const old_layer_idx = @intFromEnum(existing.visual.layer);
-                _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, existing.visual.z_index);
-            }
-
-            self.sprites.put(id, .{ .visual = visual, .position = pos }) catch return;
-            const layer_idx = @intFromEnum(visual.layer);
-            self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch {
-                // Bucket insert failed - remove map entry to maintain consistency
-                _ = self.sprites.swapRemove(id);
-                return;
-            };
+            self.sprites.create(id, visual, pos, &self.layer_buckets);
         }
 
         pub fn updateSprite(self: *Self, id: EntityId, visual: SpriteVisual) void {
-            if (self.sprites.getPtr(id)) |entry| {
-                const old_z = entry.visual.z_index;
-                const old_layer = entry.visual.layer;
-
-                if (old_layer != visual.layer) {
-                    // Layer change: remove from old bucket, insert into new, then update visual
-                    const old_layer_idx = @intFromEnum(old_layer);
-                    const new_layer_idx = @intFromEnum(visual.layer);
-                    _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, old_z);
-                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch {
-                        // Rollback: re-insert into old bucket to maintain consistency
-                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, old_z) catch {
-                            log.err("Failed to rollback sprite layer change for entity {}", .{id.toInt()});
-                        };
-                        return;
-                    };
-                    entry.visual = visual;
-                } else if (old_z != visual.z_index) {
-                    const layer_idx = @intFromEnum(visual.layer);
-                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .sprite }, old_z, visual.z_index) catch |err| {
-                        log.err("Failed to change sprite z-index for entity {}: {}", .{ id.toInt(), err });
-                        return;
-                    };
-                    entry.visual = visual;
-                } else {
-                    // No bucket changes needed, just update visual
-                    entry.visual = visual;
-                }
-            }
+            self.sprites.update(id, visual, &self.layer_buckets);
         }
 
         pub fn destroySprite(self: *Self, id: EntityId) void {
-            if (self.sprites.get(id)) |entry| {
-                const layer_idx = @intFromEnum(entry.visual.layer);
-                _ = self.layer_buckets[layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, entry.visual.z_index);
-            }
-            _ = self.sprites.swapRemove(id);
+            self.sprites.destroy(id, &self.layer_buckets);
         }
 
         pub fn getSprite(self: *const Self, id: EntityId) ?SpriteVisual {
-            if (self.sprites.get(id)) |entry| {
-                return entry.visual;
-            }
-            return null;
+            return self.sprites.get(id);
         }
 
         // ==================== Shape Management ====================
 
         pub fn createShape(self: *Self, id: EntityId, visual: ShapeVisual, pos: Position) void {
-            // If shape already exists, remove old bucket entry first to prevent duplicates
-            if (self.shapes.get(id)) |existing| {
-                const old_layer_idx = @intFromEnum(existing.visual.layer);
-                _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, existing.visual.z_index);
-            }
-
-            self.shapes.put(id, .{ .visual = visual, .position = pos }) catch return;
-            const layer_idx = @intFromEnum(visual.layer);
-            self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch {
-                // Bucket insert failed - remove map entry to maintain consistency
-                _ = self.shapes.swapRemove(id);
-                return;
-            };
+            self.shapes.create(id, visual, pos, &self.layer_buckets);
         }
 
         pub fn updateShape(self: *Self, id: EntityId, visual: ShapeVisual) void {
-            if (self.shapes.getPtr(id)) |entry| {
-                const old_z = entry.visual.z_index;
-                const old_layer = entry.visual.layer;
-
-                if (old_layer != visual.layer) {
-                    // Layer change: remove from old bucket, insert into new, then update visual
-                    const old_layer_idx = @intFromEnum(old_layer);
-                    const new_layer_idx = @intFromEnum(visual.layer);
-                    _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, old_z);
-                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch {
-                        // Rollback: re-insert into old bucket to maintain consistency
-                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, old_z) catch {
-                            log.err("Failed to rollback shape layer change for entity {}", .{id.toInt()});
-                        };
-                        return;
-                    };
-                    entry.visual = visual;
-                } else if (old_z != visual.z_index) {
-                    const layer_idx = @intFromEnum(visual.layer);
-                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .shape }, old_z, visual.z_index) catch |err| {
-                        log.err("Failed to change shape z-index for entity {}: {}", .{ id.toInt(), err });
-                        return;
-                    };
-                    entry.visual = visual;
-                } else {
-                    // No bucket changes needed, just update visual
-                    entry.visual = visual;
-                }
-            }
+            self.shapes.update(id, visual, &self.layer_buckets);
         }
 
         pub fn destroyShape(self: *Self, id: EntityId) void {
-            if (self.shapes.get(id)) |entry| {
-                const layer_idx = @intFromEnum(entry.visual.layer);
-                _ = self.layer_buckets[layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, entry.visual.z_index);
-            }
-            _ = self.shapes.swapRemove(id);
+            self.shapes.destroy(id, &self.layer_buckets);
         }
 
         pub fn getShape(self: *const Self, id: EntityId) ?ShapeVisual {
-            if (self.shapes.get(id)) |entry| {
-                return entry.visual;
-            }
-            return null;
+            return self.shapes.get(id);
         }
 
         // ==================== Text Management ====================
 
         pub fn createText(self: *Self, id: EntityId, visual: TextVisual, pos: Position) void {
-            // If text already exists, remove old bucket entry first to prevent duplicates
-            if (self.texts.get(id)) |existing| {
-                const old_layer_idx = @intFromEnum(existing.visual.layer);
-                _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .text }, existing.visual.z_index);
-            }
-
-            self.texts.put(id, .{ .visual = visual, .position = pos }) catch return;
-            const layer_idx = @intFromEnum(visual.layer);
-            self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch {
-                // Bucket insert failed - remove map entry to maintain consistency
-                _ = self.texts.swapRemove(id);
-                return;
-            };
+            self.texts.create(id, visual, pos, &self.layer_buckets);
         }
 
         pub fn updateText(self: *Self, id: EntityId, visual: TextVisual) void {
-            if (self.texts.getPtr(id)) |entry| {
-                const old_z = entry.visual.z_index;
-                const old_layer = entry.visual.layer;
-
-                if (old_layer != visual.layer) {
-                    // Layer change: remove from old bucket, insert into new, then update visual
-                    const old_layer_idx = @intFromEnum(old_layer);
-                    const new_layer_idx = @intFromEnum(visual.layer);
-                    _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .text }, old_z);
-                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch {
-                        // Rollback: re-insert into old bucket to maintain consistency
-                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, old_z) catch {
-                            log.err("Failed to rollback text layer change for entity {}", .{id.toInt()});
-                        };
-                        return;
-                    };
-                    entry.visual = visual;
-                } else if (old_z != visual.z_index) {
-                    const layer_idx = @intFromEnum(visual.layer);
-                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .text }, old_z, visual.z_index) catch |err| {
-                        log.err("Failed to change text z-index for entity {}: {}", .{ id.toInt(), err });
-                        return;
-                    };
-                    entry.visual = visual;
-                } else {
-                    // No bucket changes needed, just update visual
-                    entry.visual = visual;
-                }
-            }
+            self.texts.update(id, visual, &self.layer_buckets);
         }
 
         pub fn destroyText(self: *Self, id: EntityId) void {
-            if (self.texts.get(id)) |entry| {
-                const layer_idx = @intFromEnum(entry.visual.layer);
-                _ = self.layer_buckets[layer_idx].remove(.{ .entity_id = id, .item_type = .text }, entry.visual.z_index);
-            }
-            _ = self.texts.swapRemove(id);
+            self.texts.destroy(id, &self.layer_buckets);
         }
 
         pub fn getText(self: *const Self, id: EntityId) ?TextVisual {
-            if (self.texts.get(id)) |entry| {
-                return entry.visual;
-            }
-            return null;
+            return self.texts.get(id);
         }
 
         // ==================== Position Management ====================
 
         pub fn updatePosition(self: *Self, id: EntityId, pos: Position) void {
-            if (self.sprites.getPtr(id)) |entry| {
-                entry.position = pos;
-                return;
-            }
-            if (self.shapes.getPtr(id)) |entry| {
-                entry.position = pos;
-                return;
-            }
-            if (self.texts.getPtr(id)) |entry| {
-                entry.position = pos;
-                return;
-            }
+            // Try each storage type
+            self.sprites.updatePosition(id, pos);
+            self.shapes.updatePosition(id, pos);
+            self.texts.updatePosition(id, pos);
         }
 
         pub fn getPosition(self: *const Self, id: EntityId) ?Position {
-            if (self.sprites.get(id)) |entry| {
-                return entry.position;
-            }
-            if (self.shapes.get(id)) |entry| {
-                return entry.position;
-            }
-            if (self.texts.get(id)) |entry| {
-                return entry.position;
-            }
+            if (self.sprites.getPosition(id)) |pos| return pos;
+            if (self.shapes.getPosition(id)) |pos| return pos;
+            if (self.texts.getPosition(id)) |pos| return pos;
             return null;
         }
 
@@ -780,7 +621,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         }
 
         fn shouldRenderSpriteInViewport(self: *Self, id: EntityId, viewport: Camera.ViewportRect) bool {
-            const entry = self.sprites.get(id) orelse return false;
+            const entry = self.sprites.getEntryConst(id) orelse return false;
             const visual = entry.visual;
             const pos = entry.position;
 
@@ -802,7 +643,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         const ShapeBounds = struct { x: f32, y: f32, w: f32, h: f32 };
 
         fn shouldRenderShapeInViewport(self: *const Self, id: EntityId, viewport: Camera.ViewportRect) bool {
-            const entry = self.shapes.get(id) orelse return false;
+            const entry = self.shapes.getEntryConst(id) orelse return false;
             const visual = entry.visual;
             const pos = entry.position;
 
@@ -844,9 +685,9 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
 
         fn isVisible(self: *const Self, item: RenderItem) bool {
             return switch (item.item_type) {
-                .sprite => if (self.sprites.get(item.entity_id)) |e| e.visual.visible else false,
-                .shape => if (self.shapes.get(item.entity_id)) |e| e.visual.visible else false,
-                .text => if (self.texts.get(item.entity_id)) |e| e.visual.visible else false,
+                .sprite => if (self.sprites.get(item.entity_id)) |v| v.visible else false,
+                .shape => if (self.shapes.get(item.entity_id)) |v| v.visible else false,
+                .text => if (self.texts.get(item.entity_id)) |v| v.visible else false,
             };
         }
 
@@ -892,7 +733,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         }
 
         fn renderSprite(self: *Self, id: EntityId) void {
-            const entry = self.sprites.get(id) orelse return;
+            const entry = self.sprites.getEntryConst(id) orelse return;
             const visual = entry.visual;
             const pos = entry.position;
 
@@ -1183,7 +1024,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         }
 
         fn renderShape(self: *Self, id: EntityId) void {
-            const entry = self.shapes.get(id) orelse return;
+            const entry = self.shapes.getEntryConst(id) orelse return;
             const visual = entry.visual;
             const pos = entry.position;
 
@@ -1229,7 +1070,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         }
 
         fn renderText(self: *Self, id: EntityId) void {
-            const entry = self.texts.get(id) orelse return;
+            const entry = self.texts.getEntryConst(id) orelse return;
             const visual = entry.visual;
             const pos = entry.position;
 
