@@ -191,6 +191,8 @@ pub const RetainedEngineWith = retained_engine.RetainedEngineWith;
 pub const EntityId = retained_engine.EntityId;
 pub const TextureId = retained_engine.TextureId;
 pub const FontId = retained_engine.FontId;
+pub const SizeMode = retained_engine.SizeMode;
+pub const Container = retained_engine.Container;
 
 // Re-export layer types at top level
 pub const LayerConfig = layer.LayerConfig;

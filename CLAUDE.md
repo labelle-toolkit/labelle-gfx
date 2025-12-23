@@ -297,6 +297,80 @@ Available pivot presets:
 - `bottom_left`, `bottom_center`, `bottom_right` - Bottom edge
 - `custom` - Use `pivot_x`, `pivot_y` values (0.0-1.0)
 
+### Sprite Sizing Modes
+
+Container-based sprite sizing similar to CSS `background-size`. Useful for fullscreen backgrounds, UI panels, and tiled patterns:
+
+```zig
+const gfx = @import("labelle");
+const RetainedEngine = gfx.RetainedEngine;
+const EntityId = gfx.EntityId;
+const SizeMode = gfx.SizeMode;
+const Container = gfx.Container;
+
+// STRETCH: Fill container exactly (may distort aspect ratio)
+engine.createSprite(EntityId.from(1), .{
+    .sprite_name = "background",
+    .size_mode = .stretch,
+    .container = .{ .width = 800, .height = 600 },
+    .pivot = .top_left,
+}, .{ .x = 0, .y = 0 });
+
+// COVER: Scale to cover container (may crop edges)
+engine.createSprite(EntityId.from(2), .{
+    .sprite_name = "hero",
+    .size_mode = .cover,
+    .container = .{ .width = 200, .height = 150 },
+    .pivot = .center,  // Pivot determines which part stays visible
+}, position);
+
+// CONTAIN: Scale to fit inside container (letterboxed)
+engine.createSprite(EntityId.from(3), .{
+    .sprite_name = "logo",
+    .size_mode = .contain,
+    .container = .{ .width = 400, .height = 300 },
+    .pivot = .center,  // Pivot determines position in letterbox area
+}, position);
+
+// SCALE_DOWN: Like contain, but never scales up (max scale = 1.0)
+engine.createSprite(EntityId.from(4), .{
+    .sprite_name = "icon",
+    .size_mode = .scale_down,
+    .container = .{ .width = 100, .height = 100 },
+}, position);
+
+// REPEAT: Tile sprite to fill container
+engine.createSprite(EntityId.from(5), .{
+    .sprite_name = "tile_pattern",
+    .size_mode = .repeat,
+    .scale = 0.5,  // Scale each tile
+    .container = .{ .width = 800, .height = 600 },
+}, position);
+
+// Screen-space layers auto-default to screen dimensions
+engine.createSprite(EntityId.from(6), .{
+    .sprite_name = "fullscreen_bg",
+    .size_mode = .cover,
+    .layer = .background,  // Screen-space layer
+    // container defaults to screen size
+}, .{ .x = 0, .y = 0 });
+
+// Explicit screen container sentinel
+engine.createSprite(EntityId.from(7), .{
+    .sprite_name = "adaptive_bg",
+    .size_mode = .contain,
+    .container = Container.screen,  // Always use current screen size
+}, position);
+```
+
+Available sizing modes:
+- `none` - Use sprite's natural size with scale (default)
+- `stretch` - Fill container exactly, may distort aspect ratio
+- `cover` - Scale uniformly to cover container, may crop edges
+- `contain` - Scale uniformly to fit inside container, may letterbox
+- `scale_down` - Like contain, but never scales up (max scale 1.0)
+- `repeat` - Tile the sprite to fill the container
+
 ### Comptime Atlas Loading
 
 Load sprite atlas data at compile time from .zon files (eliminates JSON parsing at runtime):
@@ -611,6 +685,7 @@ pub const AnimationTests = struct {
 | 16_retained_engine | RetainedEngine with EntityId-based API |
 | 18_multi_camera | Multi-camera support for split-screen and minimap |
 | 19_layers | Canvas/Layer system with custom layer enums |
+| 20_sprite_sizing | Container-based sprite sizing (stretch, cover, contain, repeat) |
 
 ## Common Patterns
 

@@ -60,6 +60,41 @@ pub const Position = components.Position;
 pub const Pivot = components.Pivot;
 
 // ============================================
+// Sizing Types
+// ============================================
+
+/// Sizing mode for sprites relative to a container.
+/// Similar to CSS background-size property.
+pub const SizeMode = enum {
+    /// Use sprite's natural size (default behavior)
+    none,
+    /// Stretch to fill container exactly (may distort aspect ratio)
+    stretch,
+    /// Scale uniformly to cover entire container (may crop edges)
+    cover,
+    /// Scale uniformly to fit inside container (may have letterboxing)
+    contain,
+    /// Like contain, but never scales up (max scale = 1.0)
+    scale_down,
+    /// Tile the sprite to fill the container
+    repeat,
+};
+
+/// Container dimensions for sized sprites.
+/// When null fields are used with screen-space layers, defaults to screen dimensions.
+pub const Container = struct {
+    width: f32,
+    height: f32,
+
+    /// Sentinel value indicating "use screen dimensions"
+    pub const screen = Container{ .width = 0, .height = 0 };
+
+    pub fn isScreen(self: Container) bool {
+        return self.width == 0 and self.height == 0;
+    }
+};
+
+// ============================================
 // Color Type
 // ============================================
 
