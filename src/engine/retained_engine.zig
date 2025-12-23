@@ -446,25 +446,57 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
             /// Layer this shape belongs to
             layer: LayerEnum = getDefaultLayer(),
 
-            // Helper constructors
+            // Helper constructors - use struct initialization to specify a layer,
+            // e.g., `.{ .shape = .{ .circle = .{ .radius = 10 } }, .layer = .ui }`
+
+            /// Create a circle shape. Uses default layer.
             pub fn circle(radius: f32) LayeredShapeVisual {
                 return .{ .shape = .{ .circle = .{ .radius = radius } } };
             }
 
+            /// Create a circle shape on a specific layer.
+            pub fn circleOn(radius: f32, layer: LayerEnum) LayeredShapeVisual {
+                return .{ .shape = .{ .circle = .{ .radius = radius } }, .layer = layer };
+            }
+
+            /// Create a rectangle shape. Uses default layer.
             pub fn rectangle(width: f32, height: f32) LayeredShapeVisual {
                 return .{ .shape = .{ .rectangle = .{ .width = width, .height = height } } };
             }
 
+            /// Create a rectangle shape on a specific layer.
+            pub fn rectangleOn(width: f32, height: f32, layer: LayerEnum) LayeredShapeVisual {
+                return .{ .shape = .{ .rectangle = .{ .width = width, .height = height } }, .layer = layer };
+            }
+
+            /// Create a line shape. Uses default layer.
             pub fn line(end_x: f32, end_y: f32, thickness: f32) LayeredShapeVisual {
                 return .{ .shape = .{ .line = .{ .end = .{ .x = end_x, .y = end_y }, .thickness = thickness } } };
             }
 
+            /// Create a line shape on a specific layer.
+            pub fn lineOn(end_x: f32, end_y: f32, thickness: f32, layer: LayerEnum) LayeredShapeVisual {
+                return .{ .shape = .{ .line = .{ .end = .{ .x = end_x, .y = end_y }, .thickness = thickness } }, .layer = layer };
+            }
+
+            /// Create a triangle shape. Uses default layer.
             pub fn triangle(p2: Position, p3: Position) LayeredShapeVisual {
                 return .{ .shape = .{ .triangle = .{ .p2 = p2, .p3 = p3 } } };
             }
 
+            /// Create a triangle shape on a specific layer.
+            pub fn triangleOn(p2: Position, p3: Position, layer: LayerEnum) LayeredShapeVisual {
+                return .{ .shape = .{ .triangle = .{ .p2 = p2, .p3 = p3 } }, .layer = layer };
+            }
+
+            /// Create a polygon shape. Uses default layer.
             pub fn polygon(sides: i32, radius: f32) LayeredShapeVisual {
                 return .{ .shape = .{ .polygon = .{ .sides = sides, .radius = radius } } };
+            }
+
+            /// Create a polygon shape on a specific layer.
+            pub fn polygonOn(sides: i32, radius: f32, layer: LayerEnum) LayeredShapeVisual {
+                return .{ .shape = .{ .polygon = .{ .sides = sides, .radius = radius } }, .layer = layer };
             }
         };
 
@@ -669,7 +701,11 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
         pub fn createSprite(self: *Self, id: EntityId, visual: LayeredSpriteVisual, pos: Position) void {
             self.sprites.put(id, .{ .visual = visual, .position = pos }) catch return;
             const layer_idx = @intFromEnum(visual.layer);
-            self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch return;
+            self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch {
+                // Rollback sprite entry to avoid inconsistent state
+                _ = self.sprites.swapRemove(id);
+                return;
+            };
         }
 
         pub fn updateSprite(self: *Self, id: EntityId, visual: LayeredSpriteVisual) void {
@@ -684,7 +720,9 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
                     const new_layer_idx = @intFromEnum(visual.layer);
                     const removed = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, old_z);
                     std.debug.assert(removed);
-                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch return;
+                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch |err| {
+                        std.debug.panic("Failed to insert sprite into new layer bucket: {}", .{err});
+                    };
                 } else if (old_z != visual.z_index) {
                     const layer_idx = @intFromEnum(visual.layer);
                     self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .sprite }, old_z, visual.z_index) catch |err| {
@@ -715,7 +753,11 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
         pub fn createShape(self: *Self, id: EntityId, visual: LayeredShapeVisual, pos: Position) void {
             self.shapes.put(id, .{ .visual = visual, .position = pos }) catch return;
             const layer_idx = @intFromEnum(visual.layer);
-            self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch return;
+            self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch {
+                // Rollback shape entry to avoid inconsistent state
+                _ = self.shapes.swapRemove(id);
+                return;
+            };
         }
 
         pub fn updateShape(self: *Self, id: EntityId, visual: LayeredShapeVisual) void {
@@ -729,7 +771,9 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
                     const new_layer_idx = @intFromEnum(visual.layer);
                     const removed = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, old_z);
                     std.debug.assert(removed);
-                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch return;
+                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch |err| {
+                        std.debug.panic("Failed to insert shape into new layer bucket: {}", .{err});
+                    };
                 } else if (old_z != visual.z_index) {
                     const layer_idx = @intFromEnum(visual.layer);
                     self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .shape }, old_z, visual.z_index) catch |err| {
@@ -760,7 +804,11 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
         pub fn createText(self: *Self, id: EntityId, visual: LayeredTextVisual, pos: Position) void {
             self.texts.put(id, .{ .visual = visual, .position = pos }) catch return;
             const layer_idx = @intFromEnum(visual.layer);
-            self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch return;
+            self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch {
+                // Rollback text entry to avoid inconsistent state
+                _ = self.texts.swapRemove(id);
+                return;
+            };
         }
 
         pub fn updateText(self: *Self, id: EntityId, visual: LayeredTextVisual) void {
@@ -774,7 +822,9 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
                     const new_layer_idx = @intFromEnum(visual.layer);
                     const removed = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .text }, old_z);
                     std.debug.assert(removed);
-                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch return;
+                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch |err| {
+                        std.debug.panic("Failed to insert text into new layer bucket: {}", .{err});
+                    };
                 } else if (old_z != visual.z_index) {
                     const layer_idx = @intFromEnum(visual.layer);
                     self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .text }, old_z, visual.z_index) catch |err| {
@@ -970,9 +1020,10 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
         }
 
         fn renderMultiCamera(self: *Self) void {
-            var cam_idx: u2 = 0;
             var cam_iter = self.camera_manager.activeIterator();
-            while (cam_iter.next()) |cam| : (cam_idx += 1) {
+            while (cam_iter.next()) |cam| {
+                // Use the actual camera index for correct layer mask lookup
+                const cam_idx = cam_iter.index();
                 const layer_mask = self.camera_layer_masks[cam_idx];
 
                 // Begin viewport clipping
@@ -1556,8 +1607,19 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 // Default backend
 const DefaultBackend = backend_mod.Backend(raylib_backend.RaylibBackend);
 
-/// Default retained engine with raylib backend (no layers)
+/// Default retained engine with raylib backend (no layers).
+/// For simple use cases where layer support is not needed.
 pub const RetainedEngine = RetainedEngineWith(DefaultBackend);
 
-/// Default retained engine with raylib backend and DefaultLayers
+/// Default retained engine with raylib backend and DefaultLayers.
+///
+/// Naming convention:
+/// - `RetainedEngineWithLayers(Backend, LayerEnum)` is the generic constructor function
+/// - `LayeredRetainedEngine` is the concrete type alias with default settings
+///
+/// When defining your own engine with custom layers:
+/// ```zig
+/// const MyLayers = enum { background, world, ui, ... };
+/// const MyEngine = gfx.RetainedEngineWithLayers(gfx.DefaultBackend, MyLayers);
+/// ```
 pub const LayeredRetainedEngine = RetainedEngineWithLayers(DefaultBackend, DefaultLayers);
