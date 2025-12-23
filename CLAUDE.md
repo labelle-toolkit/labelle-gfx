@@ -312,15 +312,15 @@ const Container = gfx.Container;
 engine.createSprite(EntityId.from(1), .{
     .sprite_name = "background",
     .size_mode = .stretch,
-    .container = .{ .width = 800, .height = 600 },
+    .container = Container.size(800, 600),
     .pivot = .top_left,
 }, .{ .x = 0, .y = 0 });
 
-// COVER: Scale to cover container (may crop edges)
+// COVER: Scale to cover container (crops edges with UV cropping)
 engine.createSprite(EntityId.from(2), .{
     .sprite_name = "hero",
     .size_mode = .cover,
-    .container = .{ .width = 200, .height = 150 },
+    .container = Container.size(200, 150),
     .pivot = .center,  // Pivot determines which part stays visible
 }, position);
 
@@ -328,7 +328,7 @@ engine.createSprite(EntityId.from(2), .{
 engine.createSprite(EntityId.from(3), .{
     .sprite_name = "logo",
     .size_mode = .contain,
-    .container = .{ .width = 400, .height = 300 },
+    .container = Container.size(400, 300),
     .pivot = .center,  // Pivot determines position in letterbox area
 }, position);
 
@@ -336,7 +336,7 @@ engine.createSprite(EntityId.from(3), .{
 engine.createSprite(EntityId.from(4), .{
     .sprite_name = "icon",
     .size_mode = .scale_down,
-    .container = .{ .width = 100, .height = 100 },
+    .container = Container.size(100, 100),
 }, position);
 
 // REPEAT: Tile sprite to fill container
@@ -344,29 +344,43 @@ engine.createSprite(EntityId.from(5), .{
     .sprite_name = "tile_pattern",
     .size_mode = .repeat,
     .scale = 0.5,  // Scale each tile
-    .container = .{ .width = 800, .height = 600 },
+    .container = Container.size(800, 600),
 }, position);
 
-// Screen-space layers auto-default to screen dimensions
+// Container with position offset (for UI panels)
 engine.createSprite(EntityId.from(6), .{
-    .sprite_name = "fullscreen_bg",
-    .size_mode = .cover,
-    .layer = .background,  // Screen-space layer
-    // container defaults to screen size
+    .sprite_name = "panel_bg",
+    .size_mode = .stretch,
+    .container = Container.rect(100, 50, 200, 150),  // x, y, width, height
 }, .{ .x = 0, .y = 0 });
 
-// Explicit screen container sentinel
+// Use current viewport dimensions
 engine.createSprite(EntityId.from(7), .{
-    .sprite_name = "adaptive_bg",
+    .sprite_name = "fullscreen_bg",
+    .size_mode = .cover,
+    .container = .viewport,
+}, .{ .x = 0, .y = 0 });
+
+// Infer container from layer (screen-space -> screen, world-space -> natural)
+engine.createSprite(EntityId.from(8), .{
+    .sprite_name = "auto_bg",
     .size_mode = .contain,
-    .container = Container.screen,  // Always use current screen size
-}, position);
+    .layer = .background,
+    // container inferred as screen size for screen-space layers
+}, .{ .x = 0, .y = 0 });
 ```
 
-Available sizing modes:
+**Container types:**
+- `Container.size(w, h)` - Explicit dimensions at origin
+- `Container.rect(x, y, w, h)` - Explicit dimensions with position offset
+- `.viewport` - Use current camera viewport dimensions
+- `.infer` - Infer from layer space (screen layers use screen size)
+- `null` - Same as `.infer` (default)
+
+**Available sizing modes:**
 - `none` - Use sprite's natural size with scale (default)
 - `stretch` - Fill container exactly, may distort aspect ratio
-- `cover` - Scale uniformly to cover container, may crop edges
+- `cover` - Scale uniformly to cover container, UV-cropped to fit exactly
 - `contain` - Scale uniformly to fit inside container, may letterbox
 - `scale_down` - Like contain, but never scales up (max scale 1.0)
 - `repeat` - Tile the sprite to fill the container

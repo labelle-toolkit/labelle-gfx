@@ -89,17 +89,34 @@ pub const SizeMode = enum {
     repeat,
 };
 
-/// Container dimensions for sized sprites.
-/// When null fields are used with screen-space layers, defaults to screen dimensions.
-pub const Container = struct {
-    width: f32,
-    height: f32,
+/// Container specification for sized sprites.
+/// Determines how the container dimensions are resolved at render time.
+pub const Container = union(enum) {
+    /// Infer from layer space: screen-space layers use screen size,
+    /// world-space layers use sprite's natural size
+    infer,
+    /// Use current camera viewport dimensions and origin.
+    /// In multi-camera mode, uses the active camera's viewport.
+    viewport,
+    /// Use explicit rectangle with position and dimensions.
+    /// Supports containers not at origin (UI panels, etc.)
+    explicit: Rect,
 
-    /// Sentinel value indicating "use screen dimensions"
-    pub const screen = Container{ .width = 0, .height = 0 };
+    pub const Rect = struct {
+        x: f32 = 0,
+        y: f32 = 0,
+        width: f32,
+        height: f32,
+    };
 
-    pub fn isScreen(self: Container) bool {
-        return self.width == 0 and self.height == 0;
+    /// Create an explicit container at origin with given dimensions
+    pub fn size(width: f32, height: f32) Container {
+        return .{ .explicit = .{ .x = 0, .y = 0, .width = width, .height = height } };
+    }
+
+    /// Create an explicit container with position and dimensions
+    pub fn rect(x: f32, y: f32, width: f32, height: f32) Container {
+        return .{ .explicit = .{ .x = x, .y = y, .width = width, .height = height } };
     }
 };
 
