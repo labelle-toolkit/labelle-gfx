@@ -83,7 +83,7 @@ pub fn main() !void {
     engine.createSprite(stretch_id, .{
         .sprite_name = "hero/idle_0001",
         .size_mode = .stretch,
-        .container = .{ .width = container_w, .height = container_h },
+        .container = Container.size(container_w, container_h),
         .pivot = .top_left,
         .z_index = 10,
     }, .{ .x = 50, .y = 100 });
@@ -93,7 +93,7 @@ pub fn main() !void {
     engine.createSprite(cover_id, .{
         .sprite_name = "hero/idle_0001",
         .size_mode = .cover,
-        .container = .{ .width = container_w, .height = container_h },
+        .container = Container.size(container_w, container_h),
         .pivot = .center, // Center pivot keeps middle visible
         .z_index = 10,
     }, .{ .x = 250, .y = 100 });
@@ -103,7 +103,7 @@ pub fn main() !void {
     engine.createSprite(contain_id, .{
         .sprite_name = "hero/idle_0001",
         .size_mode = .contain,
-        .container = .{ .width = container_w, .height = container_h },
+        .container = Container.size(container_w, container_h),
         .pivot = .center, // Center in letterbox area
         .z_index = 10,
     }, .{ .x = 450, .y = 100 });
@@ -113,7 +113,7 @@ pub fn main() !void {
     engine.createSprite(scale_down_id, .{
         .sprite_name = "hero/idle_0001",
         .size_mode = .scale_down,
-        .container = .{ .width = container_w, .height = container_h },
+        .container = Container.size(container_w, container_h),
         .pivot = .center,
         .z_index = 10,
     }, .{ .x = 50, .y = 300 });
@@ -124,7 +124,7 @@ pub fn main() !void {
         .sprite_name = "hero/idle_0001",
         .size_mode = .repeat,
         .scale = 0.5, // Scale each tile
-        .container = .{ .width = container_w * 2, .height = container_h },
+        .container = Container.size(container_w * 2, container_h),
         .pivot = .top_left,
         .z_index = 10,
     }, .{ .x = 250, .y = 300 });
