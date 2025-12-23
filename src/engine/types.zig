@@ -93,10 +93,10 @@ pub const SizeMode = enum {
 /// Determines how the container dimensions are resolved at render time.
 pub const Container = union(enum) {
     /// Infer from layer space: screen-space layers use screen size,
-    /// world-space layers use sprite's natural size
+    /// world-space layers use sprite's natural size (ignoring visual.scale)
     infer,
-    /// Use current camera viewport dimensions and origin.
-    /// In multi-camera mode, uses the active camera's viewport.
+    /// Use full screen dimensions (width x height at origin 0,0).
+    /// Note: This uses screen size, not individual camera viewports.
     viewport,
     /// Use explicit rectangle with position and dimensions.
     /// Supports containers not at origin (UI panels, etc.)

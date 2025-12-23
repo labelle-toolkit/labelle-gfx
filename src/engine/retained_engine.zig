@@ -1081,12 +1081,13 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     .height = @floatFromInt(BackendType.getScreenHeight()),
                 };
             }
-            // World-space with no container: use sprite's natural size scaled
+            // World-space with no container: use sprite's natural size
+            // (sized modes ignore visual.scale, so we don't apply it here)
             return Container.Rect{
                 .x = 0,
                 .y = 0,
-                .width = sprite_w * visual.scale,
-                .height = sprite_h * visual.scale,
+                .width = sprite_w,
+                .height = sprite_h,
             };
         }
 

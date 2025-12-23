@@ -316,7 +316,7 @@ engine.createSprite(EntityId.from(1), .{
     .pivot = .top_left,
 }, .{ .x = 0, .y = 0 });
 
-// COVER: Scale to cover container (crops edges with UV cropping)
+// COVER: Scale to cover container (may overflow container bounds)
 engine.createSprite(EntityId.from(2), .{
     .sprite_name = "hero",
     .size_mode = .cover,
@@ -380,7 +380,7 @@ engine.createSprite(EntityId.from(8), .{
 **Available sizing modes:**
 - `none` - Use sprite's natural size with scale (default)
 - `stretch` - Fill container exactly, may distort aspect ratio
-- `cover` - Scale uniformly to cover container, UV-cropped to fit exactly
+- `cover` - Scale uniformly to cover container, may overflow bounds
 - `contain` - Scale uniformly to fit inside container, may letterbox
 - `scale_down` - Like contain, but never scales up (max scale 1.0)
 - `repeat` - Tile the sprite to fill the container
