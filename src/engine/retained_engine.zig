@@ -1158,19 +1158,42 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
                 },
                 .repeat => {
-                    // Tile sprite to fill container
+                    // Tile sprite to fill container with viewport culling
                     const scaled_w = sprite_w * visual.scale;
                     const scaled_h = sprite_h * visual.scale;
 
                     if (scaled_w <= 0 or scaled_h <= 0) return;
 
-                    const cols = @as(u32, @intFromFloat(@ceil(cont_w / scaled_w)));
-                    const rows = @as(u32, @intFromFloat(@ceil(cont_h / scaled_h)));
+                    // Get viewport bounds for culling (screen dimensions)
+                    const vp_x: f32 = 0;
+                    const vp_y: f32 = 0;
+                    const vp_w: f32 = @floatFromInt(BackendType.getScreenWidth());
+                    const vp_h: f32 = @floatFromInt(BackendType.getScreenHeight());
 
-                    var row: u32 = 0;
-                    while (row < rows) : (row += 1) {
-                        var col: u32 = 0;
-                        while (col < cols) : (col += 1) {
+                    // Calculate total tile grid bounds
+                    const total_cols = @as(u32, @intFromFloat(@ceil(cont_w / scaled_w)));
+                    const total_rows = @as(u32, @intFromFloat(@ceil(cont_h / scaled_h)));
+
+                    // Calculate visible tile range (with bounds clamping)
+                    // Start tile: first tile that could be visible
+                    const start_col = if (vp_x > pos.x)
+                        @min(total_cols, @as(u32, @intFromFloat(@floor((vp_x - pos.x) / scaled_w))))
+                    else
+                        0;
+                    const start_row = if (vp_y > pos.y)
+                        @min(total_rows, @as(u32, @intFromFloat(@floor((vp_y - pos.y) / scaled_h))))
+                    else
+                        0;
+
+                    // End tile: last tile that could be visible (+1 for exclusive end)
+                    const end_col = @min(total_cols, @as(u32, @intFromFloat(@ceil((vp_x + vp_w - pos.x) / scaled_w))));
+                    const end_row = @min(total_rows, @as(u32, @intFromFloat(@ceil((vp_y + vp_h - pos.y) / scaled_h))));
+
+                    // Only draw visible tiles
+                    var row: u32 = start_row;
+                    while (row < end_row) : (row += 1) {
+                        var col: u32 = start_col;
+                        while (col < end_col) : (col += 1) {
                             const tile_x = pos.x + @as(f32, @floatFromInt(col)) * scaled_w;
                             const tile_y = pos.y + @as(f32, @floatFromInt(row)) * scaled_h;
 
