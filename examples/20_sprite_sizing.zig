@@ -133,13 +133,30 @@ pub fn main() !void {
         .z_index = 1,
     }, .{ .x = 0, .y = 0 });
 
+    // Camera-following background demo (world-space, camera_viewport)
+    // This sprite fills the camera's visible area regardless of camera position/zoom.
+    // The position acts as an offset from the camera viewport's top-left.
+    engine.createSprite(EntityId.from(11), .{
+        .sprite_name = "hero/idle_0001",
+        .size_mode = .cover,
+        .container = .camera_viewport, // Fills camera's world-space view
+        .pivot = .center,
+        .tint = .{ .r = 30, .g = 40, .b = 50, .a = 80 },
+        .z_index = 0,
+    }, .{ .x = 0, .y = 0 }); // Position is offset from camera viewport
+
     std.debug.print("Created {} sprites\n", .{engine.spriteCount()});
 
     var frame_count: u32 = 0;
+    var camera_x: f32 = 0;
 
-    // Game loop
+    // Game loop - demonstrate camera_viewport by moving the camera
     while (engine.isRunning()) {
         frame_count += 1;
+
+        // Move camera to show that camera_viewport background follows
+        camera_x = @sin(@as(f32, @floatFromInt(frame_count)) * 0.02) * 50;
+        engine.setCameraPosition(camera_x, 0);
 
         engine.beginFrame();
         engine.render();

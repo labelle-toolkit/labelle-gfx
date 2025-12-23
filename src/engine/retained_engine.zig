@@ -817,7 +817,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     if (!self.isVisible(item)) continue;
 
                     switch (item.item_type) {
-                        .sprite => self.renderSprite(item.entity_id),
+                        .sprite => self.renderSprite(item.entity_id, self.getCamera()),
                         .shape => self.renderShape(item.entity_id),
                         .text => self.renderText(item.entity_id),
                     }
@@ -862,7 +862,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                         switch (item.item_type) {
                             .sprite => {
                                 if (cfg.space == .screen or self.shouldRenderSpriteInViewport(item.entity_id, viewport)) {
-                                    self.renderSprite(item.entity_id);
+                                    self.renderSprite(item.entity_id, cam);
                                 }
                             },
                             .shape => {
@@ -997,7 +997,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             BackendType.endMode2D();
         }
 
-        fn renderSprite(self: *Self, id: EntityId) void {
+        fn renderSprite(self: *Self, id: EntityId, cam: *const Camera) void {
             const entry = self.sprites.get(id) orelse return;
             const visual = entry.visual;
             const pos = entry.position;
@@ -1046,7 +1046,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                         );
                     } else {
                         // Sized mode: resolve container
-                        const cont_rect = resolveContainer(visual, sprite_w, sprite_h);
+                        const cont_rect = resolveContainer(visual, sprite_w, sprite_h, cam);
                         renderSizedSprite(result, visual, pos, src_rect, sprite_w, sprite_h, cont_rect, tint);
                     }
                 }
@@ -1064,12 +1064,24 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         }
 
         /// Resolves a Container specification to concrete dimensions (Rect).
-        fn resolveContainer(visual: SpriteVisual, sprite_w: f32, sprite_h: f32) Container.Rect {
+        fn resolveContainer(visual: SpriteVisual, sprite_w: f32, sprite_h: f32, cam: *const Camera) Container.Rect {
             const c = visual.container orelse .infer;
             return switch (c) {
                 .infer => resolveInferredContainer(visual, sprite_w, sprite_h),
                 .viewport => getScreenRect(),
+                .camera_viewport => getCameraViewportRect(cam),
                 .explicit => |rect| rect,
+            };
+        }
+
+        /// Returns the camera's world-space visible area as a Container.Rect.
+        fn getCameraViewportRect(cam: *const Camera) Container.Rect {
+            const viewport = cam.getViewport();
+            return Container.Rect{
+                .x = viewport.x,
+                .y = viewport.y,
+                .width = viewport.width,
+                .height = viewport.height,
             };
         }
 
