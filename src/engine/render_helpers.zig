@@ -81,6 +81,10 @@ pub fn RenderHelpers(comptime Backend: type) type {
 
         /// Render a sized sprite with the given size mode.
         /// This handles stretch, cover, contain, scale_down, and repeat modes.
+        ///
+        /// NOTE: Currently unused. RetainedEngine uses a local version that accesses
+        /// sprite lookup results directly. Consider integrating during facade refactoring (#112)
+        /// or removing if the facade keeps its own implementation for viewport culling.
         pub fn renderSizedSprite(
             texture: Backend.Texture2D,
             sprite_x: i32,
@@ -290,11 +294,17 @@ pub fn RenderHelpers(comptime Backend: type) type {
                     .w = @abs(l.end.x) + l.thickness,
                     .h = @abs(l.end.y) + l.thickness,
                 },
-                .triangle => |t| .{
-                    .x = @min(pos.x, @min(pos.x + t.p2.x, pos.x + t.p3.x)),
-                    .y = @min(pos.y, @min(pos.y + t.p2.y, pos.y + t.p3.y)),
-                    .w = @max(pos.x, @max(pos.x + t.p2.x, pos.x + t.p3.x)) - @min(pos.x, @min(pos.x + t.p2.x, pos.x + t.p3.x)),
-                    .h = @max(pos.y, @max(pos.y + t.p2.y, pos.y + t.p3.y)) - @min(pos.y, @min(pos.y + t.p2.y, pos.y + t.p3.y)),
+                .triangle => |t| blk: {
+                    const min_x = @min(pos.x, @min(pos.x + t.p2.x, pos.x + t.p3.x));
+                    const max_x = @max(pos.x, @max(pos.x + t.p2.x, pos.x + t.p3.x));
+                    const min_y = @min(pos.y, @min(pos.y + t.p2.y, pos.y + t.p3.y));
+                    const max_y = @max(pos.y, @max(pos.y + t.p2.y, pos.y + t.p3.y));
+                    break :blk .{
+                        .x = min_x,
+                        .y = min_y,
+                        .w = max_x - min_x,
+                        .h = max_y - min_y,
+                    };
                 },
                 .polygon => |p| .{
                     .x = pos.x - p.radius,
