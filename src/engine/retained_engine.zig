@@ -41,6 +41,7 @@ pub const visuals = @import("visuals.zig");
 pub const config = @import("config.zig");
 pub const layer_mod = @import("layer.zig");
 pub const visual_types = @import("visual_types.zig");
+const render_helpers = @import("render_helpers.zig");
 
 // Backend imports
 const backend_mod = @import("../backend/backend.zig");
@@ -213,6 +214,9 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
 
     // Import visual types for this layer enum
     const VisualTypesFor = visual_types.VisualTypes(LayerEnum);
+
+    // Create render helpers for this backend
+    const Helpers = render_helpers.RenderHelpers(BackendType);
 
     return struct {
         const Self = @This();
@@ -814,46 +818,12 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             return true;
         }
 
-        const ShapeBounds = struct { x: f32, y: f32, w: f32, h: f32 };
-
         fn shouldRenderShapeInViewport(self: *const Self, id: EntityId, viewport: Camera.ViewportRect) bool {
             const entry = self.shapes.get(id) orelse return false;
             const visual = entry.visual;
             const pos = entry.position;
 
-            const bounds: ShapeBounds = switch (visual.shape) {
-                .circle => |c| .{
-                    .x = pos.x - c.radius,
-                    .y = pos.y - c.radius,
-                    .w = c.radius * 2,
-                    .h = c.radius * 2,
-                },
-                .rectangle => |r| .{
-                    .x = pos.x,
-                    .y = pos.y,
-                    .w = r.width,
-                    .h = r.height,
-                },
-                .line => |l| .{
-                    .x = @min(pos.x, pos.x + l.end.x),
-                    .y = @min(pos.y, pos.y + l.end.y),
-                    .w = @abs(l.end.x) + l.thickness,
-                    .h = @abs(l.end.y) + l.thickness,
-                },
-                .triangle => |t| .{
-                    .x = @min(pos.x, @min(pos.x + t.p2.x, pos.x + t.p3.x)),
-                    .y = @min(pos.y, @min(pos.y + t.p2.y, pos.y + t.p3.y)),
-                    .w = @max(pos.x, @max(pos.x + t.p2.x, pos.x + t.p3.x)) - @min(pos.x, @min(pos.x + t.p2.x, pos.x + t.p3.x)),
-                    .h = @max(pos.y, @max(pos.y + t.p2.y, pos.y + t.p3.y)) - @min(pos.y, @min(pos.y + t.p2.y, pos.y + t.p3.y)),
-                },
-                .polygon => |p| .{
-                    .x = pos.x - p.radius,
-                    .y = pos.y - p.radius,
-                    .w = p.radius * 2,
-                    .h = p.radius * 2,
-                },
-            };
-
+            const bounds = Helpers.getShapeBounds(visual.shape, pos);
             return viewport.overlapsRect(bounds.x, bounds.y, bounds.w, bounds.h);
         }
 
@@ -929,27 +899,16 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     // Handle sizing modes
                     if (visual.size_mode == .none) {
                         // Default behavior: use scale
-                        const scaled_width = sprite_w * visual.scale;
-                        const scaled_height = sprite_h * visual.scale;
-
-                        const dest_rect = BackendType.Rectangle{
-                            .x = pos.x,
-                            .y = pos.y,
-                            .width = scaled_width,
-                            .height = scaled_height,
-                        };
-
-                        const pivot_origin = visual.pivot.getOrigin(scaled_width, scaled_height, visual.pivot_x, visual.pivot_y);
-                        const origin = BackendType.Vector2{
-                            .x = pivot_origin.x,
-                            .y = pivot_origin.y,
-                        };
-
-                        BackendType.drawTexturePro(
+                        Helpers.renderBasicSprite(
                             result.atlas.texture,
                             src_rect,
-                            dest_rect,
-                            origin,
+                            sprite_w,
+                            sprite_h,
+                            pos,
+                            visual.scale,
+                            visual.pivot,
+                            visual.pivot_x,
+                            visual.pivot_y,
                             visual.rotation,
                             tint,
                         );
@@ -964,12 +923,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
 
         /// Returns screen dimensions as a Container.Rect at origin.
         fn getScreenRect() Container.Rect {
-            return Container.Rect{
-                .x = 0,
-                .y = 0,
-                .width = @floatFromInt(BackendType.getScreenWidth()),
-                .height = @floatFromInt(BackendType.getScreenHeight()),
-            };
+            return Helpers.getScreenRect();
         }
 
         /// Resolves a Container specification to concrete dimensions (Rect).
@@ -1199,58 +1153,12 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
 
         fn renderShape(self: *Self, id: EntityId) void {
             const entry = self.shapes.get(id) orelse return;
-            const visual = entry.visual;
-            const pos = entry.position;
-
-            const col = BackendType.color(visual.color.r, visual.color.g, visual.color.b, visual.color.a);
-
-            switch (visual.shape) {
-                .circle => |circle| {
-                    if (circle.fill == .filled) {
-                        BackendType.drawCircle(pos.x, pos.y, circle.radius, col);
-                    } else {
-                        BackendType.drawCircleLines(pos.x, pos.y, circle.radius, col);
-                    }
-                },
-                .rectangle => |rect| {
-                    if (rect.fill == .filled) {
-                        BackendType.drawRectangleV(pos.x, pos.y, rect.width, rect.height, col);
-                    } else {
-                        BackendType.drawRectangleLinesV(pos.x, pos.y, rect.width, rect.height, col);
-                    }
-                },
-                .line => |l| {
-                    if (l.thickness > 1) {
-                        BackendType.drawLineEx(pos.x, pos.y, pos.x + l.end.x, pos.y + l.end.y, l.thickness, col);
-                    } else {
-                        BackendType.drawLine(pos.x, pos.y, pos.x + l.end.x, pos.y + l.end.y, col);
-                    }
-                },
-                .triangle => |tri| {
-                    if (tri.fill == .filled) {
-                        BackendType.drawTriangle(pos.x, pos.y, pos.x + tri.p2.x, pos.y + tri.p2.y, pos.x + tri.p3.x, pos.y + tri.p3.y, col);
-                    } else {
-                        BackendType.drawTriangleLines(pos.x, pos.y, pos.x + tri.p2.x, pos.y + tri.p2.y, pos.x + tri.p3.x, pos.y + tri.p3.y, col);
-                    }
-                },
-                .polygon => |poly| {
-                    if (poly.fill == .filled) {
-                        BackendType.drawPoly(pos.x, pos.y, poly.sides, poly.radius, visual.rotation, col);
-                    } else {
-                        BackendType.drawPolyLines(pos.x, pos.y, poly.sides, poly.radius, visual.rotation, col);
-                    }
-                },
-            }
+            Helpers.renderShape(entry.visual.shape, entry.position, entry.visual.color, entry.visual.rotation);
         }
 
         fn renderText(self: *Self, id: EntityId) void {
             const entry = self.texts.get(id) orelse return;
-            const visual = entry.visual;
-            const pos = entry.position;
-
-            const col = BackendType.color(visual.color.r, visual.color.g, visual.color.b, visual.color.a);
-
-            BackendType.drawText(visual.text.ptr, @intFromFloat(pos.x), @intFromFloat(pos.y), @intFromFloat(visual.size), col);
+            Helpers.renderText(entry.visual.text, entry.position, entry.visual.size, entry.visual.color);
         }
 
         // ==================== Queries ====================
