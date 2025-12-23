@@ -36,7 +36,7 @@ const TestMask = gfx.layer.LayerMask(TestLayers);
 
 // Use mock backend for headless testing
 const MockBackend = gfx.mock_backend.MockBackend;
-const MockEngine = gfx.RetainedEngineWithLayers(gfx.Backend(MockBackend), TestLayers);
+const MockEngine = gfx.RetainedEngineWith(gfx.Backend(MockBackend), TestLayers);
 
 // ============================================================================
 // LayerConfig Tests
@@ -261,7 +261,7 @@ test "engine creates shapes on specific layers" {
     defer engine.deinit();
 
     const id = gfx.EntityId.from(1);
-    engine.createShape(id, MockEngine.LayeredShapeVisual.circleOn(50, .effects), .{});
+    engine.createShape(id, MockEngine.ShapeVisual.circleOn(50, .effects), .{});
 
     const shape = engine.getShape(id);
     try testing.expect(shape != null);
@@ -395,27 +395,27 @@ test "z-index change within same layer" {
 // ============================================================================
 
 test "circleOn creates circle on specific layer" {
-    const shape = MockEngine.LayeredShapeVisual.circleOn(25, .ui);
+    const shape = MockEngine.ShapeVisual.circleOn(25, .ui);
     try testing.expectEqual(TestLayers.ui, shape.layer);
 }
 
 test "rectangleOn creates rectangle on specific layer" {
-    const shape = MockEngine.LayeredShapeVisual.rectangleOn(100, 50, .effects);
+    const shape = MockEngine.ShapeVisual.rectangleOn(100, 50, .effects);
     try testing.expectEqual(TestLayers.effects, shape.layer);
 }
 
 test "lineOn creates line on specific layer" {
-    const shape = MockEngine.LayeredShapeVisual.lineOn(100, 100, 2, .world);
+    const shape = MockEngine.ShapeVisual.lineOn(100, 100, 2, .world);
     try testing.expectEqual(TestLayers.world, shape.layer);
 }
 
 test "polygonOn creates polygon on specific layer" {
-    const shape = MockEngine.LayeredShapeVisual.polygonOn(6, 30, .background);
+    const shape = MockEngine.ShapeVisual.polygonOn(6, 30, .background);
     try testing.expectEqual(TestLayers.background, shape.layer);
 }
 
 test "default shape helpers use default layer" {
-    const circle = MockEngine.LayeredShapeVisual.circle(25);
+    const circle = MockEngine.ShapeVisual.circle(25);
     // Default layer should be first world-space layer (world)
     try testing.expectEqual(TestLayers.world, circle.layer);
 }

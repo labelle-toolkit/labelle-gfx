@@ -44,7 +44,7 @@ const GameLayers = enum {
 };
 
 // Create engine type with our custom layers
-const LayeredEngine = gfx.RetainedEngineWithLayers(gfx.DefaultBackend, GameLayers);
+const LayeredEngine = gfx.RetainedEngineWith(gfx.DefaultBackend, GameLayers);
 const EntityId = gfx.EntityId;
 const Position = gfx.retained_engine.Position;
 const Color = gfx.retained_engine.Color;

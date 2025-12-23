@@ -3,14 +3,11 @@
 //! A retained-mode 2D rendering engine that stores visuals and positions internally,
 //! receiving updates from the caller rather than requiring a full render list each frame.
 //!
-//! This engine uses EntityId-based addressing where the caller provides entity IDs
-//! and the engine manages the visual state internally.
-//!
 //! ## Layer System
 //!
-//! The engine supports organizing rendering into distinct layers. Each layer can have
-//! its own coordinate space (world/screen) and parallax settings. Layers are defined
-//! using a comptime enum with a `config()` method.
+//! The engine organizes rendering into distinct layers. Each layer can have its own
+//! coordinate space (world/screen) and parallax settings. Layers are defined using
+//! a comptime enum with a `config()` method.
 //!
 //! Example with custom layers:
 //! ```zig
@@ -26,26 +23,23 @@
 //!     }
 //! };
 //!
-//! const Engine = gfx.RetainedEngineWithLayers(gfx.DefaultBackend, GameLayers);
+//! const Engine = gfx.RetainedEngineWith(gfx.DefaultBackend, GameLayers);
 //! var engine = try Engine.init(allocator, .{ ... });
 //!
-//! engine.createSprite(player_id, .{
-//!     .sprite_name = "player",
-//!     .layer = .world,
-//! }, pos);
-//!
-//! engine.createSprite(health_bar_id, .{
-//!     .sprite_name = "health_bar",
-//!     .layer = .ui,
-//! }, pos);
+//! engine.createSprite(player_id, .{ .sprite_name = "player" }, pos);
+//! engine.createSprite(health_bar_id, .{ .sprite_name = "health", .layer = .ui }, pos);
 //! ```
 //!
-//! For simple usage without custom layers, use RetainedEngine which uses DefaultLayers.
+//! For simple usage, use `RetainedEngine` which uses `DefaultLayers` (background, world, ui).
 
 const std = @import("std");
-const z_index_buckets = @import("z_index_buckets.zig");
-const components = @import("../components/components.zig");
-const layer_mod = @import("layer.zig");
+const log = @import("../log.zig").engine;
+
+// Import from new modules
+pub const types = @import("types.zig");
+pub const visuals = @import("visuals.zig");
+pub const config = @import("config.zig");
+pub const layer_mod = @import("layer.zig");
 
 // Backend imports
 const backend_mod = @import("../backend/backend.zig");
@@ -54,207 +48,32 @@ const texture_manager_mod = @import("../texture/texture_manager.zig");
 const camera_mod = @import("../camera/camera.zig");
 const camera_manager_mod = @import("../camera/camera_manager.zig");
 
+// Re-export types for convenience
+pub const EntityId = types.EntityId;
+pub const TextureId = types.TextureId;
+pub const FontId = types.FontId;
+pub const Position = types.Position;
+pub const Pivot = types.Pivot;
+pub const Color = types.Color;
+
+// Re-export config types
+pub const WindowConfig = config.WindowConfig;
+pub const EngineConfig = config.EngineConfig;
+
 // Re-export layer types
 pub const LayerConfig = layer_mod.LayerConfig;
 pub const LayerSpace = layer_mod.LayerSpace;
 pub const DefaultLayers = layer_mod.DefaultLayers;
 pub const LayerMask = layer_mod.LayerMask;
 
-// ============================================
-// Core ID Types
-// ============================================
-
-/// Entity identifier - provided by the caller (e.g., from an ECS)
-pub const EntityId = enum(u32) {
-    _,
-
-    pub fn from(id: u32) EntityId {
-        return @enumFromInt(id);
-    }
-
-    pub fn toInt(self: EntityId) u32 {
-        return @intFromEnum(self);
-    }
-};
-
-/// Texture identifier - returned by loadTexture
-pub const TextureId = enum(u32) {
-    invalid = 0,
-    _,
-
-    pub fn from(id: u32) TextureId {
-        return @enumFromInt(id);
-    }
-
-    pub fn toInt(self: TextureId) u32 {
-        return @intFromEnum(self);
-    }
-};
-
-/// Font identifier - returned by loadFont
-pub const FontId = enum(u32) {
-    invalid = 0,
-    _,
-
-    pub fn from(id: u32) FontId {
-        return @enumFromInt(id);
-    }
-
-    pub fn toInt(self: FontId) u32 {
-        return @intFromEnum(self);
-    }
-};
-
-// ============================================
-// Position Type
-// ============================================
-
-/// 2D position from zig-utils (Vector2 with rich math operations)
-pub const Position = components.Position;
-
-/// Pivot point for sprite positioning and rotation
-pub const Pivot = components.Pivot;
-
-// ============================================
-// Color Type
-// ============================================
-
-pub const Color = struct {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8 = 255,
-
-    pub const white = Color{ .r = 255, .g = 255, .b = 255 };
-    pub const black = Color{ .r = 0, .g = 0, .b = 0 };
-    pub const red = Color{ .r = 255, .g = 0, .b = 0 };
-    pub const green = Color{ .r = 0, .g = 255, .b = 0 };
-    pub const blue = Color{ .r = 0, .g = 0, .b = 255 };
-};
-
-// ============================================
-// Visual Data Types (no position, no layer - for backwards compatibility)
-// ============================================
-
-/// Sprite visual data (without layer - for backwards compatibility)
-pub const SpriteVisual = struct {
-    texture: TextureId = .invalid,
-    /// Sprite name within the texture atlas
-    sprite_name: []const u8 = "",
-    scale: f32 = 1,
-    rotation: f32 = 0,
-    flip_x: bool = false,
-    flip_y: bool = false,
-    tint: Color = Color.white,
-    z_index: u8 = 128,
-    visible: bool = true,
-    /// Pivot point for positioning and rotation (defaults to center)
-    pivot: Pivot = .center,
-    /// Custom pivot X coordinate (0.0-1.0), used when pivot == .custom
-    pivot_x: f32 = 0.5,
-    /// Custom pivot Y coordinate (0.0-1.0), used when pivot == .custom
-    pivot_y: f32 = 0.5,
-};
-
-/// Shape visual data (without layer - for backwards compatibility)
-pub const ShapeVisual = struct {
-    shape: Shape,
-    color: Color = Color.white,
-    rotation: f32 = 0,
-    z_index: u8 = 128,
-    visible: bool = true,
-
-    pub const Shape = union(enum) {
-        circle: Circle,
-        rectangle: Rectangle,
-        line: Line,
-        triangle: Triangle,
-        polygon: Polygon,
-    };
-
-    pub const Circle = struct {
-        radius: f32,
-        fill: FillMode = .filled,
-        thickness: f32 = 1,
-    };
-
-    pub const Rectangle = struct {
-        width: f32,
-        height: f32,
-        fill: FillMode = .filled,
-        thickness: f32 = 1,
-    };
-
-    pub const Line = struct {
-        end: Position,
-        thickness: f32 = 1,
-    };
-
-    pub const Triangle = struct {
-        p2: Position,
-        p3: Position,
-        fill: FillMode = .filled,
-        thickness: f32 = 1,
-    };
-
-    pub const Polygon = struct {
-        sides: i32,
-        radius: f32,
-        fill: FillMode = .filled,
-        thickness: f32 = 1,
-    };
-
-    pub const FillMode = enum { filled, outline };
-
-    // Helper constructors
-    pub fn circle(radius: f32) ShapeVisual {
-        return .{ .shape = .{ .circle = .{ .radius = radius } } };
-    }
-
-    pub fn rectangle(width: f32, height: f32) ShapeVisual {
-        return .{ .shape = .{ .rectangle = .{ .width = width, .height = height } } };
-    }
-
-    pub fn line(end_x: f32, end_y: f32, thickness: f32) ShapeVisual {
-        return .{ .shape = .{ .line = .{ .end = .{ .x = end_x, .y = end_y }, .thickness = thickness } } };
-    }
-
-    pub fn triangle(p2: Position, p3: Position) ShapeVisual {
-        return .{ .shape = .{ .triangle = .{ .p2 = p2, .p3 = p3 } } };
-    }
-
-    pub fn polygon(sides: i32, radius: f32) ShapeVisual {
-        return .{ .shape = .{ .polygon = .{ .sides = sides, .radius = radius } } };
-    }
-};
-
-/// Text visual data (without layer - for backwards compatibility)
-pub const TextVisual = struct {
-    font: FontId = .invalid,
-    /// Text to render (must be null-terminated)
-    text: [:0]const u8 = "",
-    size: f32 = 16,
-    color: Color = Color.white,
-    z_index: u8 = 128,
-    visible: bool = true,
-};
-
-// ============================================
-// Window Configuration
-// ============================================
-
-pub const WindowConfig = struct {
-    width: i32 = 800,
-    height: i32 = 600,
-    title: [:0]const u8 = "labelle",
-    target_fps: i32 = 60,
-    hidden: bool = false,
-};
-
-pub const EngineConfig = struct {
-    window: ?WindowConfig = null,
-    clear_color: Color = .{ .r = 40, .g = 40, .b = 40 },
-};
+// Re-export shape types
+pub const Shape = visuals.Shape;
+pub const FillMode = visuals.FillMode;
+pub const Circle = visuals.Circle;
+pub const Rectangle = visuals.Rectangle;
+pub const Line = visuals.Line;
+pub const Triangle = visuals.Triangle;
+pub const Polygon = visuals.Polygon;
 
 // ============================================
 // Render Item for Z-Index Buckets
@@ -271,8 +90,8 @@ const RenderItem = struct {
     }
 };
 
-/// Z-index bucket storage for RetainedEngine
-/// Similar to z_index_buckets.ZIndexBuckets but uses EntityId-based RenderItem
+/// Z-index bucket storage for RetainedEngine.
+/// Uses 256 buckets for O(1) insertion and natural depth ordering.
 const ZBuckets = struct {
     const Bucket = std.ArrayListUnmanaged(RenderItem);
 
@@ -369,31 +188,14 @@ const ZBuckets = struct {
 };
 
 // ============================================
-// Retained Engine with Layer Support
+// Retained Engine
 // ============================================
 
-/// Create a RetainedEngine with custom layer enum support.
+/// Creates a RetainedEngine parameterized by backend and layer types.
 ///
-/// The LayerEnum must be an enum with a `config()` method that returns LayerConfig.
-/// See DefaultLayers for an example implementation.
-///
-/// Example:
-/// ```zig
-/// const GameLayers = enum {
-///     background, world, ui,
-///
-///     pub fn config(self: @This()) gfx.LayerConfig {
-///         return switch (self) {
-///             .background => .{ .space = .screen, .order = -1 },
-///             .world => .{ .space = .world, .order = 0 },
-///             .ui => .{ .space = .screen, .order = 1 },
-///         };
-///     }
-/// };
-///
-/// const Engine = gfx.RetainedEngineWithLayers(gfx.DefaultBackend, GameLayers);
-/// ```
-pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: type) type {
+/// For simple usage with default layers, use `RetainedEngine` directly.
+/// For custom layers, define a layer enum with a `config()` method.
+pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) type {
     // Validate LayerEnum at compile time
     comptime {
         layer_mod.validateLayerEnum(LayerEnum);
@@ -415,11 +217,23 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
         pub const CameraType = Camera;
 
         // ============================================
-        // Visual Types with Layer Support
+        // Visual Types
         // ============================================
 
-        /// Sprite visual data with layer support
-        pub const LayeredSpriteVisual = struct {
+        /// Get the default layer (first world-space layer, or first layer)
+        pub fn getDefaultLayer() LayerEnum {
+            for (sorted_layers) |layer| {
+                if (layer.config().space == .world) {
+                    return layer;
+                }
+            }
+            return sorted_layers[0];
+        }
+
+        /// Sprite visual data
+        pub const SpriteVisual = struct {
+            // TODO: texture field is unused - rendering uses sprite_name lookup instead.
+            // Consider removing or implementing direct texture rendering path.
             texture: TextureId = .invalid,
             sprite_name: []const u8 = "",
             scale: f32 = 1,
@@ -432,97 +246,76 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
             pivot: Pivot = .center,
             pivot_x: f32 = 0.5,
             pivot_y: f32 = 0.5,
-            /// Layer this sprite belongs to (default: first layer with space=.world, or first layer)
             layer: LayerEnum = getDefaultLayer(),
         };
 
-        /// Shape visual data with layer support
-        pub const LayeredShapeVisual = struct {
-            shape: ShapeVisual.Shape,
+        /// Shape visual data
+        pub const ShapeVisual = struct {
+            shape: Shape,
             color: Color = Color.white,
             rotation: f32 = 0,
             z_index: u8 = 128,
             visible: bool = true,
-            /// Layer this shape belongs to
             layer: LayerEnum = getDefaultLayer(),
 
-            // Helper constructors - use struct initialization to specify a layer,
-            // e.g., `.{ .shape = .{ .circle = .{ .radius = 10 } }, .layer = .ui }`
-
-            /// Create a circle shape. Uses default layer.
-            pub fn circle(radius: f32) LayeredShapeVisual {
+            // Helper constructors
+            pub fn circle(radius: f32) ShapeVisual {
                 return .{ .shape = .{ .circle = .{ .radius = radius } } };
             }
 
-            /// Create a circle shape on a specific layer.
-            pub fn circleOn(radius: f32, layer: LayerEnum) LayeredShapeVisual {
+            pub fn circleOn(radius: f32, layer: LayerEnum) ShapeVisual {
                 return .{ .shape = .{ .circle = .{ .radius = radius } }, .layer = layer };
             }
 
-            /// Create a rectangle shape. Uses default layer.
-            pub fn rectangle(width: f32, height: f32) LayeredShapeVisual {
+            pub fn rectangle(width: f32, height: f32) ShapeVisual {
                 return .{ .shape = .{ .rectangle = .{ .width = width, .height = height } } };
             }
 
-            /// Create a rectangle shape on a specific layer.
-            pub fn rectangleOn(width: f32, height: f32, layer: LayerEnum) LayeredShapeVisual {
+            pub fn rectangleOn(width: f32, height: f32, layer: LayerEnum) ShapeVisual {
                 return .{ .shape = .{ .rectangle = .{ .width = width, .height = height } }, .layer = layer };
             }
 
-            /// Create a line shape. Uses default layer.
-            pub fn line(end_x: f32, end_y: f32, thickness: f32) LayeredShapeVisual {
+            pub fn line(end_x: f32, end_y: f32, thickness: f32) ShapeVisual {
                 return .{ .shape = .{ .line = .{ .end = .{ .x = end_x, .y = end_y }, .thickness = thickness } } };
             }
 
-            /// Create a line shape on a specific layer.
-            pub fn lineOn(end_x: f32, end_y: f32, thickness: f32, layer: LayerEnum) LayeredShapeVisual {
+            pub fn lineOn(end_x: f32, end_y: f32, thickness: f32, layer: LayerEnum) ShapeVisual {
                 return .{ .shape = .{ .line = .{ .end = .{ .x = end_x, .y = end_y }, .thickness = thickness } }, .layer = layer };
             }
 
-            /// Create a triangle shape. Uses default layer.
-            pub fn triangle(p2: Position, p3: Position) LayeredShapeVisual {
+            pub fn triangle(p2: Position, p3: Position) ShapeVisual {
                 return .{ .shape = .{ .triangle = .{ .p2 = p2, .p3 = p3 } } };
             }
 
-            /// Create a triangle shape on a specific layer.
-            pub fn triangleOn(p2: Position, p3: Position, layer: LayerEnum) LayeredShapeVisual {
+            pub fn triangleOn(p2: Position, p3: Position, layer: LayerEnum) ShapeVisual {
                 return .{ .shape = .{ .triangle = .{ .p2 = p2, .p3 = p3 } }, .layer = layer };
             }
 
-            /// Create a polygon shape. Uses default layer.
-            pub fn polygon(sides: i32, radius: f32) LayeredShapeVisual {
+            pub fn polygon(sides: i32, radius: f32) ShapeVisual {
                 return .{ .shape = .{ .polygon = .{ .sides = sides, .radius = radius } } };
             }
 
-            /// Create a polygon shape on a specific layer.
-            pub fn polygonOn(sides: i32, radius: f32, layer: LayerEnum) LayeredShapeVisual {
+            pub fn polygonOn(sides: i32, radius: f32, layer: LayerEnum) ShapeVisual {
                 return .{ .shape = .{ .polygon = .{ .sides = sides, .radius = radius } }, .layer = layer };
             }
         };
 
-        /// Text visual data with layer support
-        pub const LayeredTextVisual = struct {
+        /// Text visual data
+        pub const TextVisual = struct {
+            // TODO: font field is unused - rendering uses default font.
+            // Implement font loading and selection when needed.
             font: FontId = .invalid,
             text: [:0]const u8 = "",
             size: f32 = 16,
             color: Color = Color.white,
             z_index: u8 = 128,
             visible: bool = true,
-            /// Layer this text belongs to
             layer: LayerEnum = getDefaultLayer(),
         };
 
-        /// Get the default layer (first layer with space=.world, or first layer in order)
-        fn getDefaultLayer() LayerEnum {
-            // Find first world-space layer
-            for (sorted_layers) |layer| {
-                if (layer.config().space == .world) {
-                    return layer;
-                }
-            }
-            // Fallback to first layer
-            return sorted_layers[0];
-        }
+        // ============================================
+        // Engine State
+        // ============================================
 
         allocator: std.mem.Allocator,
         texture_manager: TextureManager,
@@ -555,25 +348,25 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
         next_texture_id: u32,
 
         const SpriteEntry = struct {
-            visual: LayeredSpriteVisual,
+            visual: SpriteVisual,
             position: Position,
         };
 
         const ShapeEntry = struct {
-            visual: LayeredShapeVisual,
+            visual: ShapeVisual,
             position: Position,
         };
 
         const TextEntry = struct {
-            visual: LayeredTextVisual,
+            visual: TextVisual,
             position: Position,
         };
 
         // ==================== Lifecycle ====================
 
-        pub fn init(allocator: std.mem.Allocator, config: EngineConfig) !Self {
+        pub fn init(allocator: std.mem.Allocator, cfg: EngineConfig) !Self {
             var owns_window = false;
-            if (config.window) |window_config| {
+            if (cfg.window) |window_config| {
                 if (window_config.hidden) {
                     BackendType.setConfigFlags(.{ .window_hidden = true });
                 }
@@ -616,10 +409,10 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
                 .single_camera_layer_mask = LMask.all(),
                 .owns_window = owns_window,
                 .clear_color = BackendType.color(
-                    config.clear_color.r,
-                    config.clear_color.g,
-                    config.clear_color.b,
-                    config.clear_color.a,
+                    cfg.clear_color.r,
+                    cfg.clear_color.g,
+                    cfg.clear_color.b,
+                    cfg.clear_color.a,
                 ),
                 .next_texture_id = 1,
             };
@@ -640,32 +433,26 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
 
         // ==================== Layer Management ====================
 
-        /// Set layer visibility
         pub fn setLayerVisible(self: *Self, layer: LayerEnum, visible: bool) void {
             self.layer_visibility[@intFromEnum(layer)] = visible;
         }
 
-        /// Get layer visibility
         pub fn isLayerVisible(self: *const Self, layer: LayerEnum) bool {
             return self.layer_visibility[@intFromEnum(layer)];
         }
 
-        /// Set which layers a camera renders (by camera index)
         pub fn setCameraLayers(self: *Self, camera_index: u2, layers: []const LayerEnum) void {
             self.camera_layer_masks[camera_index] = LMask.init(layers);
         }
 
-        /// Set which layers the single/primary camera renders
         pub fn setLayers(self: *Self, layers: []const LayerEnum) void {
             self.single_camera_layer_mask = LMask.init(layers);
         }
 
-        /// Enable/disable a layer for a specific camera
         pub fn setCameraLayerEnabled(self: *Self, camera_index: u2, layer: LayerEnum, enabled: bool) void {
             self.camera_layer_masks[camera_index].set(layer, enabled);
         }
 
-        /// Get camera layer mask
         pub fn getCameraLayerMask(self: *Self, camera_index: u2) *LMask {
             return &self.camera_layer_masks[camera_index];
         }
@@ -698,42 +485,50 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
 
         // ==================== Sprite Management ====================
 
-        pub fn createSprite(self: *Self, id: EntityId, visual: LayeredSpriteVisual, pos: Position) void {
+        pub fn createSprite(self: *Self, id: EntityId, visual: SpriteVisual, pos: Position) void {
+            // If sprite already exists, remove old bucket entry first to prevent duplicates
+            if (self.sprites.get(id)) |existing| {
+                const old_layer_idx = @intFromEnum(existing.visual.layer);
+                _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, existing.visual.z_index);
+            }
+
             self.sprites.put(id, .{ .visual = visual, .position = pos }) catch return;
             const layer_idx = @intFromEnum(visual.layer);
             self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch {
-                // Rollback sprite entry to avoid inconsistent state
+                // Bucket insert failed - remove map entry to maintain consistency
                 _ = self.sprites.swapRemove(id);
                 return;
             };
         }
 
-        pub fn updateSprite(self: *Self, id: EntityId, visual: LayeredSpriteVisual) void {
+        pub fn updateSprite(self: *Self, id: EntityId, visual: SpriteVisual) void {
             if (self.sprites.getPtr(id)) |entry| {
                 const old_z = entry.visual.z_index;
                 const old_layer = entry.visual.layer;
-                entry.visual = visual;
 
-                // Handle layer change
                 if (old_layer != visual.layer) {
+                    // Layer change: remove from old bucket, insert into new, then update visual
                     const old_layer_idx = @intFromEnum(old_layer);
                     const new_layer_idx = @intFromEnum(visual.layer);
-                    const removed = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, old_z);
-                    std.debug.assert(removed);
-                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch |err| {
-                        // Rollback: restore old layer and re-insert to old bucket
-                        std.log.err("Failed to move sprite to new layer, rolling back: {}", .{err});
-                        entry.visual.layer = old_layer;
-                        entry.visual.z_index = old_z;
-                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, old_z) catch |rollback_err| {
-                            std.debug.panic("Failed to rollback sprite layer change: {}", .{rollback_err});
+                    _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, old_z);
+                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch {
+                        // Rollback: re-insert into old bucket to maintain consistency
+                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, old_z) catch {
+                            log.err("Failed to rollback sprite layer change for entity {}", .{id.toInt()});
                         };
+                        return;
                     };
+                    entry.visual = visual;
                 } else if (old_z != visual.z_index) {
                     const layer_idx = @intFromEnum(visual.layer);
                     self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .sprite }, old_z, visual.z_index) catch |err| {
-                        std.log.err("Failed to change sprite z-index: {}. Engine state may be inconsistent.", .{err});
+                        log.err("Failed to change sprite z-index for entity {}: {}", .{ id.toInt(), err });
+                        return;
                     };
+                    entry.visual = visual;
+                } else {
+                    // No bucket changes needed, just update visual
+                    entry.visual = visual;
                 }
             }
         }
@@ -741,13 +536,12 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
         pub fn destroySprite(self: *Self, id: EntityId) void {
             if (self.sprites.get(id)) |entry| {
                 const layer_idx = @intFromEnum(entry.visual.layer);
-                const removed = self.layer_buckets[layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, entry.visual.z_index);
-                std.debug.assert(removed);
+                _ = self.layer_buckets[layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, entry.visual.z_index);
             }
             _ = self.sprites.swapRemove(id);
         }
 
-        pub fn getSprite(self: *const Self, id: EntityId) ?LayeredSpriteVisual {
+        pub fn getSprite(self: *const Self, id: EntityId) ?SpriteVisual {
             if (self.sprites.get(id)) |entry| {
                 return entry.visual;
             }
@@ -756,41 +550,50 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
 
         // ==================== Shape Management ====================
 
-        pub fn createShape(self: *Self, id: EntityId, visual: LayeredShapeVisual, pos: Position) void {
+        pub fn createShape(self: *Self, id: EntityId, visual: ShapeVisual, pos: Position) void {
+            // If shape already exists, remove old bucket entry first to prevent duplicates
+            if (self.shapes.get(id)) |existing| {
+                const old_layer_idx = @intFromEnum(existing.visual.layer);
+                _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, existing.visual.z_index);
+            }
+
             self.shapes.put(id, .{ .visual = visual, .position = pos }) catch return;
             const layer_idx = @intFromEnum(visual.layer);
             self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch {
-                // Rollback shape entry to avoid inconsistent state
+                // Bucket insert failed - remove map entry to maintain consistency
                 _ = self.shapes.swapRemove(id);
                 return;
             };
         }
 
-        pub fn updateShape(self: *Self, id: EntityId, visual: LayeredShapeVisual) void {
+        pub fn updateShape(self: *Self, id: EntityId, visual: ShapeVisual) void {
             if (self.shapes.getPtr(id)) |entry| {
                 const old_z = entry.visual.z_index;
                 const old_layer = entry.visual.layer;
-                entry.visual = visual;
 
                 if (old_layer != visual.layer) {
+                    // Layer change: remove from old bucket, insert into new, then update visual
                     const old_layer_idx = @intFromEnum(old_layer);
                     const new_layer_idx = @intFromEnum(visual.layer);
-                    const removed = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, old_z);
-                    std.debug.assert(removed);
-                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch |err| {
-                        // Rollback: restore old layer and re-insert to old bucket
-                        std.log.err("Failed to move shape to new layer, rolling back: {}", .{err});
-                        entry.visual.layer = old_layer;
-                        entry.visual.z_index = old_z;
-                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, old_z) catch |rollback_err| {
-                            std.debug.panic("Failed to rollback shape layer change: {}", .{rollback_err});
+                    _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, old_z);
+                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch {
+                        // Rollback: re-insert into old bucket to maintain consistency
+                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, old_z) catch {
+                            log.err("Failed to rollback shape layer change for entity {}", .{id.toInt()});
                         };
+                        return;
                     };
+                    entry.visual = visual;
                 } else if (old_z != visual.z_index) {
                     const layer_idx = @intFromEnum(visual.layer);
                     self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .shape }, old_z, visual.z_index) catch |err| {
-                        std.log.err("Failed to change shape z-index: {}. Engine state may be inconsistent.", .{err});
+                        log.err("Failed to change shape z-index for entity {}: {}", .{ id.toInt(), err });
+                        return;
                     };
+                    entry.visual = visual;
+                } else {
+                    // No bucket changes needed, just update visual
+                    entry.visual = visual;
                 }
             }
         }
@@ -798,13 +601,12 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
         pub fn destroyShape(self: *Self, id: EntityId) void {
             if (self.shapes.get(id)) |entry| {
                 const layer_idx = @intFromEnum(entry.visual.layer);
-                const removed = self.layer_buckets[layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, entry.visual.z_index);
-                std.debug.assert(removed);
+                _ = self.layer_buckets[layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, entry.visual.z_index);
             }
             _ = self.shapes.swapRemove(id);
         }
 
-        pub fn getShape(self: *const Self, id: EntityId) ?LayeredShapeVisual {
+        pub fn getShape(self: *const Self, id: EntityId) ?ShapeVisual {
             if (self.shapes.get(id)) |entry| {
                 return entry.visual;
             }
@@ -813,41 +615,50 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
 
         // ==================== Text Management ====================
 
-        pub fn createText(self: *Self, id: EntityId, visual: LayeredTextVisual, pos: Position) void {
+        pub fn createText(self: *Self, id: EntityId, visual: TextVisual, pos: Position) void {
+            // If text already exists, remove old bucket entry first to prevent duplicates
+            if (self.texts.get(id)) |existing| {
+                const old_layer_idx = @intFromEnum(existing.visual.layer);
+                _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .text }, existing.visual.z_index);
+            }
+
             self.texts.put(id, .{ .visual = visual, .position = pos }) catch return;
             const layer_idx = @intFromEnum(visual.layer);
             self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch {
-                // Rollback text entry to avoid inconsistent state
+                // Bucket insert failed - remove map entry to maintain consistency
                 _ = self.texts.swapRemove(id);
                 return;
             };
         }
 
-        pub fn updateText(self: *Self, id: EntityId, visual: LayeredTextVisual) void {
+        pub fn updateText(self: *Self, id: EntityId, visual: TextVisual) void {
             if (self.texts.getPtr(id)) |entry| {
                 const old_z = entry.visual.z_index;
                 const old_layer = entry.visual.layer;
-                entry.visual = visual;
 
                 if (old_layer != visual.layer) {
+                    // Layer change: remove from old bucket, insert into new, then update visual
                     const old_layer_idx = @intFromEnum(old_layer);
                     const new_layer_idx = @intFromEnum(visual.layer);
-                    const removed = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .text }, old_z);
-                    std.debug.assert(removed);
-                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch |err| {
-                        // Rollback: restore old layer and re-insert to old bucket
-                        std.log.err("Failed to move text to new layer, rolling back: {}", .{err});
-                        entry.visual.layer = old_layer;
-                        entry.visual.z_index = old_z;
-                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, old_z) catch |rollback_err| {
-                            std.debug.panic("Failed to rollback text layer change: {}", .{rollback_err});
+                    _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .text }, old_z);
+                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch {
+                        // Rollback: re-insert into old bucket to maintain consistency
+                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, old_z) catch {
+                            log.err("Failed to rollback text layer change for entity {}", .{id.toInt()});
                         };
+                        return;
                     };
+                    entry.visual = visual;
                 } else if (old_z != visual.z_index) {
                     const layer_idx = @intFromEnum(visual.layer);
                     self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .text }, old_z, visual.z_index) catch |err| {
-                        std.log.err("Failed to change text z-index: {}. Engine state may be inconsistent.", .{err});
+                        log.err("Failed to change text z-index for entity {}: {}", .{ id.toInt(), err });
+                        return;
                     };
+                    entry.visual = visual;
+                } else {
+                    // No bucket changes needed, just update visual
+                    entry.visual = visual;
                 }
             }
         }
@@ -855,13 +666,12 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
         pub fn destroyText(self: *Self, id: EntityId) void {
             if (self.texts.get(id)) |entry| {
                 const layer_idx = @intFromEnum(entry.visual.layer);
-                const removed = self.layer_buckets[layer_idx].remove(.{ .entity_id = id, .item_type = .text }, entry.visual.z_index);
-                std.debug.assert(removed);
+                _ = self.layer_buckets[layer_idx].remove(.{ .entity_id = id, .item_type = .text }, entry.visual.z_index);
             }
             _ = self.texts.swapRemove(id);
         }
 
-        pub fn getText(self: *const Self, id: EntityId) ?LayeredTextVisual {
+        pub fn getText(self: *const Self, id: EntityId) ?TextVisual {
             if (self.texts.get(id)) |entry| {
                 return entry.visual;
             }
@@ -870,8 +680,6 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
 
         // ==================== Position Management ====================
 
-        /// Update position for any entity (sprite, shape, or text).
-        /// Silently returns if the entity doesn't exist.
         pub fn updatePosition(self: *Self, id: EntityId, pos: Position) void {
             if (self.sprites.getPtr(id)) |entry| {
                 entry.position = pos;
@@ -887,8 +695,6 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
             }
         }
 
-        /// Get position for any entity (sprite, shape, or text).
-        /// Returns null if the entity doesn't exist.
         pub fn getPosition(self: *const Self, id: EntityId) ?Position {
             if (self.sprites.get(id)) |entry| {
                 return entry.position;
@@ -904,31 +710,26 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
 
         // ==================== Window/Loop Management ====================
 
-        /// Returns true if the window is still open and running.
         pub fn isRunning(self: *const Self) bool {
             _ = self;
             return !BackendType.windowShouldClose();
         }
 
-        /// Returns the time elapsed since the last frame in seconds.
         pub fn getDeltaTime(self: *const Self) f32 {
             _ = self;
             return BackendType.getFrameTime();
         }
 
-        /// Begin a new frame. Must be called before rendering.
         pub fn beginFrame(self: *const Self) void {
             BackendType.beginDrawing();
             BackendType.clearBackground(self.clear_color);
         }
 
-        /// End the current frame. Must be called after rendering.
         pub fn endFrame(self: *const Self) void {
             _ = self;
             BackendType.endDrawing();
         }
 
-        /// Returns the current window size in pixels.
         pub fn getWindowSize(self: *const Self) struct { w: i32, h: i32 } {
             _ = self;
             return .{
@@ -939,7 +740,6 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
 
         // ==================== Camera ====================
 
-        /// Get the primary camera (single-camera mode or primary in multi-camera mode).
         pub fn getCamera(self: *Self) *Camera {
             if (self.multi_camera_enabled) {
                 return self.camera_manager.getPrimaryCamera();
@@ -947,45 +747,37 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
             return &self.camera;
         }
 
-        /// Set the camera position directly.
         pub fn setCameraPosition(self: *Self, x: f32, y: f32) void {
             self.getCamera().setPosition(x, y);
         }
 
-        /// Set the camera zoom level.
         pub fn setZoom(self: *Self, zoom: f32) void {
             self.getCamera().setZoom(zoom);
         }
 
         // ==================== Multi-Camera ====================
 
-        /// Get the camera manager for advanced multi-camera control.
         pub fn getCameraManager(self: *Self) *CameraManager {
             return &self.camera_manager;
         }
 
-        /// Get camera at a specific index (for multi-camera mode).
         pub fn getCameraAt(self: *Self, index: u2) *Camera {
             return self.camera_manager.getCamera(index);
         }
 
-        /// Enable multi-camera mode with a preset layout.
         pub fn setupSplitScreen(self: *Self, layout: SplitScreenLayout) void {
             self.multi_camera_enabled = true;
             self.camera_manager.setupSplitScreen(layout);
         }
 
-        /// Disable multi-camera mode, return to single camera.
         pub fn disableMultiCamera(self: *Self) void {
             self.multi_camera_enabled = false;
         }
 
-        /// Returns whether multi-camera mode is enabled.
         pub fn isMultiCameraEnabled(self: *const Self) bool {
             return self.multi_camera_enabled;
         }
 
-        /// Set which cameras are active using a bitmask (e.g., 0b0011 for cameras 0 and 1).
         pub fn setActiveCameras(self: *Self, mask: u4) void {
             self.multi_camera_enabled = true;
             self.camera_manager.setActiveMask(mask);
@@ -993,7 +785,6 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
 
         // ==================== Rendering ====================
 
-        /// Render all visible entities. Call between beginFrame() and endFrame().
         pub fn render(self: *Self) void {
             if (self.multi_camera_enabled) {
                 self.renderMultiCamera();
@@ -1003,22 +794,18 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
         }
 
         fn renderSingleCamera(self: *Self) void {
-            // Iterate layers in sorted order
             for (sorted_layers) |layer| {
                 const layer_idx = @intFromEnum(layer);
 
-                // Skip if layer is not visible or not in camera mask
                 if (!self.layer_visibility[layer_idx]) continue;
                 if (!self.single_camera_layer_mask.has(layer)) continue;
 
                 const cfg = layer.config();
 
-                // Begin camera mode for world-space layers
                 if (cfg.space == .world) {
                     self.beginCameraModeWithParallax(cfg.parallax_x, cfg.parallax_y);
                 }
 
-                // Iterate z-buckets for this layer
                 var iter = self.layer_buckets[layer_idx].iterator();
                 while (iter.next()) |item| {
                     if (!self.isVisible(item)) continue;
@@ -1030,7 +817,6 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
                     }
                 }
 
-                // End camera mode for world-space layers
                 if (cfg.space == .world) {
                     self.endCameraMode();
                 }
@@ -1040,34 +826,29 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
         fn renderMultiCamera(self: *Self) void {
             var cam_iter = self.camera_manager.activeIterator();
             while (cam_iter.next()) |cam| {
-                // Use the actual camera index for correct layer mask lookup
+                // Use actual camera index from iterator, not incrementing counter
+                // This handles non-sequential active cameras (e.g., cameras 0 and 2)
                 const cam_idx = cam_iter.index();
                 const layer_mask = self.camera_layer_masks[cam_idx];
 
-                // Begin viewport clipping
                 if (cam.screen_viewport) |vp| {
                     BackendType.beginScissorMode(vp.x, vp.y, vp.width, vp.height);
                 }
 
-                // Get viewport for culling
                 const viewport = cam.getViewport();
 
-                // Iterate layers in sorted order
                 for (sorted_layers) |layer| {
                     const layer_idx = @intFromEnum(layer);
 
-                    // Skip if layer is not visible or not in camera mask
                     if (!self.layer_visibility[layer_idx]) continue;
                     if (!layer_mask.has(layer)) continue;
 
                     const cfg = layer.config();
 
-                    // Begin camera mode for world-space layers
                     if (cfg.space == .world) {
                         self.beginCameraModeWithCamAndParallax(cam, cfg.parallax_x, cfg.parallax_y);
                     }
 
-                    // Iterate z-buckets for this layer
                     var iter = self.layer_buckets[layer_idx].iterator();
                     while (iter.next()) |item| {
                         if (!self.isVisible(item)) continue;
@@ -1087,13 +868,11 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
                         }
                     }
 
-                    // End camera mode for world-space layers
                     if (cfg.space == .world) {
                         BackendType.endMode2D();
                     }
                 }
 
-                // End viewport clipping
                 if (cam.screen_viewport != null) {
                     BackendType.endScissorMode();
                 }
@@ -1279,11 +1058,11 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
                         BackendType.drawRectangleLinesV(pos.x, pos.y, rect.width, rect.height, col);
                     }
                 },
-                .line => |line| {
-                    if (line.thickness > 1) {
-                        BackendType.drawLineEx(pos.x, pos.y, pos.x + line.end.x, pos.y + line.end.y, line.thickness, col);
+                .line => |l| {
+                    if (l.thickness > 1) {
+                        BackendType.drawLineEx(pos.x, pos.y, pos.x + l.end.x, pos.y + l.end.y, l.thickness, col);
                     } else {
-                        BackendType.drawLine(pos.x, pos.y, pos.x + line.end.x, pos.y + line.end.y, col);
+                        BackendType.drawLine(pos.x, pos.y, pos.x + l.end.x, pos.y + l.end.y, col);
                     }
                 },
                 .triangle => |tri| {
@@ -1330,314 +1109,11 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
 }
 
 // ============================================
-// Backwards-Compatible Engine (no layers)
+// Default Engine Alias
 // ============================================
 
-/// A single-layer enum used internally for backwards-compatible RetainedEngine.
-/// All entities are placed in a single world-space layer.
-const SingleWorldLayer = enum {
-    default,
-
-    pub fn config(self: SingleWorldLayer) layer_mod.LayerConfig {
-        _ = self;
-        return .{ .space = .world, .order = 0 };
-    }
-};
-
-/// RetainedEngine without explicit layer support - for backwards compatibility.
-/// Internally uses the layered engine with a single world-space layer.
-///
-/// This provides the same API as the original RetainedEngine, where all entities
-/// share a single world-space coordinate system affected by the camera.
-pub fn RetainedEngineWith(comptime BackendType: type) type {
-    // Use the layered engine with a single layer internally
-    const LayeredEngine = RetainedEngineWithLayers(BackendType, SingleWorldLayer);
-
-    return struct {
-        const Self = @This();
-        pub const Backend = BackendType;
-        pub const SplitScreenLayout = LayeredEngine.SplitScreenLayout;
-
-        /// Internal layered engine instance
-        inner: LayeredEngine,
-
-        // ==================== Lifecycle ====================
-
-        pub fn init(allocator: std.mem.Allocator, config: EngineConfig) !Self {
-            return Self{
-                .inner = try LayeredEngine.init(allocator, config),
-            };
-        }
-
-        pub fn deinit(self: *Self) void {
-            self.inner.deinit();
-        }
-
-        // ==================== Asset Loading ====================
-
-        pub fn loadTexture(self: *Self, path: [:0]const u8) !TextureId {
-            return self.inner.loadTexture(path);
-        }
-
-        pub fn loadAtlas(self: *Self, name: []const u8, json_path: [:0]const u8, texture_path: [:0]const u8) !void {
-            return self.inner.loadAtlas(name, json_path, texture_path);
-        }
-
-        /// Load an atlas from comptime .zon frame data (no JSON parsing at runtime).
-        /// The frames parameter should be a comptime import of a *_frames.zon file.
-        pub fn loadAtlasComptime(
-            self: *Self,
-            name: []const u8,
-            comptime frames: anytype,
-            texture_path: [:0]const u8,
-        ) !void {
-            return self.inner.loadAtlasComptime(name, frames, texture_path);
-        }
-
-        // ==================== Sprite Management ====================
-
-        pub fn createSprite(self: *Self, id: EntityId, visual: SpriteVisual, pos: Position) void {
-            self.inner.createSprite(id, spriteToLayered(visual), pos);
-        }
-
-        pub fn updateSprite(self: *Self, id: EntityId, visual: SpriteVisual) void {
-            self.inner.updateSprite(id, spriteToLayered(visual));
-        }
-
-        pub fn destroySprite(self: *Self, id: EntityId) void {
-            self.inner.destroySprite(id);
-        }
-
-        pub fn getSprite(self: *const Self, id: EntityId) ?SpriteVisual {
-            if (self.inner.getSprite(id)) |layered| {
-                return layeredToSprite(layered);
-            }
-            return null;
-        }
-
-        // ==================== Shape Management ====================
-
-        pub fn createShape(self: *Self, id: EntityId, visual: ShapeVisual, pos: Position) void {
-            self.inner.createShape(id, shapeToLayered(visual), pos);
-        }
-
-        pub fn updateShape(self: *Self, id: EntityId, visual: ShapeVisual) void {
-            self.inner.updateShape(id, shapeToLayered(visual));
-        }
-
-        pub fn destroyShape(self: *Self, id: EntityId) void {
-            self.inner.destroyShape(id);
-        }
-
-        pub fn getShape(self: *const Self, id: EntityId) ?ShapeVisual {
-            if (self.inner.getShape(id)) |layered| {
-                return layeredToShape(layered);
-            }
-            return null;
-        }
-
-        // ==================== Text Management ====================
-
-        pub fn createText(self: *Self, id: EntityId, visual: TextVisual, pos: Position) void {
-            self.inner.createText(id, textToLayered(visual), pos);
-        }
-
-        pub fn updateText(self: *Self, id: EntityId, visual: TextVisual) void {
-            self.inner.updateText(id, textToLayered(visual));
-        }
-
-        pub fn destroyText(self: *Self, id: EntityId) void {
-            self.inner.destroyText(id);
-        }
-
-        pub fn getText(self: *const Self, id: EntityId) ?TextVisual {
-            if (self.inner.getText(id)) |layered| {
-                return layeredToText(layered);
-            }
-            return null;
-        }
-
-        // ==================== Position Management ====================
-
-        /// Update position for any entity (sprite, shape, or text).
-        /// Silently returns if the entity doesn't exist.
-        pub fn updatePosition(self: *Self, id: EntityId, pos: Position) void {
-            self.inner.updatePosition(id, pos);
-        }
-
-        /// Get position for any entity (sprite, shape, or text).
-        /// Returns null if the entity doesn't exist.
-        pub fn getPosition(self: *const Self, id: EntityId) ?Position {
-            return self.inner.getPosition(id);
-        }
-
-        // ==================== Window/Loop Management ====================
-
-        pub fn isRunning(self: *const Self) bool {
-            return self.inner.isRunning();
-        }
-
-        pub fn getDeltaTime(self: *const Self) f32 {
-            return self.inner.getDeltaTime();
-        }
-
-        pub fn beginFrame(self: *const Self) void {
-            self.inner.beginFrame();
-        }
-
-        pub fn endFrame(self: *const Self) void {
-            self.inner.endFrame();
-        }
-
-        pub fn getWindowSize(self: *const Self) struct { w: i32, h: i32 } {
-            return self.inner.getWindowSize();
-        }
-
-        // ==================== Camera ====================
-
-        /// Get the primary camera (single-camera mode or primary in multi-camera mode)
-        pub fn getCamera(self: *Self) *LayeredEngine.CameraType {
-            return self.inner.getCamera();
-        }
-
-        /// Get camera at a specific index (for multi-camera mode)
-        pub fn getCameraAt(self: *Self, index: u2) *LayeredEngine.CameraType {
-            return self.inner.getCameraAt(index);
-        }
-
-        /// Enable multi-camera mode with a preset layout
-        pub fn setupSplitScreen(self: *Self, layout: SplitScreenLayout) void {
-            self.inner.setupSplitScreen(layout);
-        }
-
-        /// Set which cameras are active using a bitmask (e.g., 0b0011 for cameras 0 and 1)
-        pub fn setActiveCameras(self: *Self, mask: u4) void {
-            self.inner.setActiveCameras(mask);
-        }
-
-        /// Disable multi-camera mode, return to single camera
-        pub fn disableMultiCamera(self: *Self) void {
-            self.inner.disableMultiCamera();
-        }
-
-        // ==================== Rendering ====================
-
-        pub fn render(self: *Self) void {
-            self.inner.render();
-        }
-
-        // ==================== Queries ====================
-
-        pub fn spriteCount(self: *const Self) usize {
-            return self.inner.spriteCount();
-        }
-
-        pub fn shapeCount(self: *const Self) usize {
-            return self.inner.shapeCount();
-        }
-
-        pub fn textCount(self: *const Self) usize {
-            return self.inner.textCount();
-        }
-
-        // ==================== Conversion Helpers ====================
-
-        fn spriteToLayered(visual: SpriteVisual) LayeredEngine.LayeredSpriteVisual {
-            return .{
-                .texture = visual.texture,
-                .sprite_name = visual.sprite_name,
-                .scale = visual.scale,
-                .rotation = visual.rotation,
-                .flip_x = visual.flip_x,
-                .flip_y = visual.flip_y,
-                .tint = visual.tint,
-                .z_index = visual.z_index,
-                .visible = visual.visible,
-                .pivot = visual.pivot,
-                .pivot_x = visual.pivot_x,
-                .pivot_y = visual.pivot_y,
-                .layer = .default,
-            };
-        }
-
-        fn layeredToSprite(layered: LayeredEngine.LayeredSpriteVisual) SpriteVisual {
-            return .{
-                .texture = layered.texture,
-                .sprite_name = layered.sprite_name,
-                .scale = layered.scale,
-                .rotation = layered.rotation,
-                .flip_x = layered.flip_x,
-                .flip_y = layered.flip_y,
-                .tint = layered.tint,
-                .z_index = layered.z_index,
-                .visible = layered.visible,
-                .pivot = layered.pivot,
-                .pivot_x = layered.pivot_x,
-                .pivot_y = layered.pivot_y,
-            };
-        }
-
-        fn shapeToLayered(visual: ShapeVisual) LayeredEngine.LayeredShapeVisual {
-            return .{
-                .shape = visual.shape,
-                .color = visual.color,
-                .rotation = visual.rotation,
-                .z_index = visual.z_index,
-                .visible = visual.visible,
-                .layer = .default,
-            };
-        }
-
-        fn layeredToShape(layered: LayeredEngine.LayeredShapeVisual) ShapeVisual {
-            return .{
-                .shape = layered.shape,
-                .color = layered.color,
-                .rotation = layered.rotation,
-                .z_index = layered.z_index,
-                .visible = layered.visible,
-            };
-        }
-
-        fn textToLayered(visual: TextVisual) LayeredEngine.LayeredTextVisual {
-            return .{
-                .font = visual.font,
-                .text = visual.text,
-                .size = visual.size,
-                .color = visual.color,
-                .z_index = visual.z_index,
-                .visible = visual.visible,
-                .layer = .default,
-            };
-        }
-
-        fn layeredToText(layered: LayeredEngine.LayeredTextVisual) TextVisual {
-            return .{
-                .font = layered.font,
-                .text = layered.text,
-                .size = layered.size,
-                .color = layered.color,
-                .z_index = layered.z_index,
-                .visible = layered.visible,
-            };
-        }
-    };
-}
-// Default backend
 const DefaultBackend = backend_mod.Backend(raylib_backend.RaylibBackend);
 
-/// Default retained engine with raylib backend (no layers).
-/// For simple use cases where layer support is not needed.
-pub const RetainedEngine = RetainedEngineWith(DefaultBackend);
-
 /// Default retained engine with raylib backend and DefaultLayers.
-///
-/// Naming convention:
-/// - `RetainedEngineWithLayers(Backend, LayerEnum)` is the generic constructor function
-/// - `LayeredRetainedEngine` is the concrete type alias with default settings
-///
-/// When defining your own engine with custom layers:
-/// ```zig
-/// const MyLayers = enum { background, world, ui, ... };
-/// const MyEngine = gfx.RetainedEngineWithLayers(gfx.DefaultBackend, MyLayers);
-/// ```
-pub const LayeredRetainedEngine = RetainedEngineWithLayers(DefaultBackend, DefaultLayers);
+/// For custom layers, use `RetainedEngineWith(Backend, YourLayerEnum)`.
+pub const RetainedEngine = RetainedEngineWith(DefaultBackend, DefaultLayers);
