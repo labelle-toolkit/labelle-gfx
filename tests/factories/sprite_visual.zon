@@ -1,0 +1,17 @@
+.{
+    .texture = .invalid,
+    .sprite_name = "test_sprite",
+    .scale = 1.0,
+    .rotation = 0,
+    .tint = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    .z_index = 128,
+    .flip_x = false,
+    .flip_y = false,
+    .visible = true,
+    .pivot = .center,
+    .pivot_x = 0.5,
+    .pivot_y = 0.5,
+    .layer = .world,
+    .size_mode = .none,
+    .container = null,
+}

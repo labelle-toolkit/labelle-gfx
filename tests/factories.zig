@@ -1,8 +1,8 @@
 //! Test Factories and Helpers for labelle
 //!
 //! Provides zspec Factory definitions using .zon files for data separation.
-//! Simple types use .zon files in tests/factories/*.zon.
-//! Complex types with nested structs remain in Zig due to type coercion limitations.
+//! All factory defaults are defined in tests/factories/*.zon files.
+//! zspec v0.6.0+ supports recursive nested struct coercion.
 
 const std = @import("std");
 const zspec = @import("zspec");
@@ -27,59 +27,15 @@ pub const ShapeVisual = MockEngine.ShapeVisual;
 pub const TextVisual = MockEngine.TextVisual;
 
 // ============================================================================
-// Factory Definitions
+// Factory Definitions - All loaded from .zon files
 // ============================================================================
 
-// Simple types loaded from .zon files
 pub const PositionFactory = Factory.defineFrom(Position, @import("factories/position.zon"));
 pub const ColorFactory = Factory.defineFrom(Color, @import("factories/color.zon"));
-
-// Complex types with nested structs (Color, unions) remain in Zig
-pub const SpriteVisualFactory = Factory.define(SpriteVisual, .{
-    .texture = .invalid,
-    .sprite_name = "test_sprite",
-    .scale = 1.0,
-    .rotation = 0,
-    .tint = Color.white,
-    .z_index = 128,
-    .flip_x = false,
-    .flip_y = false,
-    .visible = true,
-    .pivot = .center,
-    .pivot_x = 0.5,
-    .pivot_y = 0.5,
-    .layer = .world,
-    .size_mode = .none,
-    .container = null,
-});
-
-pub const CircleShapeFactory = Factory.define(ShapeVisual, .{
-    .shape = .{ .circle = .{ .radius = 50 } },
-    .color = Color.white,
-    .z_index = 128,
-    .rotation = 0,
-    .visible = true,
-    .layer = .world,
-});
-
-pub const RectangleShapeFactory = Factory.define(ShapeVisual, .{
-    .shape = .{ .rectangle = .{ .width = 100, .height = 50 } },
-    .color = Color.white,
-    .z_index = 128,
-    .rotation = 0,
-    .visible = true,
-    .layer = .world,
-});
-
-pub const TextVisualFactory = Factory.define(TextVisual, .{
-    .font = .invalid,
-    .text = "Test",
-    .size = 16,
-    .color = Color.white,
-    .z_index = 128,
-    .visible = true,
-    .layer = .world,
-});
+pub const SpriteVisualFactory = Factory.defineFrom(SpriteVisual, @import("factories/sprite_visual.zon"));
+pub const TextVisualFactory = Factory.defineFrom(TextVisual, @import("factories/text_visual.zon"));
+pub const CircleShapeFactory = Factory.defineFrom(ShapeVisual, @import("factories/circle_shape.zon"));
+pub const RectangleShapeFactory = Factory.defineFrom(ShapeVisual, @import("factories/rectangle_shape.zon"));
 
 // ============================================================================
 // Helper Functions
