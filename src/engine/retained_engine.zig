@@ -1046,14 +1046,14 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                         );
                     } else {
                         // Sized mode: resolve container
-                        const container = self.resolveContainer(visual, sprite_w, sprite_h);
-                        self.renderSizedSprite(result, visual, pos, src_rect, sprite_w, sprite_h, container, tint);
+                        const container = resolveContainer(visual, sprite_w, sprite_h);
+                        renderSizedSprite(result, visual, pos, src_rect, sprite_w, sprite_h, container, tint);
                     }
                 }
             }
         }
 
-        fn resolveContainer(_: *const Self, visual: SpriteVisual, sprite_w: f32, sprite_h: f32) Container {
+        fn resolveContainer(visual: SpriteVisual, sprite_w: f32, sprite_h: f32) Container {
             if (visual.container) |c| {
                 if (c.isScreen()) {
                     return Container{
@@ -1076,7 +1076,6 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         }
 
         fn renderSizedSprite(
-            self: *Self,
             result: anytype,
             visual: SpriteVisual,
             pos: Position,
@@ -1086,12 +1085,19 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             container: Container,
             tint: BackendType.Color,
         ) void {
-            _ = self;
             const cont_w = container.width;
             const cont_h = container.height;
 
+            // Guard against division by zero from invalid sprite dimensions
+            if (sprite_w <= 0 or sprite_h <= 0) {
+                log.warn("Skipping sized sprite render: invalid sprite dimensions ({d}x{d})", .{ sprite_w, sprite_h });
+                return;
+            }
+
             switch (visual.size_mode) {
                 .none => unreachable, // Handled above
+                // Note: stretch, cover, contain, scale_down modes ignore visual.scale field
+                // (scale is determined by container/sprite ratio). Only repeat uses visual.scale.
                 .stretch => {
                     // Fill container exactly (may distort)
                     const dest_rect = BackendType.Rectangle{
@@ -1162,10 +1168,14 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                 },
                 .repeat => {
                     // Tile sprite to fill container
+                    // Note: rotation applies per-tile, not to the tiled grid as a whole
                     const scaled_w = sprite_w * visual.scale;
                     const scaled_h = sprite_h * visual.scale;
 
-                    if (scaled_w <= 0 or scaled_h <= 0) return;
+                    if (scaled_w <= 0 or scaled_h <= 0) {
+                        log.warn("Skipping repeat render: non-positive tile dimensions ({d}x{d})", .{ scaled_w, scaled_h });
+                        return;
+                    }
 
                     // Calculate container's top-left based on pos and pivot
                     // This makes repeat mode consistent with other sizing modes
@@ -1174,6 +1184,13 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
 
                     const cols = @as(u32, @intFromFloat(@ceil(cont_w / scaled_w)));
                     const rows = @as(u32, @intFromFloat(@ceil(cont_h / scaled_h)));
+
+                    // Limit tile count to prevent performance issues or overflow
+                    const max_tiles: u32 = 10000;
+                    if (cols * rows > max_tiles) {
+                        log.warn("Repeat tile count ({d}x{d}={d}) exceeds limit ({d}), skipping", .{ cols, rows, cols * rows, max_tiles });
+                        return;
+                    }
 
                     var row: u32 = 0;
                     while (row < rows) : (row += 1) {
