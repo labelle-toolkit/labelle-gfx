@@ -1046,33 +1046,46 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                         );
                     } else {
                         // Sized mode: resolve container
-                        const container = resolveContainer(visual, sprite_w, sprite_h);
-                        renderSizedSprite(result, visual, pos, src_rect, sprite_w, sprite_h, container, tint);
+                        const cont_rect = resolveContainer(visual, sprite_w, sprite_h);
+                        renderSizedSprite(result, visual, pos, src_rect, sprite_w, sprite_h, cont_rect, tint);
                     }
                 }
             }
         }
 
-        fn resolveContainer(visual: SpriteVisual, sprite_w: f32, sprite_h: f32) Container {
-            if (visual.container) |c| {
-                if (c.isScreen()) {
-                    return Container{
-                        .width = @floatFromInt(BackendType.getScreenWidth()),
-                        .height = @floatFromInt(BackendType.getScreenHeight()),
-                    };
-                }
-                return c;
-            }
-            // No explicit container: use screen for screen-space layers
+        /// Returns screen dimensions as a Container.Rect at origin.
+        fn getScreenRect() Container.Rect {
+            return Container.Rect{
+                .x = 0,
+                .y = 0,
+                .width = @floatFromInt(BackendType.getScreenWidth()),
+                .height = @floatFromInt(BackendType.getScreenHeight()),
+            };
+        }
+
+        /// Resolves a Container specification to concrete dimensions (Rect).
+        fn resolveContainer(visual: SpriteVisual, sprite_w: f32, sprite_h: f32) Container.Rect {
+            const c = visual.container orelse .infer;
+            return switch (c) {
+                .infer => resolveInferredContainer(visual, sprite_w, sprite_h),
+                .viewport => getScreenRect(),
+                .explicit => |rect| rect,
+            };
+        }
+
+        fn resolveInferredContainer(visual: SpriteVisual, sprite_w: f32, sprite_h: f32) Container.Rect {
             const layer_cfg = visual.layer.config();
             if (layer_cfg.space == .screen) {
-                return Container{
-                    .width = @floatFromInt(BackendType.getScreenWidth()),
-                    .height = @floatFromInt(BackendType.getScreenHeight()),
-                };
+                return getScreenRect();
             }
-            // World-space with no container: fallback to sprite's natural size
-            return Container{ .width = sprite_w, .height = sprite_h };
+            // World-space with no container: use sprite's natural size
+            // (sized modes ignore visual.scale, so we don't apply it here)
+            return Container.Rect{
+                .x = 0,
+                .y = 0,
+                .width = sprite_w,
+                .height = sprite_h,
+            };
         }
 
         fn renderSizedSprite(
@@ -1082,11 +1095,14 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             src_rect: BackendType.Rectangle,
             sprite_w: f32,
             sprite_h: f32,
-            container: Container,
+            cont_rect: Container.Rect,
             tint: BackendType.Color,
         ) void {
-            const cont_w = container.width;
-            const cont_h = container.height;
+            const cont_w = cont_rect.width;
+            const cont_h = cont_rect.height;
+            // Base position includes container offset (for UI panels not at origin)
+            const base_x = pos.x + cont_rect.x;
+            const base_y = pos.y + cont_rect.y;
 
             // Guard against division by zero from invalid sprite dimensions
             if (sprite_w <= 0 or sprite_h <= 0) {
@@ -1101,8 +1117,8 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                 .stretch => {
                     // Fill container exactly (may distort)
                     const dest_rect = BackendType.Rectangle{
-                        .x = pos.x,
-                        .y = pos.y,
+                        .x = base_x,
+                        .y = base_y,
                         .width = cont_w,
                         .height = cont_h,
                     };
@@ -1125,19 +1141,19 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     };
 
                     // Compute cropped source rect (UV cropping)
-                    const base_x: f32 = @floatFromInt(result.sprite.x);
-                    const base_y: f32 = @floatFromInt(result.sprite.y);
+                    const src_x: f32 = @floatFromInt(result.sprite.x);
+                    const src_y: f32 = @floatFromInt(result.sprite.y);
                     const cropped_src = BackendType.Rectangle{
-                        .x = base_x + crop.crop_x,
-                        .y = base_y + crop.crop_y,
+                        .x = src_x + crop.crop_x,
+                        .y = src_y + crop.crop_y,
                         .width = if (visual.flip_x) -crop.visible_w else crop.visible_w,
                         .height = if (visual.flip_y) -crop.visible_h else crop.visible_h,
                     };
 
                     // Draw cropped portion at container size
                     const dest_rect = BackendType.Rectangle{
-                        .x = pos.x,
-                        .y = pos.y,
+                        .x = base_x,
+                        .y = base_y,
                         .width = cont_w,
                         .height = cont_h,
                     };
@@ -1168,8 +1184,8 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     const offset_y = padding_y * (visual.pivot_y - 0.5);
 
                     const dest_rect = BackendType.Rectangle{
-                        .x = pos.x + offset_x,
-                        .y = pos.y + offset_y,
+                        .x = base_x + offset_x,
+                        .y = base_y + offset_y,
                         .width = dest_w,
                         .height = dest_h,
                     };
@@ -1188,10 +1204,10 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                         return;
                     }
 
-                    // Calculate container's top-left based on pos and pivot
+                    // Calculate container's top-left based on pivot
                     // This makes repeat mode consistent with other sizing modes
-                    const container_tl_x = pos.x - cont_w * visual.pivot_x;
-                    const container_tl_y = pos.y - cont_h * visual.pivot_y;
+                    const container_tl_x = base_x - cont_w * visual.pivot_x;
+                    const container_tl_y = base_y - cont_h * visual.pivot_y;
 
                     const cols = @as(u32, @intFromFloat(@ceil(cont_w / scaled_w)));
                     const rows = @as(u32, @intFromFloat(@ceil(cont_h / scaled_h)));
