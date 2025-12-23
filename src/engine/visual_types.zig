@@ -20,6 +20,12 @@ pub const Shape = visuals.Shape;
 pub fn VisualTypes(comptime LayerEnum: type) type {
     const sorted_layers = layer_mod.getSortedLayers(LayerEnum);
 
+    comptime {
+        if (sorted_layers.len == 0) {
+            @compileError("LayerEnum cannot be empty, as a default layer cannot be determined.");
+        }
+    }
+
     return struct {
         /// Get the default layer (first world-space layer, or first layer)
         pub fn getDefaultLayer() LayerEnum {
