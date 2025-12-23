@@ -33,6 +33,7 @@
 //! For simple usage, use `RetainedEngine` which uses `DefaultLayers` (background, world, ui).
 
 const std = @import("std");
+const log = @import("../log.zig").engine;
 
 // Import from new modules
 pub const types = @import("types.zig");
@@ -504,16 +505,30 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             if (self.sprites.getPtr(id)) |entry| {
                 const old_z = entry.visual.z_index;
                 const old_layer = entry.visual.layer;
-                entry.visual = visual;
 
                 if (old_layer != visual.layer) {
+                    // Layer change: remove from old bucket, insert into new, then update visual
                     const old_layer_idx = @intFromEnum(old_layer);
                     const new_layer_idx = @intFromEnum(visual.layer);
                     _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, old_z);
-                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch return;
+                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch {
+                        // Rollback: re-insert into old bucket to maintain consistency
+                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, old_z) catch {
+                            log.err("Failed to rollback sprite layer change for entity {}", .{id.toInt()});
+                        };
+                        return;
+                    };
+                    entry.visual = visual;
                 } else if (old_z != visual.z_index) {
                     const layer_idx = @intFromEnum(visual.layer);
-                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .sprite }, old_z, visual.z_index) catch {};
+                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .sprite }, old_z, visual.z_index) catch |err| {
+                        log.err("Failed to change sprite z-index for entity {}: {}", .{ id.toInt(), err });
+                        return;
+                    };
+                    entry.visual = visual;
+                } else {
+                    // No bucket changes needed, just update visual
+                    entry.visual = visual;
                 }
             }
         }
@@ -555,16 +570,30 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             if (self.shapes.getPtr(id)) |entry| {
                 const old_z = entry.visual.z_index;
                 const old_layer = entry.visual.layer;
-                entry.visual = visual;
 
                 if (old_layer != visual.layer) {
+                    // Layer change: remove from old bucket, insert into new, then update visual
                     const old_layer_idx = @intFromEnum(old_layer);
                     const new_layer_idx = @intFromEnum(visual.layer);
                     _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, old_z);
-                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch return;
+                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch {
+                        // Rollback: re-insert into old bucket to maintain consistency
+                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, old_z) catch {
+                            log.err("Failed to rollback shape layer change for entity {}", .{id.toInt()});
+                        };
+                        return;
+                    };
+                    entry.visual = visual;
                 } else if (old_z != visual.z_index) {
                     const layer_idx = @intFromEnum(visual.layer);
-                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .shape }, old_z, visual.z_index) catch {};
+                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .shape }, old_z, visual.z_index) catch |err| {
+                        log.err("Failed to change shape z-index for entity {}: {}", .{ id.toInt(), err });
+                        return;
+                    };
+                    entry.visual = visual;
+                } else {
+                    // No bucket changes needed, just update visual
+                    entry.visual = visual;
                 }
             }
         }
@@ -606,16 +635,30 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             if (self.texts.getPtr(id)) |entry| {
                 const old_z = entry.visual.z_index;
                 const old_layer = entry.visual.layer;
-                entry.visual = visual;
 
                 if (old_layer != visual.layer) {
+                    // Layer change: remove from old bucket, insert into new, then update visual
                     const old_layer_idx = @intFromEnum(old_layer);
                     const new_layer_idx = @intFromEnum(visual.layer);
                     _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .text }, old_z);
-                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch return;
+                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch {
+                        // Rollback: re-insert into old bucket to maintain consistency
+                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, old_z) catch {
+                            log.err("Failed to rollback text layer change for entity {}", .{id.toInt()});
+                        };
+                        return;
+                    };
+                    entry.visual = visual;
                 } else if (old_z != visual.z_index) {
                     const layer_idx = @intFromEnum(visual.layer);
-                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .text }, old_z, visual.z_index) catch {};
+                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .text }, old_z, visual.z_index) catch |err| {
+                        log.err("Failed to change text z-index for entity {}: {}", .{ id.toInt(), err });
+                        return;
+                    };
+                    entry.visual = visual;
+                } else {
+                    // No bucket changes needed, just update visual
+                    entry.visual = visual;
                 }
             }
         }
