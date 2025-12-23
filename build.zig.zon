@@ -14,8 +14,8 @@
             .hash = "raylib_zig-5.6.0-dev-KE8REL5MBQAf3p497t52Xw9P7ojndIkVOWPXnLiLLw2P",
         },
         .zspec = .{
-            .url = "git+https://github.com/apotema/zspec?ref=v0.4.0#62665d8f4c9afb7bc86afb8778c45b3e1ec7f042",
-            .hash = "zspec-0.4.0-jaKLbZjRAgB8BEh-e7ldQ-YqX_Ham1CG6HqsHn128154",
+            .url = "git+https://github.com/apotema/zspec?ref=v0.5.0#7154e4ec4d07d999b1bab6bf9d801f88c9eb9965",
+            .hash = "zspec-0.5.0-jaKLbQ0WAwAk9FO1EaT3lPz67yIHf9Gl34R5gg-7zFML",
         },
         .sokol = .{
             .url = "git+https://github.com/floooh/sokol-zig.git#bb1a4e95b243e655e788076c545ca6a1f6bf1558",
