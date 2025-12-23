@@ -721,12 +721,18 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
                     const removed = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, old_z);
                     std.debug.assert(removed);
                     self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch |err| {
-                        std.debug.panic("Failed to insert sprite into new layer bucket: {}", .{err});
+                        // Rollback: restore old layer and re-insert to old bucket
+                        std.log.err("Failed to move sprite to new layer, rolling back: {}", .{err});
+                        entry.visual.layer = old_layer;
+                        entry.visual.z_index = old_z;
+                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, old_z) catch |rollback_err| {
+                            std.debug.panic("Failed to rollback sprite layer change: {}", .{rollback_err});
+                        };
                     };
                 } else if (old_z != visual.z_index) {
                     const layer_idx = @intFromEnum(visual.layer);
                     self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .sprite }, old_z, visual.z_index) catch |err| {
-                        std.debug.panic("Failed to change sprite z-index: {}", .{err});
+                        std.log.err("Failed to change sprite z-index: {}. Engine state may be inconsistent.", .{err});
                     };
                 }
             }
@@ -772,12 +778,18 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
                     const removed = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, old_z);
                     std.debug.assert(removed);
                     self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch |err| {
-                        std.debug.panic("Failed to insert shape into new layer bucket: {}", .{err});
+                        // Rollback: restore old layer and re-insert to old bucket
+                        std.log.err("Failed to move shape to new layer, rolling back: {}", .{err});
+                        entry.visual.layer = old_layer;
+                        entry.visual.z_index = old_z;
+                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, old_z) catch |rollback_err| {
+                            std.debug.panic("Failed to rollback shape layer change: {}", .{rollback_err});
+                        };
                     };
                 } else if (old_z != visual.z_index) {
                     const layer_idx = @intFromEnum(visual.layer);
                     self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .shape }, old_z, visual.z_index) catch |err| {
-                        std.debug.panic("Failed to change shape z-index: {}", .{err});
+                        std.log.err("Failed to change shape z-index: {}. Engine state may be inconsistent.", .{err});
                     };
                 }
             }
@@ -823,12 +835,18 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
                     const removed = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .text }, old_z);
                     std.debug.assert(removed);
                     self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch |err| {
-                        std.debug.panic("Failed to insert text into new layer bucket: {}", .{err});
+                        // Rollback: restore old layer and re-insert to old bucket
+                        std.log.err("Failed to move text to new layer, rolling back: {}", .{err});
+                        entry.visual.layer = old_layer;
+                        entry.visual.z_index = old_z;
+                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, old_z) catch |rollback_err| {
+                            std.debug.panic("Failed to rollback text layer change: {}", .{rollback_err});
+                        };
                     };
                 } else if (old_z != visual.z_index) {
                     const layer_idx = @intFromEnum(visual.layer);
                     self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .text }, old_z, visual.z_index) catch |err| {
-                        std.debug.panic("Failed to change text z-index: {}", .{err});
+                        std.log.err("Failed to change text z-index: {}. Engine state may be inconsistent.", .{err});
                     };
                 }
             }
