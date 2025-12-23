@@ -371,6 +371,11 @@ Available sizing modes:
 - `scale_down` - Like contain, but never scales up (max scale 1.0)
 - `repeat` - Tile the sprite to fill the container
 
+**Note on trimmed atlas sprites:** Sizing modes use the **trimmed frame dimensions** (after transparent padding is removed by tools like TexturePacker), not the original source dimensions. This means:
+- A 100x100 sprite trimmed to 80x60 will use 80x60 for aspect ratio calculations
+- `contain` and `cover` modes may produce unexpected letterboxing/cropping with heavily trimmed sprites
+- If original dimensions are important, consider disabling trimming in your atlas packer or adding padding to preserve aspect ratio
+
 ### Comptime Atlas Loading
 
 Load sprite atlas data at compile time from .zon files (eliminates JSON parsing at runtime):
