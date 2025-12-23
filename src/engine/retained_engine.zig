@@ -1210,14 +1210,24 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     const container_tl_y = base_y - cont_h * visual.pivot_y;
 
                     // Get viewport bounds for culling (screen dimensions)
+                    // Note: This uses screen coordinates, not camera viewport. For world-space
+                    // layers, tiles may be culled incorrectly if camera is offset/zoomed.
+                    // This is a known limitation - culling is conservative (may draw extra tiles).
                     const vp_x: f32 = 0;
                     const vp_y: f32 = 0;
                     const vp_w: f32 = @floatFromInt(BackendType.getScreenWidth());
                     const vp_h: f32 = @floatFromInt(BackendType.getScreenHeight());
 
-                    // Calculate total tile grid bounds
-                    const total_cols = @as(u32, @intFromFloat(@ceil(cont_w / scaled_w)));
-                    const total_rows = @as(u32, @intFromFloat(@ceil(cont_h / scaled_h)));
+                    // Calculate total tile grid bounds with overflow protection
+                    const cols_float = @ceil(cont_w / scaled_w);
+                    const rows_float = @ceil(cont_h / scaled_h);
+                    const max_u32: f32 = @floatFromInt(std.math.maxInt(u32));
+                    if (cols_float > max_u32 or rows_float > max_u32) {
+                        log.warn("Repeat tile count overflow: {d}x{d} cols/rows exceed u32 max", .{ cols_float, rows_float });
+                        return;
+                    }
+                    const total_cols: u32 = @intFromFloat(cols_float);
+                    const total_rows: u32 = @intFromFloat(rows_float);
 
                     // Limit tile count to prevent performance issues or overflow
                     const max_tiles: u32 = 10000;
@@ -1238,8 +1248,17 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                         0;
 
                     // End tile: last tile that could be visible (+1 for exclusive end)
-                    const end_col = @min(total_cols, @as(u32, @intFromFloat(@ceil((vp_x + vp_w - container_tl_x) / scaled_w))));
-                    const end_row = @min(total_rows, @as(u32, @intFromFloat(@ceil((vp_y + vp_h - container_tl_y) / scaled_h))));
+                    // Guard against negative values (container fully off-screen to the right/bottom)
+                    const end_col_dist = vp_x + vp_w - container_tl_x;
+                    const end_row_dist = vp_y + vp_h - container_tl_y;
+                    const end_col = if (end_col_dist <= 0)
+                        0
+                    else
+                        @min(total_cols, @as(u32, @intFromFloat(@ceil(end_col_dist / scaled_w))));
+                    const end_row = if (end_row_dist <= 0)
+                        0
+                    else
+                        @min(total_rows, @as(u32, @intFromFloat(@ceil(end_row_dist / scaled_h))));
 
                     // Only draw visible tiles
                     var row: u32 = start_row;
