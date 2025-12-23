@@ -1112,33 +1112,26 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                 },
                 .cover => {
                     // Scale to cover container using UV cropping (samples only visible portion)
-                    const scale_x = cont_w / sprite_w;
-                    const scale_y = cont_h / sprite_h;
-                    const scale = @max(scale_x, scale_y);
-
-                    // Guard against division by zero from non-positive container dimensions
-                    if (scale <= 0) {
-                        log.warn("Skipping cover render: non-positive scale ({d})", .{scale});
+                    const crop = types.CoverCrop.calculate(
+                        sprite_w,
+                        sprite_h,
+                        cont_w,
+                        cont_h,
+                        visual.pivot_x,
+                        visual.pivot_y,
+                    ) orelse {
+                        log.warn("Skipping cover render: non-positive scale", .{});
                         return;
-                    }
-
-                    // Calculate visible portion in sprite-local coordinates
-                    const visible_w = cont_w / scale;
-                    const visible_h = cont_h / scale;
-
-                    // Pivot determines which part of sprite stays visible
-                    // pivot 0.5 = center visible, 0.0 = left/top visible, 1.0 = right/bottom visible
-                    const crop_x = (sprite_w - visible_w) * visual.pivot_x;
-                    const crop_y = (sprite_h - visible_h) * visual.pivot_y;
+                    };
 
                     // Compute cropped source rect (UV cropping)
                     const base_x: f32 = @floatFromInt(result.sprite.x);
                     const base_y: f32 = @floatFromInt(result.sprite.y);
                     const cropped_src = BackendType.Rectangle{
-                        .x = base_x + crop_x,
-                        .y = base_y + crop_y,
-                        .width = if (visual.flip_x) -visible_w else visible_w,
-                        .height = if (visual.flip_y) -visible_h else visible_h,
+                        .x = base_x + crop.crop_x,
+                        .y = base_y + crop.crop_y,
+                        .width = if (visual.flip_x) -crop.visible_w else crop.visible_w,
+                        .height = if (visual.flip_y) -crop.visible_h else crop.visible_h,
                     };
 
                     // Draw cropped portion at container size
