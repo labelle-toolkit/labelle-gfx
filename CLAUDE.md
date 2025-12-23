@@ -75,6 +75,9 @@ For ECS integration, use `RetainedEngine` which accepts external entity IDs:
 const gfx = @import("labelle");
 const RetainedEngine = gfx.RetainedEngine;
 const EntityId = gfx.EntityId;
+// Visual types are accessed via the engine type
+const ShapeVisual = RetainedEngine.ShapeVisual;
+const SpriteVisual = RetainedEngine.SpriteVisual;
 
 var engine = try RetainedEngine.init(allocator, .{
     .window = .{ .width = 800, .height = 600, .title = "My Game" },
@@ -95,7 +98,7 @@ engine.createSprite(player_id, .{
 
 // Create shapes
 const circle_id = EntityId.from(2);
-engine.createShape(circle_id, gfx.ShapeVisual.circle(30), .{ .x = 200, .y = 200 });
+engine.createShape(circle_id, ShapeVisual.circle(30), .{ .x = 200, .y = 200 });
 
 // Game loop
 while (engine.isRunning()) {
@@ -478,6 +481,56 @@ const bottom = vp.bottomHalf(screen_w, screen_h);
 const quad = vp.quadrant(screen_w, screen_h, 0);  // 0-3 for each quadrant
 ```
 
+### Layer System
+
+Organize rendering into distinct layers with custom layer enums:
+
+```zig
+const gfx = @import("labelle");
+
+// Define custom layers with a config() method (like Animation enums)
+const GameLayers = enum {
+    background,  // Screen-space, rendered first
+    world,       // World-space with camera transform
+    effects,     // World-space effects
+    ui,          // Screen-space UI, rendered last
+
+    pub fn config(self: @This()) gfx.LayerConfig {
+        return switch (self) {
+            .background => .{ .space = .screen, .order = -1 },
+            .world => .{ .space = .world, .order = 0 },
+            .effects => .{ .space = .world, .order = 1 },
+            .ui => .{ .space = .screen, .order = 2 },
+        };
+    }
+};
+
+// Create engine with custom layers
+const LayeredEngine = gfx.RetainedEngineWith(gfx.DefaultBackend, GameLayers);
+
+var engine = try LayeredEngine.init(allocator, .{
+    .window = .{ .width = 800, .height = 600, .title = "Layered Game" },
+});
+defer engine.deinit();
+
+// Create sprites on specific layers
+engine.createSprite(player_id, .{
+    .sprite_name = "player",
+    .layer = .world,  // Type-safe layer assignment
+}, position);
+
+// Create shapes on layers
+engine.createShape(circle_id, LayeredEngine.ShapeVisual.circleOn(30, .effects), position);
+
+// Toggle layer visibility
+engine.setLayerVisible(.ui, false);
+```
+
+**Layer configuration options:**
+- `.space` - `.world` (camera transform) or `.screen` (fixed position)
+- `.order` - Rendering order (lower = rendered first)
+- `.parallax_x`, `.parallax_y` - Parallax scrolling factor (1.0 = normal)
+
 ### Logging
 
 Scoped logging following the labelle-toolkit pattern:
@@ -557,6 +610,7 @@ pub const AnimationTests = struct {
 | 15_shapes | Shape primitives (circle, rect, line, triangle, polygon) |
 | 16_retained_engine | RetainedEngine with EntityId-based API |
 | 18_multi_camera | Multi-camera support for split-screen and minimap |
+| 19_layers | Canvas/Layer system with custom layer enums |
 
 ## Common Patterns
 

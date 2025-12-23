@@ -8,8 +8,8 @@ const std = @import("std");
 const gfx = @import("labelle");
 const RetainedEngine = gfx.RetainedEngine;
 const EntityId = gfx.EntityId;
-const SpriteVisual = gfx.SpriteVisual;
-const ShapeVisual = gfx.ShapeVisual;
+const SpriteVisual = RetainedEngine.SpriteVisual;
+const ShapeVisual = RetainedEngine.ShapeVisual;
 const Position = gfx.retained_engine.Position;
 const Color = gfx.retained_engine.Color;
 
