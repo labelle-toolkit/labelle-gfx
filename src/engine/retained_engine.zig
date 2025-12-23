@@ -1218,9 +1218,11 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     }
 
                     // Calculate container's top-left based on pivot
-                    // This makes repeat mode consistent with other sizing modes
-                    const container_tl_x = base_x - cont_w * visual.pivot_x;
-                    const container_tl_y = base_y - cont_h * visual.pivot_y;
+                    // Use getNormalized to correctly interpret the Pivot enum
+                    // (pivot_x/pivot_y fields default to 0.5, but .top_left should use 0,0)
+                    const normalized_pivot = visual.pivot.getNormalized(visual.pivot_x, visual.pivot_y);
+                    const container_tl_x = base_x - cont_w * normalized_pivot.x;
+                    const container_tl_y = base_y - cont_h * normalized_pivot.y;
 
                     // Calculate total tile grid bounds with overflow protection
                     const cols_float = @ceil(cont_w / scaled_w);
