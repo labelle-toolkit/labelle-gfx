@@ -183,16 +183,25 @@ pub const shape_storage = @import("engine/shape_storage.zig");
 pub const z_index_buckets = @import("engine/z_index_buckets.zig");
 pub const scene = @import("engine/scene.zig");
 pub const animation_def = @import("animation_def.zig");
+pub const layer = @import("engine/layer.zig");
 
 // Re-export RetainedEngine types at top level
 pub const RetainedEngine = retained_engine.RetainedEngine;
 pub const RetainedEngineWith = retained_engine.RetainedEngineWith;
+pub const RetainedEngineWithLayers = retained_engine.RetainedEngineWithLayers;
+pub const LayeredRetainedEngine = retained_engine.LayeredRetainedEngine;
 pub const EntityId = retained_engine.EntityId;
 pub const TextureId = retained_engine.TextureId;
 pub const FontId = retained_engine.FontId;
 pub const SpriteVisual = retained_engine.SpriteVisual;
 pub const ShapeVisual = retained_engine.ShapeVisual;
 pub const TextVisual = retained_engine.TextVisual;
+
+// Re-export layer types at top level
+pub const LayerConfig = layer.LayerConfig;
+pub const LayerSpace = layer.LayerSpace;
+pub const DefaultLayers = layer.DefaultLayers;
+pub const LayerMask = layer.LayerMask;
 
 // Re-export VisualEngine at top level for convenience
 pub const VisualEngine = visual_engine.VisualEngine;
@@ -281,6 +290,19 @@ pub fn withBackend(comptime Impl: type) type {
 
         // RetainedEngine with custom backend
         pub const RetainedEngine = retained_engine.RetainedEngineWith(B);
+
+        // RetainedEngine with layers - use with custom LayerEnum
+        pub fn RetainedEngineWithLayersT(comptime LayerEnum: type) type {
+            return retained_engine.RetainedEngineWithLayers(B, LayerEnum);
+        }
+
+        // Layer types
+        pub const LayerConfig = layer.LayerConfig;
+        pub const LayerSpace = layer.LayerSpace;
+        pub const DefaultLayers = layer.DefaultLayers;
+        pub fn LayerMaskT(comptime LayerEnum: type) type {
+            return layer.LayerMask(LayerEnum);
+        }
     };
 }
 

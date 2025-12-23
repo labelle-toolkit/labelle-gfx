@@ -150,20 +150,29 @@ pub fn CameraManagerWith(comptime BackendType: type) type {
         pub const ActiveIterator = struct {
             manager: *Self,
             current: u3 = 0,
+            last_index: u2 = 0,
 
             pub fn next(self: *ActiveIterator) ?*Camera {
                 while (self.current < MAX_CAMERAS) {
                     const idx: u2 = @intCast(self.current);
                     self.current += 1;
                     if (self.manager.isActive(idx)) {
+                        self.last_index = idx;
                         return &self.manager.cameras[idx];
                     }
                 }
                 return null;
             }
 
+            /// Returns the actual index of the camera returned by the last call to next().
+            /// This is useful when cameras are non-sequential (e.g., cameras 0 and 2 active).
+            pub fn index(self: *const ActiveIterator) u2 {
+                return self.last_index;
+            }
+
             pub fn reset(self: *ActiveIterator) void {
                 self.current = 0;
+                self.last_index = 0;
             }
         };
 

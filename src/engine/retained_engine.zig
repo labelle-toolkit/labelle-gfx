@@ -6,34 +6,46 @@
 //! This engine uses EntityId-based addressing where the caller provides entity IDs
 //! and the engine manages the visual state internally.
 //!
-//! Example usage:
+//! ## Layer System
+//!
+//! The engine supports organizing rendering into distinct layers. Each layer can have
+//! its own coordinate space (world/screen) and parallax settings. Layers are defined
+//! using a comptime enum with a `config()` method.
+//!
+//! Example with custom layers:
 //! ```zig
-//! var engine = try RetainedEngine.init(allocator, .{
-//!     .window = .{ .width = 800, .height = 600, .title = "My Game" },
-//! });
-//! defer engine.deinit();
+//! const GameLayers = enum {
+//!     background, world, ui,
 //!
-//! // Load assets
-//! const tex = try engine.loadTexture("assets/player.png");
+//!     pub fn config(self: @This()) gfx.LayerConfig {
+//!         return switch (self) {
+//!             .background => .{ .space = .screen, .order = -1 },
+//!             .world => .{ .space = .world, .order = 0 },
+//!             .ui => .{ .space = .screen, .order = 1 },
+//!         };
+//!     }
+//! };
 //!
-//! // Create entity with sprite
-//! const player_id = EntityId.from(1);
-//! engine.createSprite(player_id, .{ .texture = tex, .scale = 2 }, .{ .x = 100, .y = 200 });
+//! const Engine = gfx.RetainedEngineWithLayers(gfx.DefaultBackend, GameLayers);
+//! var engine = try Engine.init(allocator, .{ ... });
 //!
-//! // Game loop
-//! while (engine.isRunning()) {
-//!     // Update position
-//!     engine.updatePosition(player_id, .{ .x = new_x, .y = new_y });
+//! engine.createSprite(player_id, .{
+//!     .sprite_name = "player",
+//!     .layer = .world,
+//! }, pos);
 //!
-//!     engine.beginFrame();
-//!     engine.render();
-//!     engine.endFrame();
-//! }
+//! engine.createSprite(health_bar_id, .{
+//!     .sprite_name = "health_bar",
+//!     .layer = .ui,
+//! }, pos);
 //! ```
+//!
+//! For simple usage without custom layers, use RetainedEngine which uses DefaultLayers.
 
 const std = @import("std");
 const z_index_buckets = @import("z_index_buckets.zig");
 const components = @import("../components/components.zig");
+const layer_mod = @import("layer.zig");
 
 // Backend imports
 const backend_mod = @import("../backend/backend.zig");
@@ -41,6 +53,12 @@ const raylib_backend = @import("../backend/raylib_backend.zig");
 const texture_manager_mod = @import("../texture/texture_manager.zig");
 const camera_mod = @import("../camera/camera.zig");
 const camera_manager_mod = @import("../camera/camera_manager.zig");
+
+// Re-export layer types
+pub const LayerConfig = layer_mod.LayerConfig;
+pub const LayerSpace = layer_mod.LayerSpace;
+pub const DefaultLayers = layer_mod.DefaultLayers;
+pub const LayerMask = layer_mod.LayerMask;
 
 // ============================================
 // Core ID Types
@@ -115,10 +133,10 @@ pub const Color = struct {
 };
 
 // ============================================
-// Visual Data Types (no position)
+// Visual Data Types (no position, no layer - for backwards compatibility)
 // ============================================
 
-/// Sprite visual data
+/// Sprite visual data (without layer - for backwards compatibility)
 pub const SpriteVisual = struct {
     texture: TextureId = .invalid,
     /// Sprite name within the texture atlas
@@ -138,7 +156,7 @@ pub const SpriteVisual = struct {
     pivot_y: f32 = 0.5,
 };
 
-/// Shape visual data
+/// Shape visual data (without layer - for backwards compatibility)
 pub const ShapeVisual = struct {
     shape: Shape,
     color: Color = Color.white,
@@ -210,7 +228,7 @@ pub const ShapeVisual = struct {
     }
 };
 
-/// Text visual data
+/// Text visual data (without layer - for backwards compatibility)
 pub const TextVisual = struct {
     font: FontId = .invalid,
     /// Text to render (must be null-terminated)
@@ -351,18 +369,160 @@ const ZBuckets = struct {
 };
 
 // ============================================
-// Retained Engine
+// Retained Engine with Layer Support
 // ============================================
 
-pub fn RetainedEngineWith(comptime BackendType: type) type {
+/// Create a RetainedEngine with custom layer enum support.
+///
+/// The LayerEnum must be an enum with a `config()` method that returns LayerConfig.
+/// See DefaultLayers for an example implementation.
+///
+/// Example:
+/// ```zig
+/// const GameLayers = enum {
+///     background, world, ui,
+///
+///     pub fn config(self: @This()) gfx.LayerConfig {
+///         return switch (self) {
+///             .background => .{ .space = .screen, .order = -1 },
+///             .world => .{ .space = .world, .order = 0 },
+///             .ui => .{ .space = .screen, .order = 1 },
+///         };
+///     }
+/// };
+///
+/// const Engine = gfx.RetainedEngineWithLayers(gfx.DefaultBackend, GameLayers);
+/// ```
+pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: type) type {
+    // Validate LayerEnum at compile time
+    comptime {
+        layer_mod.validateLayerEnum(LayerEnum);
+    }
+
     const Camera = camera_mod.CameraWith(BackendType);
     const CameraManager = camera_manager_mod.CameraManagerWith(BackendType);
     const TextureManager = texture_manager_mod.TextureManagerWith(BackendType);
+    const layer_count = layer_mod.layerCount(LayerEnum);
+    const sorted_layers = layer_mod.getSortedLayers(LayerEnum);
+    const LMask = layer_mod.LayerMask(LayerEnum);
 
     return struct {
         const Self = @This();
         pub const Backend = BackendType;
+        pub const Layer = LayerEnum;
+        pub const LayerMaskType = LMask;
         pub const SplitScreenLayout = camera_manager_mod.SplitScreenLayout;
+        pub const CameraType = Camera;
+
+        // ============================================
+        // Visual Types with Layer Support
+        // ============================================
+
+        /// Sprite visual data with layer support
+        pub const LayeredSpriteVisual = struct {
+            texture: TextureId = .invalid,
+            sprite_name: []const u8 = "",
+            scale: f32 = 1,
+            rotation: f32 = 0,
+            flip_x: bool = false,
+            flip_y: bool = false,
+            tint: Color = Color.white,
+            z_index: u8 = 128,
+            visible: bool = true,
+            pivot: Pivot = .center,
+            pivot_x: f32 = 0.5,
+            pivot_y: f32 = 0.5,
+            /// Layer this sprite belongs to (default: first layer with space=.world, or first layer)
+            layer: LayerEnum = getDefaultLayer(),
+        };
+
+        /// Shape visual data with layer support
+        pub const LayeredShapeVisual = struct {
+            shape: ShapeVisual.Shape,
+            color: Color = Color.white,
+            rotation: f32 = 0,
+            z_index: u8 = 128,
+            visible: bool = true,
+            /// Layer this shape belongs to
+            layer: LayerEnum = getDefaultLayer(),
+
+            // Helper constructors - use struct initialization to specify a layer,
+            // e.g., `.{ .shape = .{ .circle = .{ .radius = 10 } }, .layer = .ui }`
+
+            /// Create a circle shape. Uses default layer.
+            pub fn circle(radius: f32) LayeredShapeVisual {
+                return .{ .shape = .{ .circle = .{ .radius = radius } } };
+            }
+
+            /// Create a circle shape on a specific layer.
+            pub fn circleOn(radius: f32, layer: LayerEnum) LayeredShapeVisual {
+                return .{ .shape = .{ .circle = .{ .radius = radius } }, .layer = layer };
+            }
+
+            /// Create a rectangle shape. Uses default layer.
+            pub fn rectangle(width: f32, height: f32) LayeredShapeVisual {
+                return .{ .shape = .{ .rectangle = .{ .width = width, .height = height } } };
+            }
+
+            /// Create a rectangle shape on a specific layer.
+            pub fn rectangleOn(width: f32, height: f32, layer: LayerEnum) LayeredShapeVisual {
+                return .{ .shape = .{ .rectangle = .{ .width = width, .height = height } }, .layer = layer };
+            }
+
+            /// Create a line shape. Uses default layer.
+            pub fn line(end_x: f32, end_y: f32, thickness: f32) LayeredShapeVisual {
+                return .{ .shape = .{ .line = .{ .end = .{ .x = end_x, .y = end_y }, .thickness = thickness } } };
+            }
+
+            /// Create a line shape on a specific layer.
+            pub fn lineOn(end_x: f32, end_y: f32, thickness: f32, layer: LayerEnum) LayeredShapeVisual {
+                return .{ .shape = .{ .line = .{ .end = .{ .x = end_x, .y = end_y }, .thickness = thickness } }, .layer = layer };
+            }
+
+            /// Create a triangle shape. Uses default layer.
+            pub fn triangle(p2: Position, p3: Position) LayeredShapeVisual {
+                return .{ .shape = .{ .triangle = .{ .p2 = p2, .p3 = p3 } } };
+            }
+
+            /// Create a triangle shape on a specific layer.
+            pub fn triangleOn(p2: Position, p3: Position, layer: LayerEnum) LayeredShapeVisual {
+                return .{ .shape = .{ .triangle = .{ .p2 = p2, .p3 = p3 } }, .layer = layer };
+            }
+
+            /// Create a polygon shape. Uses default layer.
+            pub fn polygon(sides: i32, radius: f32) LayeredShapeVisual {
+                return .{ .shape = .{ .polygon = .{ .sides = sides, .radius = radius } } };
+            }
+
+            /// Create a polygon shape on a specific layer.
+            pub fn polygonOn(sides: i32, radius: f32, layer: LayerEnum) LayeredShapeVisual {
+                return .{ .shape = .{ .polygon = .{ .sides = sides, .radius = radius } }, .layer = layer };
+            }
+        };
+
+        /// Text visual data with layer support
+        pub const LayeredTextVisual = struct {
+            font: FontId = .invalid,
+            text: [:0]const u8 = "",
+            size: f32 = 16,
+            color: Color = Color.white,
+            z_index: u8 = 128,
+            visible: bool = true,
+            /// Layer this text belongs to
+            layer: LayerEnum = getDefaultLayer(),
+        };
+
+        /// Get the default layer (first layer with space=.world, or first layer in order)
+        fn getDefaultLayer() LayerEnum {
+            // Find first world-space layer
+            for (sorted_layers) |layer| {
+                if (layer.config().space == .world) {
+                    return layer;
+                }
+            }
+            // Fallback to first layer
+            return sorted_layers[0];
+        }
 
         allocator: std.mem.Allocator,
         texture_manager: TextureManager,
@@ -375,8 +535,17 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
         shapes: std.AutoArrayHashMap(EntityId, ShapeEntry),
         texts: std.AutoArrayHashMap(EntityId, TextEntry),
 
-        // Z-index bucket storage for efficient ordered rendering (no per-frame sorting)
-        z_buckets: ZBuckets,
+        // Per-layer z-index bucket storage
+        layer_buckets: [layer_count]ZBuckets,
+
+        // Layer visibility (can be toggled at runtime)
+        layer_visibility: [layer_count]bool,
+
+        // Camera layer masks (which layers each camera renders)
+        camera_layer_masks: [camera_manager_mod.MAX_CAMERAS]LMask,
+
+        // Single-camera layer mask
+        single_camera_layer_mask: LMask,
 
         // Window state
         owns_window: bool,
@@ -386,17 +555,17 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
         next_texture_id: u32,
 
         const SpriteEntry = struct {
-            visual: SpriteVisual,
+            visual: LayeredSpriteVisual,
             position: Position,
         };
 
         const ShapeEntry = struct {
-            visual: ShapeVisual,
+            visual: LayeredShapeVisual,
             position: Position,
         };
 
         const TextEntry = struct {
-            visual: TextVisual,
+            visual: LayeredTextVisual,
             position: Position,
         };
 
@@ -413,6 +582,25 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
                 owns_window = true;
             }
 
+            // Initialize per-layer z-buckets
+            var layer_buckets: [layer_count]ZBuckets = undefined;
+            for (&layer_buckets) |*bucket| {
+                bucket.* = ZBuckets.init(allocator);
+            }
+
+            // Initialize layer visibility from config
+            var layer_visibility: [layer_count]bool = undefined;
+            inline for (0..layer_count) |i| {
+                const layer: LayerEnum = @enumFromInt(i);
+                layer_visibility[i] = layer.config().visible;
+            }
+
+            // Initialize camera layer masks to all layers
+            var camera_layer_masks: [camera_manager_mod.MAX_CAMERAS]LMask = undefined;
+            for (&camera_layer_masks) |*mask| {
+                mask.* = LMask.all();
+            }
+
             return Self{
                 .allocator = allocator,
                 .texture_manager = TextureManager.init(allocator),
@@ -422,7 +610,10 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
                 .sprites = std.AutoArrayHashMap(EntityId, SpriteEntry).init(allocator),
                 .shapes = std.AutoArrayHashMap(EntityId, ShapeEntry).init(allocator),
                 .texts = std.AutoArrayHashMap(EntityId, TextEntry).init(allocator),
-                .z_buckets = ZBuckets.init(allocator),
+                .layer_buckets = layer_buckets,
+                .layer_visibility = layer_visibility,
+                .camera_layer_masks = camera_layer_masks,
+                .single_camera_layer_mask = LMask.all(),
                 .owns_window = owns_window,
                 .clear_color = BackendType.color(
                     config.clear_color.r,
@@ -438,13 +629,45 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
             self.sprites.deinit();
             self.shapes.deinit();
             self.texts.deinit();
-            self.z_buckets.deinit();
+            for (&self.layer_buckets) |*bucket| {
+                bucket.deinit();
+            }
             self.texture_manager.deinit();
-            // Only close window if we own it AND it was successfully initialized
-            // This prevents crashes when GLFW fails to init (e.g., on headless systems)
             if (self.owns_window and BackendType.isWindowReady()) {
                 BackendType.closeWindow();
             }
+        }
+
+        // ==================== Layer Management ====================
+
+        /// Set layer visibility
+        pub fn setLayerVisible(self: *Self, layer: LayerEnum, visible: bool) void {
+            self.layer_visibility[@intFromEnum(layer)] = visible;
+        }
+
+        /// Get layer visibility
+        pub fn isLayerVisible(self: *const Self, layer: LayerEnum) bool {
+            return self.layer_visibility[@intFromEnum(layer)];
+        }
+
+        /// Set which layers a camera renders (by camera index)
+        pub fn setCameraLayers(self: *Self, camera_index: u2, layers: []const LayerEnum) void {
+            self.camera_layer_masks[camera_index] = LMask.init(layers);
+        }
+
+        /// Set which layers the single/primary camera renders
+        pub fn setLayers(self: *Self, layers: []const LayerEnum) void {
+            self.single_camera_layer_mask = LMask.init(layers);
+        }
+
+        /// Enable/disable a layer for a specific camera
+        pub fn setCameraLayerEnabled(self: *Self, camera_index: u2, layer: LayerEnum, enabled: bool) void {
+            self.camera_layer_masks[camera_index].set(layer, enabled);
+        }
+
+        /// Get camera layer mask
+        pub fn getCameraLayerMask(self: *Self, camera_index: u2) *LMask {
+            return &self.camera_layer_masks[camera_index];
         }
 
         // ==================== Asset Loading ====================
@@ -453,7 +676,6 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
             const id = self.next_texture_id;
             self.next_texture_id += 1;
 
-            // Load as a single sprite with texture ID as name
             var name_buf: [32]u8 = undefined;
             const name = std.fmt.bufPrint(&name_buf, "tex_{d}", .{id}) catch return error.NameTooLong;
             try self.texture_manager.loadSprite(name, path);
@@ -465,14 +687,6 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
             try self.texture_manager.loadAtlas(name, json_path, texture_path);
         }
 
-        /// Load an atlas from comptime .zon frame data (no JSON parsing at runtime).
-        /// The frames parameter should be a comptime import of a *_frames.zon file.
-        ///
-        /// Example:
-        /// ```zig
-        /// const character_frames = @import("characters_frames.zon");
-        /// try engine.loadAtlasComptime("characters", character_frames, "characters.png");
-        /// ```
         pub fn loadAtlasComptime(
             self: *Self,
             name: []const u8,
@@ -484,30 +698,56 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 
         // ==================== Sprite Management ====================
 
-        pub fn createSprite(self: *Self, id: EntityId, visual: SpriteVisual, pos: Position) void {
+        pub fn createSprite(self: *Self, id: EntityId, visual: LayeredSpriteVisual, pos: Position) void {
             self.sprites.put(id, .{ .visual = visual, .position = pos }) catch return;
-            self.z_buckets.insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch return;
+            const layer_idx = @intFromEnum(visual.layer);
+            self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch {
+                // Rollback sprite entry to avoid inconsistent state
+                _ = self.sprites.swapRemove(id);
+                return;
+            };
         }
 
-        pub fn updateSprite(self: *Self, id: EntityId, visual: SpriteVisual) void {
+        pub fn updateSprite(self: *Self, id: EntityId, visual: LayeredSpriteVisual) void {
             if (self.sprites.getPtr(id)) |entry| {
                 const old_z = entry.visual.z_index;
+                const old_layer = entry.visual.layer;
                 entry.visual = visual;
-                if (old_z != visual.z_index) {
-                    self.z_buckets.changeZIndex(.{ .entity_id = id, .item_type = .sprite }, old_z, visual.z_index) catch {};
+
+                // Handle layer change
+                if (old_layer != visual.layer) {
+                    const old_layer_idx = @intFromEnum(old_layer);
+                    const new_layer_idx = @intFromEnum(visual.layer);
+                    const removed = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, old_z);
+                    std.debug.assert(removed);
+                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch |err| {
+                        // Rollback: restore old layer and re-insert to old bucket
+                        std.log.err("Failed to move sprite to new layer, rolling back: {}", .{err});
+                        entry.visual.layer = old_layer;
+                        entry.visual.z_index = old_z;
+                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, old_z) catch |rollback_err| {
+                            std.debug.panic("Failed to rollback sprite layer change: {}", .{rollback_err});
+                        };
+                    };
+                } else if (old_z != visual.z_index) {
+                    const layer_idx = @intFromEnum(visual.layer);
+                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .sprite }, old_z, visual.z_index) catch |err| {
+                        std.log.err("Failed to change sprite z-index: {}. Engine state may be inconsistent.", .{err});
+                    };
                 }
             }
         }
 
         pub fn destroySprite(self: *Self, id: EntityId) void {
             if (self.sprites.get(id)) |entry| {
-                const removed = self.z_buckets.remove(.{ .entity_id = id, .item_type = .sprite }, entry.visual.z_index);
+                const layer_idx = @intFromEnum(entry.visual.layer);
+                const removed = self.layer_buckets[layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, entry.visual.z_index);
                 std.debug.assert(removed);
             }
             _ = self.sprites.swapRemove(id);
         }
 
-        pub fn getSprite(self: *const Self, id: EntityId) ?SpriteVisual {
+        pub fn getSprite(self: *const Self, id: EntityId) ?LayeredSpriteVisual {
             if (self.sprites.get(id)) |entry| {
                 return entry.visual;
             }
@@ -516,30 +756,55 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 
         // ==================== Shape Management ====================
 
-        pub fn createShape(self: *Self, id: EntityId, visual: ShapeVisual, pos: Position) void {
+        pub fn createShape(self: *Self, id: EntityId, visual: LayeredShapeVisual, pos: Position) void {
             self.shapes.put(id, .{ .visual = visual, .position = pos }) catch return;
-            self.z_buckets.insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch return;
+            const layer_idx = @intFromEnum(visual.layer);
+            self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch {
+                // Rollback shape entry to avoid inconsistent state
+                _ = self.shapes.swapRemove(id);
+                return;
+            };
         }
 
-        pub fn updateShape(self: *Self, id: EntityId, visual: ShapeVisual) void {
+        pub fn updateShape(self: *Self, id: EntityId, visual: LayeredShapeVisual) void {
             if (self.shapes.getPtr(id)) |entry| {
                 const old_z = entry.visual.z_index;
+                const old_layer = entry.visual.layer;
                 entry.visual = visual;
-                if (old_z != visual.z_index) {
-                    self.z_buckets.changeZIndex(.{ .entity_id = id, .item_type = .shape }, old_z, visual.z_index) catch {};
+
+                if (old_layer != visual.layer) {
+                    const old_layer_idx = @intFromEnum(old_layer);
+                    const new_layer_idx = @intFromEnum(visual.layer);
+                    const removed = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, old_z);
+                    std.debug.assert(removed);
+                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch |err| {
+                        // Rollback: restore old layer and re-insert to old bucket
+                        std.log.err("Failed to move shape to new layer, rolling back: {}", .{err});
+                        entry.visual.layer = old_layer;
+                        entry.visual.z_index = old_z;
+                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, old_z) catch |rollback_err| {
+                            std.debug.panic("Failed to rollback shape layer change: {}", .{rollback_err});
+                        };
+                    };
+                } else if (old_z != visual.z_index) {
+                    const layer_idx = @intFromEnum(visual.layer);
+                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .shape }, old_z, visual.z_index) catch |err| {
+                        std.log.err("Failed to change shape z-index: {}. Engine state may be inconsistent.", .{err});
+                    };
                 }
             }
         }
 
         pub fn destroyShape(self: *Self, id: EntityId) void {
             if (self.shapes.get(id)) |entry| {
-                const removed = self.z_buckets.remove(.{ .entity_id = id, .item_type = .shape }, entry.visual.z_index);
+                const layer_idx = @intFromEnum(entry.visual.layer);
+                const removed = self.layer_buckets[layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, entry.visual.z_index);
                 std.debug.assert(removed);
             }
             _ = self.shapes.swapRemove(id);
         }
 
-        pub fn getShape(self: *const Self, id: EntityId) ?ShapeVisual {
+        pub fn getShape(self: *const Self, id: EntityId) ?LayeredShapeVisual {
             if (self.shapes.get(id)) |entry| {
                 return entry.visual;
             }
@@ -548,30 +813,55 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 
         // ==================== Text Management ====================
 
-        pub fn createText(self: *Self, id: EntityId, visual: TextVisual, pos: Position) void {
+        pub fn createText(self: *Self, id: EntityId, visual: LayeredTextVisual, pos: Position) void {
             self.texts.put(id, .{ .visual = visual, .position = pos }) catch return;
-            self.z_buckets.insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch return;
+            const layer_idx = @intFromEnum(visual.layer);
+            self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch {
+                // Rollback text entry to avoid inconsistent state
+                _ = self.texts.swapRemove(id);
+                return;
+            };
         }
 
-        pub fn updateText(self: *Self, id: EntityId, visual: TextVisual) void {
+        pub fn updateText(self: *Self, id: EntityId, visual: LayeredTextVisual) void {
             if (self.texts.getPtr(id)) |entry| {
                 const old_z = entry.visual.z_index;
+                const old_layer = entry.visual.layer;
                 entry.visual = visual;
-                if (old_z != visual.z_index) {
-                    self.z_buckets.changeZIndex(.{ .entity_id = id, .item_type = .text }, old_z, visual.z_index) catch {};
+
+                if (old_layer != visual.layer) {
+                    const old_layer_idx = @intFromEnum(old_layer);
+                    const new_layer_idx = @intFromEnum(visual.layer);
+                    const removed = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .text }, old_z);
+                    std.debug.assert(removed);
+                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch |err| {
+                        // Rollback: restore old layer and re-insert to old bucket
+                        std.log.err("Failed to move text to new layer, rolling back: {}", .{err});
+                        entry.visual.layer = old_layer;
+                        entry.visual.z_index = old_z;
+                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, old_z) catch |rollback_err| {
+                            std.debug.panic("Failed to rollback text layer change: {}", .{rollback_err});
+                        };
+                    };
+                } else if (old_z != visual.z_index) {
+                    const layer_idx = @intFromEnum(visual.layer);
+                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .text }, old_z, visual.z_index) catch |err| {
+                        std.log.err("Failed to change text z-index: {}. Engine state may be inconsistent.", .{err});
+                    };
                 }
             }
         }
 
         pub fn destroyText(self: *Self, id: EntityId) void {
             if (self.texts.get(id)) |entry| {
-                const removed = self.z_buckets.remove(.{ .entity_id = id, .item_type = .text }, entry.visual.z_index);
+                const layer_idx = @intFromEnum(entry.visual.layer);
+                const removed = self.layer_buckets[layer_idx].remove(.{ .entity_id = id, .item_type = .text }, entry.visual.z_index);
                 std.debug.assert(removed);
             }
             _ = self.texts.swapRemove(id);
         }
 
-        pub fn getText(self: *const Self, id: EntityId) ?TextVisual {
+        pub fn getText(self: *const Self, id: EntityId) ?LayeredTextVisual {
             if (self.texts.get(id)) |entry| {
                 return entry.visual;
             }
@@ -614,26 +904,31 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 
         // ==================== Window/Loop Management ====================
 
+        /// Returns true if the window is still open and running.
         pub fn isRunning(self: *const Self) bool {
             _ = self;
             return !BackendType.windowShouldClose();
         }
 
+        /// Returns the time elapsed since the last frame in seconds.
         pub fn getDeltaTime(self: *const Self) f32 {
             _ = self;
             return BackendType.getFrameTime();
         }
 
+        /// Begin a new frame. Must be called before rendering.
         pub fn beginFrame(self: *const Self) void {
             BackendType.beginDrawing();
             BackendType.clearBackground(self.clear_color);
         }
 
+        /// End the current frame. Must be called after rendering.
         pub fn endFrame(self: *const Self) void {
             _ = self;
             BackendType.endDrawing();
         }
 
+        /// Returns the current window size in pixels.
         pub fn getWindowSize(self: *const Self) struct { w: i32, h: i32 } {
             _ = self;
             return .{
@@ -644,7 +939,7 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 
         // ==================== Camera ====================
 
-        /// Get the primary camera (single-camera mode or primary in multi-camera mode)
+        /// Get the primary camera (single-camera mode or primary in multi-camera mode).
         pub fn getCamera(self: *Self) *Camera {
             if (self.multi_camera_enabled) {
                 return self.camera_manager.getPrimaryCamera();
@@ -652,43 +947,45 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
             return &self.camera;
         }
 
+        /// Set the camera position directly.
         pub fn setCameraPosition(self: *Self, x: f32, y: f32) void {
             self.getCamera().setPosition(x, y);
         }
 
+        /// Set the camera zoom level.
         pub fn setZoom(self: *Self, zoom: f32) void {
             self.getCamera().setZoom(zoom);
         }
 
         // ==================== Multi-Camera ====================
 
-        /// Get the camera manager for multi-camera control
+        /// Get the camera manager for advanced multi-camera control.
         pub fn getCameraManager(self: *Self) *CameraManager {
             return &self.camera_manager;
         }
 
-        /// Get a specific camera by index (0-3)
+        /// Get camera at a specific index (for multi-camera mode).
         pub fn getCameraAt(self: *Self, index: u2) *Camera {
             return self.camera_manager.getCamera(index);
         }
 
-        /// Enable multi-camera mode with a split-screen layout
+        /// Enable multi-camera mode with a preset layout.
         pub fn setupSplitScreen(self: *Self, layout: SplitScreenLayout) void {
             self.multi_camera_enabled = true;
             self.camera_manager.setupSplitScreen(layout);
         }
 
-        /// Disable multi-camera mode and return to single-camera
+        /// Disable multi-camera mode, return to single camera.
         pub fn disableMultiCamera(self: *Self) void {
             self.multi_camera_enabled = false;
         }
 
-        /// Check if multi-camera mode is enabled
+        /// Returns whether multi-camera mode is enabled.
         pub fn isMultiCameraEnabled(self: *const Self) bool {
             return self.multi_camera_enabled;
         }
 
-        /// Set active cameras using a bitmask (bit N = camera N active)
+        /// Set which cameras are active using a bitmask (e.g., 0b0011 for cameras 0 and 1).
         pub fn setActiveCameras(self: *Self, mask: u4) void {
             self.multi_camera_enabled = true;
             self.camera_manager.setActiveMask(mask);
@@ -696,7 +993,7 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 
         // ==================== Rendering ====================
 
-        /// Render all stored visuals - no arguments needed
+        /// Render all visible entities. Call between beginFrame() and endFrame().
         pub fn render(self: *Self) void {
             if (self.multi_camera_enabled) {
                 self.renderMultiCamera();
@@ -705,100 +1002,131 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
             }
         }
 
-        /// Render with a single camera (original behavior)
         fn renderSingleCamera(self: *Self) void {
-            // Begin camera mode
-            self.beginCameraMode();
+            // Iterate layers in sorted order
+            for (sorted_layers) |layer| {
+                const layer_idx = @intFromEnum(layer);
 
-            // Iterate z-index buckets in order (no sorting needed)
-            var iter = self.z_buckets.iterator();
-            while (iter.next()) |item| {
-                if (!self.isVisible(item)) continue;
+                // Skip if layer is not visible or not in camera mask
+                if (!self.layer_visibility[layer_idx]) continue;
+                if (!self.single_camera_layer_mask.has(layer)) continue;
 
-                switch (item.item_type) {
-                    .sprite => self.renderSprite(item.entity_id),
-                    .shape => self.renderShape(item.entity_id),
-                    .text => self.renderText(item.entity_id),
+                const cfg = layer.config();
+
+                // Begin camera mode for world-space layers
+                if (cfg.space == .world) {
+                    self.beginCameraModeWithParallax(cfg.parallax_x, cfg.parallax_y);
                 }
-            }
 
-            // End camera mode
-            self.endCameraMode();
-        }
-
-        /// Render with multiple cameras
-        fn renderMultiCamera(self: *Self) void {
-            var cam_iter = self.camera_manager.activeIterator();
-            while (cam_iter.next()) |cam| {
-                // Begin camera mode with viewport clipping
-                if (cam.screen_viewport) |vp| {
-                    BackendType.beginScissorMode(vp.x, vp.y, vp.width, vp.height);
-                }
-                BackendType.beginMode2D(cam.toBackend());
-
-                // Get viewport for culling
-                const viewport = cam.getViewport();
-
-                // Render all visuals for this camera with per-camera culling
-                var iter = self.z_buckets.iterator();
+                // Iterate z-buckets for this layer
+                var iter = self.layer_buckets[layer_idx].iterator();
                 while (iter.next()) |item| {
                     if (!self.isVisible(item)) continue;
 
                     switch (item.item_type) {
-                        .sprite => {
-                            if (self.shouldRenderSpriteInViewport(item.entity_id, viewport)) {
-                                self.renderSprite(item.entity_id);
-                            }
-                        },
-                        .shape => {
-                            if (self.shouldRenderShapeInViewport(item.entity_id, viewport)) {
-                                self.renderShape(item.entity_id);
-                            }
-                        },
+                        .sprite => self.renderSprite(item.entity_id),
+                        .shape => self.renderShape(item.entity_id),
                         .text => self.renderText(item.entity_id),
                     }
                 }
 
-                // End camera mode
-                BackendType.endMode2D();
+                // End camera mode for world-space layers
+                if (cfg.space == .world) {
+                    self.endCameraMode();
+                }
+            }
+        }
+
+        fn renderMultiCamera(self: *Self) void {
+            var cam_iter = self.camera_manager.activeIterator();
+            while (cam_iter.next()) |cam| {
+                // Use the actual camera index for correct layer mask lookup
+                const cam_idx = cam_iter.index();
+                const layer_mask = self.camera_layer_masks[cam_idx];
+
+                // Begin viewport clipping
+                if (cam.screen_viewport) |vp| {
+                    BackendType.beginScissorMode(vp.x, vp.y, vp.width, vp.height);
+                }
+
+                // Get viewport for culling
+                const viewport = cam.getViewport();
+
+                // Iterate layers in sorted order
+                for (sorted_layers) |layer| {
+                    const layer_idx = @intFromEnum(layer);
+
+                    // Skip if layer is not visible or not in camera mask
+                    if (!self.layer_visibility[layer_idx]) continue;
+                    if (!layer_mask.has(layer)) continue;
+
+                    const cfg = layer.config();
+
+                    // Begin camera mode for world-space layers
+                    if (cfg.space == .world) {
+                        self.beginCameraModeWithCamAndParallax(cam, cfg.parallax_x, cfg.parallax_y);
+                    }
+
+                    // Iterate z-buckets for this layer
+                    var iter = self.layer_buckets[layer_idx].iterator();
+                    while (iter.next()) |item| {
+                        if (!self.isVisible(item)) continue;
+
+                        switch (item.item_type) {
+                            .sprite => {
+                                if (cfg.space == .screen or self.shouldRenderSpriteInViewport(item.entity_id, viewport)) {
+                                    self.renderSprite(item.entity_id);
+                                }
+                            },
+                            .shape => {
+                                if (cfg.space == .screen or self.shouldRenderShapeInViewport(item.entity_id, viewport)) {
+                                    self.renderShape(item.entity_id);
+                                }
+                            },
+                            .text => self.renderText(item.entity_id),
+                        }
+                    }
+
+                    // End camera mode for world-space layers
+                    if (cfg.space == .world) {
+                        BackendType.endMode2D();
+                    }
+                }
+
+                // End viewport clipping
                 if (cam.screen_viewport != null) {
                     BackendType.endScissorMode();
                 }
             }
         }
 
-        /// Check if sprite should be rendered in the given viewport
         fn shouldRenderSpriteInViewport(self: *Self, id: EntityId, viewport: Camera.ViewportRect) bool {
             const entry = self.sprites.get(id) orelse return false;
             const visual = entry.visual;
             const pos = entry.position;
 
-            // Get sprite dimensions
             if (visual.sprite_name.len > 0) {
                 if (self.texture_manager.findSprite(visual.sprite_name)) |result| {
                     const sprite = result.sprite;
                     const scaled_width = @as(f32, @floatFromInt(sprite.width)) * visual.scale;
                     const scaled_height = @as(f32, @floatFromInt(sprite.height)) * visual.scale;
 
-                    // Calculate bounds based on pivot
                     const pivot_origin = visual.pivot.getOrigin(scaled_width, scaled_height, visual.pivot_x, visual.pivot_y);
                     const sprite_x = pos.x - pivot_origin.x;
                     const sprite_y = pos.y - pivot_origin.y;
                     return viewport.overlapsRect(sprite_x, sprite_y, scaled_width, scaled_height);
                 }
             }
-            return true; // Render if no sprite data found
+            return true;
         }
 
         const ShapeBounds = struct { x: f32, y: f32, w: f32, h: f32 };
 
-        /// Check if shape should be rendered in the given viewport
         fn shouldRenderShapeInViewport(self: *const Self, id: EntityId, viewport: Camera.ViewportRect) bool {
             const entry = self.shapes.get(id) orelse return false;
             const visual = entry.visual;
             const pos = entry.position;
 
-            // Calculate bounds based on shape type
             const bounds: ShapeBounds = switch (visual.shape) {
                 .circle => |c| .{
                     .x = pos.x - c.radius,
@@ -843,15 +1171,38 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
             };
         }
 
-        fn beginCameraMode(self: *Self) void {
+        fn beginCameraModeWithParallax(self: *Self, parallax_x: f32, parallax_y: f32) void {
             const rl_camera = BackendType.Camera2D{
                 .offset = .{
                     .x = @as(f32, @floatFromInt(BackendType.getScreenWidth())) / 2.0,
                     .y = @as(f32, @floatFromInt(BackendType.getScreenHeight())) / 2.0,
                 },
-                .target = .{ .x = self.camera.x, .y = self.camera.y },
+                .target = .{
+                    .x = self.camera.x * parallax_x,
+                    .y = self.camera.y * parallax_y,
+                },
                 .rotation = self.camera.rotation,
                 .zoom = self.camera.zoom,
+            };
+            BackendType.beginMode2D(rl_camera);
+        }
+
+        fn beginCameraModeWithCamAndParallax(self: *Self, cam: *const Camera, parallax_x: f32, parallax_y: f32) void {
+            _ = self;
+            const rl_camera = BackendType.Camera2D{
+                .offset = if (cam.screen_viewport) |vp| .{
+                    .x = @as(f32, @floatFromInt(vp.x)) + @as(f32, @floatFromInt(vp.width)) / 2.0,
+                    .y = @as(f32, @floatFromInt(vp.y)) + @as(f32, @floatFromInt(vp.height)) / 2.0,
+                } else .{
+                    .x = @as(f32, @floatFromInt(BackendType.getScreenWidth())) / 2.0,
+                    .y = @as(f32, @floatFromInt(BackendType.getScreenHeight())) / 2.0,
+                },
+                .target = .{
+                    .x = cam.x * parallax_x,
+                    .y = cam.y * parallax_y,
+                },
+                .rotation = cam.rotation,
+                .zoom = cam.zoom,
             };
             BackendType.beginMode2D(rl_camera);
         }
@@ -868,7 +1219,6 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 
             const tint = BackendType.color(visual.tint.r, visual.tint.g, visual.tint.b, visual.tint.a);
 
-            // If sprite has a name, look it up in texture manager
             if (visual.sprite_name.len > 0) {
                 if (self.texture_manager.findSprite(visual.sprite_name)) |result| {
                     const sprite = result.sprite;
@@ -889,7 +1239,6 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
                         .height = scaled_height,
                     };
 
-                    // Calculate origin based on pivot
                     const pivot_origin = visual.pivot.getOrigin(scaled_width, scaled_height, visual.pivot_x, visual.pivot_y);
                     const origin = BackendType.Vector2{
                         .x = pivot_origin.x,
@@ -961,7 +1310,6 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
 
             const col = BackendType.color(visual.color.r, visual.color.g, visual.color.b, visual.color.a);
 
-            // Use default font for now
             BackendType.drawText(visual.text.ptr, @intFromFloat(pos.x), @intFromFloat(pos.y), @intFromFloat(visual.size), col);
         }
 
@@ -981,8 +1329,315 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
     };
 }
 
+// ============================================
+// Backwards-Compatible Engine (no layers)
+// ============================================
+
+/// A single-layer enum used internally for backwards-compatible RetainedEngine.
+/// All entities are placed in a single world-space layer.
+const SingleWorldLayer = enum {
+    default,
+
+    pub fn config(self: SingleWorldLayer) layer_mod.LayerConfig {
+        _ = self;
+        return .{ .space = .world, .order = 0 };
+    }
+};
+
+/// RetainedEngine without explicit layer support - for backwards compatibility.
+/// Internally uses the layered engine with a single world-space layer.
+///
+/// This provides the same API as the original RetainedEngine, where all entities
+/// share a single world-space coordinate system affected by the camera.
+pub fn RetainedEngineWith(comptime BackendType: type) type {
+    // Use the layered engine with a single layer internally
+    const LayeredEngine = RetainedEngineWithLayers(BackendType, SingleWorldLayer);
+
+    return struct {
+        const Self = @This();
+        pub const Backend = BackendType;
+        pub const SplitScreenLayout = LayeredEngine.SplitScreenLayout;
+
+        /// Internal layered engine instance
+        inner: LayeredEngine,
+
+        // ==================== Lifecycle ====================
+
+        pub fn init(allocator: std.mem.Allocator, config: EngineConfig) !Self {
+            return Self{
+                .inner = try LayeredEngine.init(allocator, config),
+            };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.inner.deinit();
+        }
+
+        // ==================== Asset Loading ====================
+
+        pub fn loadTexture(self: *Self, path: [:0]const u8) !TextureId {
+            return self.inner.loadTexture(path);
+        }
+
+        pub fn loadAtlas(self: *Self, name: []const u8, json_path: [:0]const u8, texture_path: [:0]const u8) !void {
+            return self.inner.loadAtlas(name, json_path, texture_path);
+        }
+
+        /// Load an atlas from comptime .zon frame data (no JSON parsing at runtime).
+        /// The frames parameter should be a comptime import of a *_frames.zon file.
+        pub fn loadAtlasComptime(
+            self: *Self,
+            name: []const u8,
+            comptime frames: anytype,
+            texture_path: [:0]const u8,
+        ) !void {
+            return self.inner.loadAtlasComptime(name, frames, texture_path);
+        }
+
+        // ==================== Sprite Management ====================
+
+        pub fn createSprite(self: *Self, id: EntityId, visual: SpriteVisual, pos: Position) void {
+            self.inner.createSprite(id, spriteToLayered(visual), pos);
+        }
+
+        pub fn updateSprite(self: *Self, id: EntityId, visual: SpriteVisual) void {
+            self.inner.updateSprite(id, spriteToLayered(visual));
+        }
+
+        pub fn destroySprite(self: *Self, id: EntityId) void {
+            self.inner.destroySprite(id);
+        }
+
+        pub fn getSprite(self: *const Self, id: EntityId) ?SpriteVisual {
+            if (self.inner.getSprite(id)) |layered| {
+                return layeredToSprite(layered);
+            }
+            return null;
+        }
+
+        // ==================== Shape Management ====================
+
+        pub fn createShape(self: *Self, id: EntityId, visual: ShapeVisual, pos: Position) void {
+            self.inner.createShape(id, shapeToLayered(visual), pos);
+        }
+
+        pub fn updateShape(self: *Self, id: EntityId, visual: ShapeVisual) void {
+            self.inner.updateShape(id, shapeToLayered(visual));
+        }
+
+        pub fn destroyShape(self: *Self, id: EntityId) void {
+            self.inner.destroyShape(id);
+        }
+
+        pub fn getShape(self: *const Self, id: EntityId) ?ShapeVisual {
+            if (self.inner.getShape(id)) |layered| {
+                return layeredToShape(layered);
+            }
+            return null;
+        }
+
+        // ==================== Text Management ====================
+
+        pub fn createText(self: *Self, id: EntityId, visual: TextVisual, pos: Position) void {
+            self.inner.createText(id, textToLayered(visual), pos);
+        }
+
+        pub fn updateText(self: *Self, id: EntityId, visual: TextVisual) void {
+            self.inner.updateText(id, textToLayered(visual));
+        }
+
+        pub fn destroyText(self: *Self, id: EntityId) void {
+            self.inner.destroyText(id);
+        }
+
+        pub fn getText(self: *const Self, id: EntityId) ?TextVisual {
+            if (self.inner.getText(id)) |layered| {
+                return layeredToText(layered);
+            }
+            return null;
+        }
+
+        // ==================== Position Management ====================
+
+        /// Update position for any entity (sprite, shape, or text).
+        /// Silently returns if the entity doesn't exist.
+        pub fn updatePosition(self: *Self, id: EntityId, pos: Position) void {
+            self.inner.updatePosition(id, pos);
+        }
+
+        /// Get position for any entity (sprite, shape, or text).
+        /// Returns null if the entity doesn't exist.
+        pub fn getPosition(self: *const Self, id: EntityId) ?Position {
+            return self.inner.getPosition(id);
+        }
+
+        // ==================== Window/Loop Management ====================
+
+        pub fn isRunning(self: *const Self) bool {
+            return self.inner.isRunning();
+        }
+
+        pub fn getDeltaTime(self: *const Self) f32 {
+            return self.inner.getDeltaTime();
+        }
+
+        pub fn beginFrame(self: *const Self) void {
+            self.inner.beginFrame();
+        }
+
+        pub fn endFrame(self: *const Self) void {
+            self.inner.endFrame();
+        }
+
+        pub fn getWindowSize(self: *const Self) struct { w: i32, h: i32 } {
+            return self.inner.getWindowSize();
+        }
+
+        // ==================== Camera ====================
+
+        /// Get the primary camera (single-camera mode or primary in multi-camera mode)
+        pub fn getCamera(self: *Self) *LayeredEngine.CameraType {
+            return self.inner.getCamera();
+        }
+
+        /// Get camera at a specific index (for multi-camera mode)
+        pub fn getCameraAt(self: *Self, index: u2) *LayeredEngine.CameraType {
+            return self.inner.getCameraAt(index);
+        }
+
+        /// Enable multi-camera mode with a preset layout
+        pub fn setupSplitScreen(self: *Self, layout: SplitScreenLayout) void {
+            self.inner.setupSplitScreen(layout);
+        }
+
+        /// Set which cameras are active using a bitmask (e.g., 0b0011 for cameras 0 and 1)
+        pub fn setActiveCameras(self: *Self, mask: u4) void {
+            self.inner.setActiveCameras(mask);
+        }
+
+        /// Disable multi-camera mode, return to single camera
+        pub fn disableMultiCamera(self: *Self) void {
+            self.inner.disableMultiCamera();
+        }
+
+        // ==================== Rendering ====================
+
+        pub fn render(self: *Self) void {
+            self.inner.render();
+        }
+
+        // ==================== Queries ====================
+
+        pub fn spriteCount(self: *const Self) usize {
+            return self.inner.spriteCount();
+        }
+
+        pub fn shapeCount(self: *const Self) usize {
+            return self.inner.shapeCount();
+        }
+
+        pub fn textCount(self: *const Self) usize {
+            return self.inner.textCount();
+        }
+
+        // ==================== Conversion Helpers ====================
+
+        fn spriteToLayered(visual: SpriteVisual) LayeredEngine.LayeredSpriteVisual {
+            return .{
+                .texture = visual.texture,
+                .sprite_name = visual.sprite_name,
+                .scale = visual.scale,
+                .rotation = visual.rotation,
+                .flip_x = visual.flip_x,
+                .flip_y = visual.flip_y,
+                .tint = visual.tint,
+                .z_index = visual.z_index,
+                .visible = visual.visible,
+                .pivot = visual.pivot,
+                .pivot_x = visual.pivot_x,
+                .pivot_y = visual.pivot_y,
+                .layer = .default,
+            };
+        }
+
+        fn layeredToSprite(layered: LayeredEngine.LayeredSpriteVisual) SpriteVisual {
+            return .{
+                .texture = layered.texture,
+                .sprite_name = layered.sprite_name,
+                .scale = layered.scale,
+                .rotation = layered.rotation,
+                .flip_x = layered.flip_x,
+                .flip_y = layered.flip_y,
+                .tint = layered.tint,
+                .z_index = layered.z_index,
+                .visible = layered.visible,
+                .pivot = layered.pivot,
+                .pivot_x = layered.pivot_x,
+                .pivot_y = layered.pivot_y,
+            };
+        }
+
+        fn shapeToLayered(visual: ShapeVisual) LayeredEngine.LayeredShapeVisual {
+            return .{
+                .shape = visual.shape,
+                .color = visual.color,
+                .rotation = visual.rotation,
+                .z_index = visual.z_index,
+                .visible = visual.visible,
+                .layer = .default,
+            };
+        }
+
+        fn layeredToShape(layered: LayeredEngine.LayeredShapeVisual) ShapeVisual {
+            return .{
+                .shape = layered.shape,
+                .color = layered.color,
+                .rotation = layered.rotation,
+                .z_index = layered.z_index,
+                .visible = layered.visible,
+            };
+        }
+
+        fn textToLayered(visual: TextVisual) LayeredEngine.LayeredTextVisual {
+            return .{
+                .font = visual.font,
+                .text = visual.text,
+                .size = visual.size,
+                .color = visual.color,
+                .z_index = visual.z_index,
+                .visible = visual.visible,
+                .layer = .default,
+            };
+        }
+
+        fn layeredToText(layered: LayeredEngine.LayeredTextVisual) TextVisual {
+            return .{
+                .font = layered.font,
+                .text = layered.text,
+                .size = layered.size,
+                .color = layered.color,
+                .z_index = layered.z_index,
+                .visible = layered.visible,
+            };
+        }
+    };
+}
 // Default backend
 const DefaultBackend = backend_mod.Backend(raylib_backend.RaylibBackend);
 
-/// Default retained engine with raylib backend
+/// Default retained engine with raylib backend (no layers).
+/// For simple use cases where layer support is not needed.
 pub const RetainedEngine = RetainedEngineWith(DefaultBackend);
+
+/// Default retained engine with raylib backend and DefaultLayers.
+///
+/// Naming convention:
+/// - `RetainedEngineWithLayers(Backend, LayerEnum)` is the generic constructor function
+/// - `LayeredRetainedEngine` is the concrete type alias with default settings
+///
+/// When defining your own engine with custom layers:
+/// ```zig
+/// const MyLayers = enum { background, world, ui, ... };
+/// const MyEngine = gfx.RetainedEngineWithLayers(gfx.DefaultBackend, MyLayers);
+/// ```
+pub const LayeredRetainedEngine = RetainedEngineWithLayers(DefaultBackend, DefaultLayers);
