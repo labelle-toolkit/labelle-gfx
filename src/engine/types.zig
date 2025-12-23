@@ -104,6 +104,59 @@ pub const Container = struct {
 };
 
 // ============================================
+// Cover Mode UV Cropping
+// ============================================
+
+/// Result of cover mode UV cropping calculation.
+/// Used to determine which portion of a sprite to sample when scaling to cover a container.
+pub const CoverCrop = struct {
+    /// Width of visible portion in sprite-local coordinates
+    visible_w: f32,
+    /// Height of visible portion in sprite-local coordinates
+    visible_h: f32,
+    /// X offset into sprite for cropping (based on pivot)
+    crop_x: f32,
+    /// Y offset into sprite for cropping (based on pivot)
+    crop_y: f32,
+    /// Scale factor used
+    scale: f32,
+
+    /// Calculates UV cropping for cover mode.
+    /// Returns null if scale would be non-positive (invalid container dimensions).
+    ///
+    /// - sprite_w, sprite_h: Original sprite dimensions
+    /// - cont_w, cont_h: Container dimensions to cover
+    /// - pivot_x, pivot_y: Pivot point (0-1) determining which part stays visible
+    pub fn calculate(
+        sprite_w: f32,
+        sprite_h: f32,
+        cont_w: f32,
+        cont_h: f32,
+        pivot_x: f32,
+        pivot_y: f32,
+    ) ?CoverCrop {
+        // Guard against invalid dimensions
+        if (cont_w <= 0 or cont_h <= 0) return null;
+        if (sprite_w <= 0 or sprite_h <= 0) return null;
+
+        const scale_x = cont_w / sprite_w;
+        const scale_y = cont_h / sprite_h;
+        const scale = @max(scale_x, scale_y);
+
+        const visible_w = cont_w / scale;
+        const visible_h = cont_h / scale;
+
+        return CoverCrop{
+            .visible_w = visible_w,
+            .visible_h = visible_h,
+            .crop_x = (sprite_w - visible_w) * pivot_x,
+            .crop_y = (sprite_h - visible_h) * pivot_y,
+            .scale = scale,
+        };
+    }
+};
+
+// ============================================
 // Color Type
 // ============================================
 
