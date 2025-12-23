@@ -69,10 +69,36 @@ pub const DefaultLayers = enum {
 
 /// Validates that a layer enum type has the required `config()` method.
 /// Returns a compile error if the type is invalid.
+///
+/// Requirements:
+/// - Must be an enum type
+/// - Must have dense, 0-based tag values (0, 1, 2, ... N-1)
+/// - Must have at most 64 values (for LayerMask bitmask support)
+/// - Must have a `config(self: LayerEnum) LayerConfig` method
 pub fn validateLayerEnum(comptime LayerEnum: type) void {
     const type_info = @typeInfo(LayerEnum);
     if (type_info != .@"enum") {
         @compileError("LayerEnum must be an enum type, got " ++ @typeName(LayerEnum));
+    }
+
+    const enum_info = type_info.@"enum";
+    const count = enum_info.fields.len;
+
+    // Check layer count limit (LayerMask uses u64 max)
+    if (count > 64) {
+        @compileError("LayerEnum must have at most 64 values for LayerMask support. " ++
+            "Found " ++ std.fmt.comptimePrint("{}", .{count}) ++ " values.");
+    }
+
+    // Check for dense 0..N-1 tag values
+    for (enum_info.fields, 0..) |field, expected| {
+        if (field.value != expected) {
+            @compileError("LayerEnum must have dense, 0-based tag values. " ++
+                "Field '" ++ field.name ++ "' has value " ++
+                std.fmt.comptimePrint("{}", .{field.value}) ++ " but expected " ++
+                std.fmt.comptimePrint("{}", .{expected}) ++ ". " ++
+                "Use a simple enum without explicit values.");
+        }
     }
 
     // Check that config() method exists and returns LayerConfig
@@ -89,8 +115,23 @@ pub fn validateLayerEnum(comptime LayerEnum: type) void {
     }
 
     const fn_info = config_info.@"fn";
+
+    // Check return type
     if (fn_info.return_type != LayerConfig) {
         @compileError("LayerEnum.config must return LayerConfig");
+    }
+
+    // Check that it takes exactly one parameter (self)
+    if (fn_info.params.len != 1) {
+        @compileError("LayerEnum.config must take exactly one parameter: self");
+    }
+
+    // Check that the parameter type is the enum itself
+    const param = fn_info.params[0];
+    if (param.type) |param_type| {
+        if (param_type != LayerEnum) {
+            @compileError("LayerEnum.config parameter must be of type " ++ @typeName(LayerEnum));
+        }
     }
 }
 
@@ -99,7 +140,14 @@ pub fn layerCount(comptime LayerEnum: type) usize {
     return @typeInfo(LayerEnum).@"enum".fields.len;
 }
 
-/// Returns an array of layer enum values sorted by their render order
+/// Returns an array of layer enum values sorted by their render order.
+///
+/// Layers are sorted by the `order` field in their `config()`. Lower order values
+/// are rendered first (behind higher values).
+///
+/// Note: If two layers have the same order value, they will be rendered in their
+/// enum declaration order (stable sort). This is deterministic but may not be
+/// the intended behavior - consider using unique order values for each layer.
 pub fn getSortedLayers(comptime LayerEnum: type) [layerCount(LayerEnum)]LayerEnum {
     comptime {
         validateLayerEnum(LayerEnum);
@@ -152,7 +200,9 @@ pub fn LayerMask(comptime LayerEnum: type) type {
 
         /// Initialize with all layers enabled
         pub fn all() Self {
-            return .{ .mask = std.math.maxInt(MaskInt) };
+            // Only set bits for existing layers, not the entire integer
+            const mask: MaskInt = (@as(MaskInt, 1) << @intCast(count)) - 1;
+            return .{ .mask = mask };
         }
 
         /// Initialize with no layers enabled

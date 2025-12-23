@@ -412,6 +412,7 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
         pub const Layer = LayerEnum;
         pub const LayerMaskType = LMask;
         pub const SplitScreenLayout = camera_manager_mod.SplitScreenLayout;
+        pub const CameraType = Camera;
 
         // ============================================
         // Visual Types with Layer Support
@@ -681,11 +682,14 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
                 if (old_layer != visual.layer) {
                     const old_layer_idx = @intFromEnum(old_layer);
                     const new_layer_idx = @intFromEnum(visual.layer);
-                    _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, old_z);
+                    const removed = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, old_z);
+                    std.debug.assert(removed);
                     self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch return;
                 } else if (old_z != visual.z_index) {
                     const layer_idx = @intFromEnum(visual.layer);
-                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .sprite }, old_z, visual.z_index) catch {};
+                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .sprite }, old_z, visual.z_index) catch |err| {
+                        std.debug.panic("Failed to change sprite z-index: {}", .{err});
+                    };
                 }
             }
         }
@@ -723,11 +727,14 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
                 if (old_layer != visual.layer) {
                     const old_layer_idx = @intFromEnum(old_layer);
                     const new_layer_idx = @intFromEnum(visual.layer);
-                    _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, old_z);
+                    const removed = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, old_z);
+                    std.debug.assert(removed);
                     self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch return;
                 } else if (old_z != visual.z_index) {
                     const layer_idx = @intFromEnum(visual.layer);
-                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .shape }, old_z, visual.z_index) catch {};
+                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .shape }, old_z, visual.z_index) catch |err| {
+                        std.debug.panic("Failed to change shape z-index: {}", .{err});
+                    };
                 }
             }
         }
@@ -765,11 +772,14 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
                 if (old_layer != visual.layer) {
                     const old_layer_idx = @intFromEnum(old_layer);
                     const new_layer_idx = @intFromEnum(visual.layer);
-                    _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .text }, old_z);
+                    const removed = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .text }, old_z);
+                    std.debug.assert(removed);
                     self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch return;
                 } else if (old_z != visual.z_index) {
                     const layer_idx = @intFromEnum(visual.layer);
-                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .text }, old_z, visual.z_index) catch {};
+                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .text }, old_z, visual.z_index) catch |err| {
+                        std.debug.panic("Failed to change text z-index: {}", .{err});
+                    };
                 }
             }
         }
@@ -792,6 +802,8 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
 
         // ==================== Position Management ====================
 
+        /// Update position for any entity (sprite, shape, or text).
+        /// Silently returns if the entity doesn't exist.
         pub fn updatePosition(self: *Self, id: EntityId, pos: Position) void {
             if (self.sprites.getPtr(id)) |entry| {
                 entry.position = pos;
@@ -807,6 +819,8 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
             }
         }
 
+        /// Get position for any entity (sprite, shape, or text).
+        /// Returns null if the entity doesn't exist.
         pub fn getPosition(self: *const Self, id: EntityId) ?Position {
             if (self.sprites.get(id)) |entry| {
                 return entry.position;
@@ -822,26 +836,31 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
 
         // ==================== Window/Loop Management ====================
 
+        /// Returns true if the window is still open and running.
         pub fn isRunning(self: *const Self) bool {
             _ = self;
             return !BackendType.windowShouldClose();
         }
 
+        /// Returns the time elapsed since the last frame in seconds.
         pub fn getDeltaTime(self: *const Self) f32 {
             _ = self;
             return BackendType.getFrameTime();
         }
 
+        /// Begin a new frame. Must be called before rendering.
         pub fn beginFrame(self: *const Self) void {
             BackendType.beginDrawing();
             BackendType.clearBackground(self.clear_color);
         }
 
+        /// End the current frame. Must be called after rendering.
         pub fn endFrame(self: *const Self) void {
             _ = self;
             BackendType.endDrawing();
         }
 
+        /// Returns the current window size in pixels.
         pub fn getWindowSize(self: *const Self) struct { w: i32, h: i32 } {
             _ = self;
             return .{
@@ -852,6 +871,7 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
 
         // ==================== Camera ====================
 
+        /// Get the primary camera (single-camera mode or primary in multi-camera mode).
         pub fn getCamera(self: *Self) *Camera {
             if (self.multi_camera_enabled) {
                 return self.camera_manager.getPrimaryCamera();
@@ -859,37 +879,45 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
             return &self.camera;
         }
 
+        /// Set the camera position directly.
         pub fn setCameraPosition(self: *Self, x: f32, y: f32) void {
             self.getCamera().setPosition(x, y);
         }
 
+        /// Set the camera zoom level.
         pub fn setZoom(self: *Self, zoom: f32) void {
             self.getCamera().setZoom(zoom);
         }
 
         // ==================== Multi-Camera ====================
 
+        /// Get the camera manager for advanced multi-camera control.
         pub fn getCameraManager(self: *Self) *CameraManager {
             return &self.camera_manager;
         }
 
+        /// Get camera at a specific index (for multi-camera mode).
         pub fn getCameraAt(self: *Self, index: u2) *Camera {
             return self.camera_manager.getCamera(index);
         }
 
+        /// Enable multi-camera mode with a preset layout.
         pub fn setupSplitScreen(self: *Self, layout: SplitScreenLayout) void {
             self.multi_camera_enabled = true;
             self.camera_manager.setupSplitScreen(layout);
         }
 
+        /// Disable multi-camera mode, return to single camera.
         pub fn disableMultiCamera(self: *Self) void {
             self.multi_camera_enabled = false;
         }
 
+        /// Returns whether multi-camera mode is enabled.
         pub fn isMultiCameraEnabled(self: *const Self) bool {
             return self.multi_camera_enabled;
         }
 
+        /// Set which cameras are active using a bitmask (e.g., 0b0011 for cameras 0 and 1).
         pub fn setActiveCameras(self: *Self, mask: u4) void {
             self.multi_camera_enabled = true;
             self.camera_manager.setActiveMask(mask);
@@ -897,6 +925,7 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
 
         // ==================== Rendering ====================
 
+        /// Render all visible entities. Call between beginFrame() and endFrame().
         pub fn render(self: *Self) void {
             if (self.multi_camera_enabled) {
                 self.renderMultiCamera();
@@ -943,7 +972,7 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
         fn renderMultiCamera(self: *Self) void {
             var cam_idx: u2 = 0;
             var cam_iter = self.camera_manager.activeIterator();
-            while (cam_iter.next()) |cam| : (cam_idx +|= 1) {
+            while (cam_iter.next()) |cam| : (cam_idx += 1) {
                 const layer_mask = self.camera_layer_masks[cam_idx];
 
                 // Begin viewport clipping
@@ -1235,164 +1264,84 @@ pub fn RetainedEngineWithLayers(comptime BackendType: type, comptime LayerEnum: 
 // Backwards-Compatible Engine (no layers)
 // ============================================
 
-/// RetainedEngine without layer support - for backwards compatibility.
-/// This is the original single-parameter version.
+/// A single-layer enum used internally for backwards-compatible RetainedEngine.
+/// All entities are placed in a single world-space layer.
+const SingleWorldLayer = enum {
+    default,
+
+    pub fn config(self: SingleWorldLayer) layer_mod.LayerConfig {
+        _ = self;
+        return .{ .space = .world, .order = 0 };
+    }
+};
+
+/// RetainedEngine without explicit layer support - for backwards compatibility.
+/// Internally uses the layered engine with a single world-space layer.
+///
+/// This provides the same API as the original RetainedEngine, where all entities
+/// share a single world-space coordinate system affected by the camera.
 pub fn RetainedEngineWith(comptime BackendType: type) type {
-    const Camera = camera_mod.CameraWith(BackendType);
-    const CameraManager = camera_manager_mod.CameraManagerWith(BackendType);
-    const TextureManager = texture_manager_mod.TextureManagerWith(BackendType);
+    // Use the layered engine with a single layer internally
+    const LayeredEngine = RetainedEngineWithLayers(BackendType, SingleWorldLayer);
 
     return struct {
         const Self = @This();
         pub const Backend = BackendType;
-        pub const SplitScreenLayout = camera_manager_mod.SplitScreenLayout;
+        pub const SplitScreenLayout = LayeredEngine.SplitScreenLayout;
 
-        allocator: std.mem.Allocator,
-        texture_manager: TextureManager,
-        camera: Camera,
-        camera_manager: CameraManager,
-        multi_camera_enabled: bool,
-
-        // Internal storage - keyed by EntityId
-        sprites: std.AutoArrayHashMap(EntityId, SpriteEntry),
-        shapes: std.AutoArrayHashMap(EntityId, ShapeEntry),
-        texts: std.AutoArrayHashMap(EntityId, TextEntry),
-
-        // Z-index bucket storage for efficient ordered rendering (no per-frame sorting)
-        z_buckets: ZBuckets,
-
-        // Window state
-        owns_window: bool,
-        clear_color: BackendType.Color,
-
-        // Texture ID counter
-        next_texture_id: u32,
-
-        const SpriteEntry = struct {
-            visual: SpriteVisual,
-            position: Position,
-        };
-
-        const ShapeEntry = struct {
-            visual: ShapeVisual,
-            position: Position,
-        };
-
-        const TextEntry = struct {
-            visual: TextVisual,
-            position: Position,
-        };
+        /// Internal layered engine instance
+        inner: LayeredEngine,
 
         // ==================== Lifecycle ====================
 
         pub fn init(allocator: std.mem.Allocator, config: EngineConfig) !Self {
-            var owns_window = false;
-            if (config.window) |window_config| {
-                if (window_config.hidden) {
-                    BackendType.setConfigFlags(.{ .window_hidden = true });
-                }
-                BackendType.initWindow(window_config.width, window_config.height, window_config.title.ptr);
-                BackendType.setTargetFPS(window_config.target_fps);
-                owns_window = true;
-            }
-
             return Self{
-                .allocator = allocator,
-                .texture_manager = TextureManager.init(allocator),
-                .camera = Camera.init(),
-                .camera_manager = CameraManager.init(),
-                .multi_camera_enabled = false,
-                .sprites = std.AutoArrayHashMap(EntityId, SpriteEntry).init(allocator),
-                .shapes = std.AutoArrayHashMap(EntityId, ShapeEntry).init(allocator),
-                .texts = std.AutoArrayHashMap(EntityId, TextEntry).init(allocator),
-                .z_buckets = ZBuckets.init(allocator),
-                .owns_window = owns_window,
-                .clear_color = BackendType.color(
-                    config.clear_color.r,
-                    config.clear_color.g,
-                    config.clear_color.b,
-                    config.clear_color.a,
-                ),
-                .next_texture_id = 1,
+                .inner = try LayeredEngine.init(allocator, config),
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.sprites.deinit();
-            self.shapes.deinit();
-            self.texts.deinit();
-            self.z_buckets.deinit();
-            self.texture_manager.deinit();
-            // Only close window if we own it AND it was successfully initialized
-            // This prevents crashes when GLFW fails to init (e.g., on headless systems)
-            if (self.owns_window and BackendType.isWindowReady()) {
-                BackendType.closeWindow();
-            }
+            self.inner.deinit();
         }
 
         // ==================== Asset Loading ====================
 
         pub fn loadTexture(self: *Self, path: [:0]const u8) !TextureId {
-            const id = self.next_texture_id;
-            self.next_texture_id += 1;
-
-            // Load as a single sprite with texture ID as name
-            var name_buf: [32]u8 = undefined;
-            const name = std.fmt.bufPrint(&name_buf, "tex_{d}", .{id}) catch return error.NameTooLong;
-            try self.texture_manager.loadSprite(name, path);
-
-            return TextureId.from(id);
+            return self.inner.loadTexture(path);
         }
 
         pub fn loadAtlas(self: *Self, name: []const u8, json_path: [:0]const u8, texture_path: [:0]const u8) !void {
-            try self.texture_manager.loadAtlas(name, json_path, texture_path);
+            return self.inner.loadAtlas(name, json_path, texture_path);
         }
 
         /// Load an atlas from comptime .zon frame data (no JSON parsing at runtime).
         /// The frames parameter should be a comptime import of a *_frames.zon file.
-        ///
-        /// Example:
-        /// ```zig
-        /// const character_frames = @import("characters_frames.zon");
-        /// try engine.loadAtlasComptime("characters", character_frames, "characters.png");
-        /// ```
         pub fn loadAtlasComptime(
             self: *Self,
             name: []const u8,
             comptime frames: anytype,
             texture_path: [:0]const u8,
         ) !void {
-            try self.texture_manager.loadAtlasComptime(name, frames, texture_path);
+            return self.inner.loadAtlasComptime(name, frames, texture_path);
         }
 
         // ==================== Sprite Management ====================
 
         pub fn createSprite(self: *Self, id: EntityId, visual: SpriteVisual, pos: Position) void {
-            self.sprites.put(id, .{ .visual = visual, .position = pos }) catch return;
-            self.z_buckets.insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch return;
+            self.inner.createSprite(id, spriteToLayered(visual), pos);
         }
 
         pub fn updateSprite(self: *Self, id: EntityId, visual: SpriteVisual) void {
-            if (self.sprites.getPtr(id)) |entry| {
-                const old_z = entry.visual.z_index;
-                entry.visual = visual;
-                if (old_z != visual.z_index) {
-                    self.z_buckets.changeZIndex(.{ .entity_id = id, .item_type = .sprite }, old_z, visual.z_index) catch {};
-                }
-            }
+            self.inner.updateSprite(id, spriteToLayered(visual));
         }
 
         pub fn destroySprite(self: *Self, id: EntityId) void {
-            if (self.sprites.get(id)) |entry| {
-                const removed = self.z_buckets.remove(.{ .entity_id = id, .item_type = .sprite }, entry.visual.z_index);
-                std.debug.assert(removed);
-            }
-            _ = self.sprites.swapRemove(id);
+            self.inner.destroySprite(id);
         }
 
         pub fn getSprite(self: *const Self, id: EntityId) ?SpriteVisual {
-            if (self.sprites.get(id)) |entry| {
-                return entry.visual;
+            if (self.inner.getSprite(id)) |layered| {
+                return layeredToSprite(layered);
             }
             return null;
         }
@@ -1400,31 +1349,20 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
         // ==================== Shape Management ====================
 
         pub fn createShape(self: *Self, id: EntityId, visual: ShapeVisual, pos: Position) void {
-            self.shapes.put(id, .{ .visual = visual, .position = pos }) catch return;
-            self.z_buckets.insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch return;
+            self.inner.createShape(id, shapeToLayered(visual), pos);
         }
 
         pub fn updateShape(self: *Self, id: EntityId, visual: ShapeVisual) void {
-            if (self.shapes.getPtr(id)) |entry| {
-                const old_z = entry.visual.z_index;
-                entry.visual = visual;
-                if (old_z != visual.z_index) {
-                    self.z_buckets.changeZIndex(.{ .entity_id = id, .item_type = .shape }, old_z, visual.z_index) catch {};
-                }
-            }
+            self.inner.updateShape(id, shapeToLayered(visual));
         }
 
         pub fn destroyShape(self: *Self, id: EntityId) void {
-            if (self.shapes.get(id)) |entry| {
-                const removed = self.z_buckets.remove(.{ .entity_id = id, .item_type = .shape }, entry.visual.z_index);
-                std.debug.assert(removed);
-            }
-            _ = self.shapes.swapRemove(id);
+            self.inner.destroyShape(id);
         }
 
         pub fn getShape(self: *const Self, id: EntityId) ?ShapeVisual {
-            if (self.shapes.get(id)) |entry| {
-                return entry.visual;
+            if (self.inner.getShape(id)) |layered| {
+                return layeredToShape(layered);
             }
             return null;
         }
@@ -1432,31 +1370,20 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
         // ==================== Text Management ====================
 
         pub fn createText(self: *Self, id: EntityId, visual: TextVisual, pos: Position) void {
-            self.texts.put(id, .{ .visual = visual, .position = pos }) catch return;
-            self.z_buckets.insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch return;
+            self.inner.createText(id, textToLayered(visual), pos);
         }
 
         pub fn updateText(self: *Self, id: EntityId, visual: TextVisual) void {
-            if (self.texts.getPtr(id)) |entry| {
-                const old_z = entry.visual.z_index;
-                entry.visual = visual;
-                if (old_z != visual.z_index) {
-                    self.z_buckets.changeZIndex(.{ .entity_id = id, .item_type = .text }, old_z, visual.z_index) catch {};
-                }
-            }
+            self.inner.updateText(id, textToLayered(visual));
         }
 
         pub fn destroyText(self: *Self, id: EntityId) void {
-            if (self.texts.get(id)) |entry| {
-                const removed = self.z_buckets.remove(.{ .entity_id = id, .item_type = .text }, entry.visual.z_index);
-                std.debug.assert(removed);
-            }
-            _ = self.texts.swapRemove(id);
+            self.inner.destroyText(id);
         }
 
         pub fn getText(self: *const Self, id: EntityId) ?TextVisual {
-            if (self.texts.get(id)) |entry| {
-                return entry.visual;
+            if (self.inner.getText(id)) |layered| {
+                return layeredToText(layered);
             }
             return null;
         }
@@ -1466,404 +1393,166 @@ pub fn RetainedEngineWith(comptime BackendType: type) type {
         /// Update position for any entity (sprite, shape, or text).
         /// Silently returns if the entity doesn't exist.
         pub fn updatePosition(self: *Self, id: EntityId, pos: Position) void {
-            if (self.sprites.getPtr(id)) |entry| {
-                entry.position = pos;
-                return;
-            }
-            if (self.shapes.getPtr(id)) |entry| {
-                entry.position = pos;
-                return;
-            }
-            if (self.texts.getPtr(id)) |entry| {
-                entry.position = pos;
-                return;
-            }
+            self.inner.updatePosition(id, pos);
         }
 
         /// Get position for any entity (sprite, shape, or text).
         /// Returns null if the entity doesn't exist.
         pub fn getPosition(self: *const Self, id: EntityId) ?Position {
-            if (self.sprites.get(id)) |entry| {
-                return entry.position;
-            }
-            if (self.shapes.get(id)) |entry| {
-                return entry.position;
-            }
-            if (self.texts.get(id)) |entry| {
-                return entry.position;
-            }
-            return null;
+            return self.inner.getPosition(id);
         }
 
         // ==================== Window/Loop Management ====================
 
         pub fn isRunning(self: *const Self) bool {
-            _ = self;
-            return !BackendType.windowShouldClose();
+            return self.inner.isRunning();
         }
 
         pub fn getDeltaTime(self: *const Self) f32 {
-            _ = self;
-            return BackendType.getFrameTime();
+            return self.inner.getDeltaTime();
         }
 
         pub fn beginFrame(self: *const Self) void {
-            BackendType.beginDrawing();
-            BackendType.clearBackground(self.clear_color);
+            self.inner.beginFrame();
         }
 
         pub fn endFrame(self: *const Self) void {
-            _ = self;
-            BackendType.endDrawing();
+            self.inner.endFrame();
         }
 
         pub fn getWindowSize(self: *const Self) struct { w: i32, h: i32 } {
-            _ = self;
-            return .{
-                .w = BackendType.getScreenWidth(),
-                .h = BackendType.getScreenHeight(),
-            };
+            return self.inner.getWindowSize();
         }
 
         // ==================== Camera ====================
 
         /// Get the primary camera (single-camera mode or primary in multi-camera mode)
-        pub fn getCamera(self: *Self) *Camera {
-            if (self.multi_camera_enabled) {
-                return self.camera_manager.getPrimaryCamera();
-            }
-            return &self.camera;
+        pub fn getCamera(self: *Self) *LayeredEngine.CameraType {
+            return self.inner.getCamera();
         }
 
-        pub fn setCameraPosition(self: *Self, x: f32, y: f32) void {
-            self.getCamera().setPosition(x, y);
+        /// Get camera at a specific index (for multi-camera mode)
+        pub fn getCameraAt(self: *Self, index: u2) *LayeredEngine.CameraType {
+            return self.inner.getCameraAt(index);
         }
 
-        pub fn setZoom(self: *Self, zoom: f32) void {
-            self.getCamera().setZoom(zoom);
-        }
-
-        // ==================== Multi-Camera ====================
-
-        /// Get the camera manager for multi-camera control
-        pub fn getCameraManager(self: *Self) *CameraManager {
-            return &self.camera_manager;
-        }
-
-        /// Get a specific camera by index (0-3)
-        pub fn getCameraAt(self: *Self, index: u2) *Camera {
-            return self.camera_manager.getCamera(index);
-        }
-
-        /// Enable multi-camera mode with a split-screen layout
+        /// Enable multi-camera mode with a preset layout
         pub fn setupSplitScreen(self: *Self, layout: SplitScreenLayout) void {
-            self.multi_camera_enabled = true;
-            self.camera_manager.setupSplitScreen(layout);
+            self.inner.setupSplitScreen(layout);
         }
 
-        /// Disable multi-camera mode and return to single-camera
-        pub fn disableMultiCamera(self: *Self) void {
-            self.multi_camera_enabled = false;
-        }
-
-        /// Check if multi-camera mode is enabled
-        pub fn isMultiCameraEnabled(self: *const Self) bool {
-            return self.multi_camera_enabled;
-        }
-
-        /// Set active cameras using a bitmask (bit N = camera N active)
+        /// Set which cameras are active using a bitmask (e.g., 0b0011 for cameras 0 and 1)
         pub fn setActiveCameras(self: *Self, mask: u4) void {
-            self.multi_camera_enabled = true;
-            self.camera_manager.setActiveMask(mask);
+            self.inner.setActiveCameras(mask);
+        }
+
+        /// Disable multi-camera mode, return to single camera
+        pub fn disableMultiCamera(self: *Self) void {
+            self.inner.disableMultiCamera();
         }
 
         // ==================== Rendering ====================
 
-        /// Render all stored visuals - no arguments needed
         pub fn render(self: *Self) void {
-            if (self.multi_camera_enabled) {
-                self.renderMultiCamera();
-            } else {
-                self.renderSingleCamera();
-            }
-        }
-
-        /// Render with a single camera (original behavior)
-        fn renderSingleCamera(self: *Self) void {
-            // Begin camera mode
-            self.beginCameraMode();
-
-            // Iterate z-index buckets in order (no sorting needed)
-            var iter = self.z_buckets.iterator();
-            while (iter.next()) |item| {
-                if (!self.isVisible(item)) continue;
-
-                switch (item.item_type) {
-                    .sprite => self.renderSprite(item.entity_id),
-                    .shape => self.renderShape(item.entity_id),
-                    .text => self.renderText(item.entity_id),
-                }
-            }
-
-            // End camera mode
-            self.endCameraMode();
-        }
-
-        /// Render with multiple cameras
-        fn renderMultiCamera(self: *Self) void {
-            var cam_iter = self.camera_manager.activeIterator();
-            while (cam_iter.next()) |cam| {
-                // Begin camera mode with viewport clipping
-                if (cam.screen_viewport) |vp| {
-                    BackendType.beginScissorMode(vp.x, vp.y, vp.width, vp.height);
-                }
-                BackendType.beginMode2D(cam.toBackend());
-
-                // Get viewport for culling
-                const viewport = cam.getViewport();
-
-                // Render all visuals for this camera with per-camera culling
-                var iter = self.z_buckets.iterator();
-                while (iter.next()) |item| {
-                    if (!self.isVisible(item)) continue;
-
-                    switch (item.item_type) {
-                        .sprite => {
-                            if (self.shouldRenderSpriteInViewport(item.entity_id, viewport)) {
-                                self.renderSprite(item.entity_id);
-                            }
-                        },
-                        .shape => {
-                            if (self.shouldRenderShapeInViewport(item.entity_id, viewport)) {
-                                self.renderShape(item.entity_id);
-                            }
-                        },
-                        .text => self.renderText(item.entity_id),
-                    }
-                }
-
-                // End camera mode
-                BackendType.endMode2D();
-                if (cam.screen_viewport != null) {
-                    BackendType.endScissorMode();
-                }
-            }
-        }
-
-        /// Check if sprite should be rendered in the given viewport
-        fn shouldRenderSpriteInViewport(self: *Self, id: EntityId, viewport: Camera.ViewportRect) bool {
-            const entry = self.sprites.get(id) orelse return false;
-            const visual = entry.visual;
-            const pos = entry.position;
-
-            // Get sprite dimensions
-            if (visual.sprite_name.len > 0) {
-                if (self.texture_manager.findSprite(visual.sprite_name)) |result| {
-                    const sprite = result.sprite;
-                    const scaled_width = @as(f32, @floatFromInt(sprite.width)) * visual.scale;
-                    const scaled_height = @as(f32, @floatFromInt(sprite.height)) * visual.scale;
-
-                    // Calculate bounds based on pivot
-                    const pivot_origin = visual.pivot.getOrigin(scaled_width, scaled_height, visual.pivot_x, visual.pivot_y);
-                    const sprite_x = pos.x - pivot_origin.x;
-                    const sprite_y = pos.y - pivot_origin.y;
-                    return viewport.overlapsRect(sprite_x, sprite_y, scaled_width, scaled_height);
-                }
-            }
-            return true; // Render if no sprite data found
-        }
-
-        const ShapeBounds = struct { x: f32, y: f32, w: f32, h: f32 };
-
-        /// Check if shape should be rendered in the given viewport
-        fn shouldRenderShapeInViewport(self: *const Self, id: EntityId, viewport: Camera.ViewportRect) bool {
-            const entry = self.shapes.get(id) orelse return false;
-            const visual = entry.visual;
-            const pos = entry.position;
-
-            // Calculate bounds based on shape type
-            const bounds: ShapeBounds = switch (visual.shape) {
-                .circle => |c| .{
-                    .x = pos.x - c.radius,
-                    .y = pos.y - c.radius,
-                    .w = c.radius * 2,
-                    .h = c.radius * 2,
-                },
-                .rectangle => |r| .{
-                    .x = pos.x,
-                    .y = pos.y,
-                    .w = r.width,
-                    .h = r.height,
-                },
-                .line => |l| .{
-                    .x = @min(pos.x, pos.x + l.end.x),
-                    .y = @min(pos.y, pos.y + l.end.y),
-                    .w = @abs(l.end.x) + l.thickness,
-                    .h = @abs(l.end.y) + l.thickness,
-                },
-                .triangle => |t| .{
-                    .x = @min(pos.x, @min(pos.x + t.p2.x, pos.x + t.p3.x)),
-                    .y = @min(pos.y, @min(pos.y + t.p2.y, pos.y + t.p3.y)),
-                    .w = @max(pos.x, @max(pos.x + t.p2.x, pos.x + t.p3.x)) - @min(pos.x, @min(pos.x + t.p2.x, pos.x + t.p3.x)),
-                    .h = @max(pos.y, @max(pos.y + t.p2.y, pos.y + t.p3.y)) - @min(pos.y, @min(pos.y + t.p2.y, pos.y + t.p3.y)),
-                },
-                .polygon => |p| .{
-                    .x = pos.x - p.radius,
-                    .y = pos.y - p.radius,
-                    .w = p.radius * 2,
-                    .h = p.radius * 2,
-                },
-            };
-
-            return viewport.overlapsRect(bounds.x, bounds.y, bounds.w, bounds.h);
-        }
-
-        fn isVisible(self: *const Self, item: RenderItem) bool {
-            return switch (item.item_type) {
-                .sprite => if (self.sprites.get(item.entity_id)) |e| e.visual.visible else false,
-                .shape => if (self.shapes.get(item.entity_id)) |e| e.visual.visible else false,
-                .text => if (self.texts.get(item.entity_id)) |e| e.visual.visible else false,
-            };
-        }
-
-        fn beginCameraMode(self: *Self) void {
-            const rl_camera = BackendType.Camera2D{
-                .offset = .{
-                    .x = @as(f32, @floatFromInt(BackendType.getScreenWidth())) / 2.0,
-                    .y = @as(f32, @floatFromInt(BackendType.getScreenHeight())) / 2.0,
-                },
-                .target = .{ .x = self.camera.x, .y = self.camera.y },
-                .rotation = self.camera.rotation,
-                .zoom = self.camera.zoom,
-            };
-            BackendType.beginMode2D(rl_camera);
-        }
-
-        fn endCameraMode(self: *Self) void {
-            _ = self;
-            BackendType.endMode2D();
-        }
-
-        fn renderSprite(self: *Self, id: EntityId) void {
-            const entry = self.sprites.get(id) orelse return;
-            const visual = entry.visual;
-            const pos = entry.position;
-
-            const tint = BackendType.color(visual.tint.r, visual.tint.g, visual.tint.b, visual.tint.a);
-
-            // If sprite has a name, look it up in texture manager
-            if (visual.sprite_name.len > 0) {
-                if (self.texture_manager.findSprite(visual.sprite_name)) |result| {
-                    const sprite = result.sprite;
-                    const src_rect = BackendType.Rectangle{
-                        .x = @floatFromInt(sprite.x),
-                        .y = @floatFromInt(sprite.y),
-                        .width = if (visual.flip_x) -@as(f32, @floatFromInt(sprite.width)) else @as(f32, @floatFromInt(sprite.width)),
-                        .height = if (visual.flip_y) -@as(f32, @floatFromInt(sprite.height)) else @as(f32, @floatFromInt(sprite.height)),
-                    };
-
-                    const scaled_width = @as(f32, @floatFromInt(sprite.width)) * visual.scale;
-                    const scaled_height = @as(f32, @floatFromInt(sprite.height)) * visual.scale;
-
-                    const dest_rect = BackendType.Rectangle{
-                        .x = pos.x,
-                        .y = pos.y,
-                        .width = scaled_width,
-                        .height = scaled_height,
-                    };
-
-                    // Calculate origin based on pivot
-                    const pivot_origin = visual.pivot.getOrigin(scaled_width, scaled_height, visual.pivot_x, visual.pivot_y);
-                    const origin = BackendType.Vector2{
-                        .x = pivot_origin.x,
-                        .y = pivot_origin.y,
-                    };
-
-                    BackendType.drawTexturePro(
-                        result.atlas.texture,
-                        src_rect,
-                        dest_rect,
-                        origin,
-                        visual.rotation,
-                        tint,
-                    );
-                }
-            }
-        }
-
-        fn renderShape(self: *Self, id: EntityId) void {
-            const entry = self.shapes.get(id) orelse return;
-            const visual = entry.visual;
-            const pos = entry.position;
-
-            const col = BackendType.color(visual.color.r, visual.color.g, visual.color.b, visual.color.a);
-
-            switch (visual.shape) {
-                .circle => |circle| {
-                    if (circle.fill == .filled) {
-                        BackendType.drawCircle(pos.x, pos.y, circle.radius, col);
-                    } else {
-                        BackendType.drawCircleLines(pos.x, pos.y, circle.radius, col);
-                    }
-                },
-                .rectangle => |rect| {
-                    if (rect.fill == .filled) {
-                        BackendType.drawRectangleV(pos.x, pos.y, rect.width, rect.height, col);
-                    } else {
-                        BackendType.drawRectangleLinesV(pos.x, pos.y, rect.width, rect.height, col);
-                    }
-                },
-                .line => |line| {
-                    if (line.thickness > 1) {
-                        BackendType.drawLineEx(pos.x, pos.y, pos.x + line.end.x, pos.y + line.end.y, line.thickness, col);
-                    } else {
-                        BackendType.drawLine(pos.x, pos.y, pos.x + line.end.x, pos.y + line.end.y, col);
-                    }
-                },
-                .triangle => |tri| {
-                    if (tri.fill == .filled) {
-                        BackendType.drawTriangle(pos.x, pos.y, pos.x + tri.p2.x, pos.y + tri.p2.y, pos.x + tri.p3.x, pos.y + tri.p3.y, col);
-                    } else {
-                        BackendType.drawTriangleLines(pos.x, pos.y, pos.x + tri.p2.x, pos.y + tri.p2.y, pos.x + tri.p3.x, pos.y + tri.p3.y, col);
-                    }
-                },
-                .polygon => |poly| {
-                    if (poly.fill == .filled) {
-                        BackendType.drawPoly(pos.x, pos.y, poly.sides, poly.radius, visual.rotation, col);
-                    } else {
-                        BackendType.drawPolyLines(pos.x, pos.y, poly.sides, poly.radius, visual.rotation, col);
-                    }
-                },
-            }
-        }
-
-        fn renderText(self: *Self, id: EntityId) void {
-            const entry = self.texts.get(id) orelse return;
-            const visual = entry.visual;
-            const pos = entry.position;
-
-            const col = BackendType.color(visual.color.r, visual.color.g, visual.color.b, visual.color.a);
-
-            // Use default font for now
-            BackendType.drawText(visual.text.ptr, @intFromFloat(pos.x), @intFromFloat(pos.y), @intFromFloat(visual.size), col);
+            self.inner.render();
         }
 
         // ==================== Queries ====================
 
         pub fn spriteCount(self: *const Self) usize {
-            return self.sprites.count();
+            return self.inner.spriteCount();
         }
 
         pub fn shapeCount(self: *const Self) usize {
-            return self.shapes.count();
+            return self.inner.shapeCount();
         }
 
         pub fn textCount(self: *const Self) usize {
-            return self.texts.count();
+            return self.inner.textCount();
+        }
+
+        // ==================== Conversion Helpers ====================
+
+        fn spriteToLayered(visual: SpriteVisual) LayeredEngine.LayeredSpriteVisual {
+            return .{
+                .texture = visual.texture,
+                .sprite_name = visual.sprite_name,
+                .scale = visual.scale,
+                .rotation = visual.rotation,
+                .flip_x = visual.flip_x,
+                .flip_y = visual.flip_y,
+                .tint = visual.tint,
+                .z_index = visual.z_index,
+                .visible = visual.visible,
+                .pivot = visual.pivot,
+                .pivot_x = visual.pivot_x,
+                .pivot_y = visual.pivot_y,
+                .layer = .default,
+            };
+        }
+
+        fn layeredToSprite(layered: LayeredEngine.LayeredSpriteVisual) SpriteVisual {
+            return .{
+                .texture = layered.texture,
+                .sprite_name = layered.sprite_name,
+                .scale = layered.scale,
+                .rotation = layered.rotation,
+                .flip_x = layered.flip_x,
+                .flip_y = layered.flip_y,
+                .tint = layered.tint,
+                .z_index = layered.z_index,
+                .visible = layered.visible,
+                .pivot = layered.pivot,
+                .pivot_x = layered.pivot_x,
+                .pivot_y = layered.pivot_y,
+            };
+        }
+
+        fn shapeToLayered(visual: ShapeVisual) LayeredEngine.LayeredShapeVisual {
+            return .{
+                .shape = visual.shape,
+                .color = visual.color,
+                .rotation = visual.rotation,
+                .z_index = visual.z_index,
+                .visible = visual.visible,
+                .layer = .default,
+            };
+        }
+
+        fn layeredToShape(layered: LayeredEngine.LayeredShapeVisual) ShapeVisual {
+            return .{
+                .shape = layered.shape,
+                .color = layered.color,
+                .rotation = layered.rotation,
+                .z_index = layered.z_index,
+                .visible = layered.visible,
+            };
+        }
+
+        fn textToLayered(visual: TextVisual) LayeredEngine.LayeredTextVisual {
+            return .{
+                .font = visual.font,
+                .text = visual.text,
+                .size = visual.size,
+                .color = visual.color,
+                .z_index = visual.z_index,
+                .visible = visual.visible,
+                .layer = .default,
+            };
+        }
+
+        fn layeredToText(layered: LayeredEngine.LayeredTextVisual) TextVisual {
+            return .{
+                .font = layered.font,
+                .text = layered.text,
+                .size = layered.size,
+                .color = layered.color,
+                .z_index = layered.z_index,
+                .visible = layered.visible,
+            };
         }
     };
 }
-
 // Default backend
 const DefaultBackend = backend_mod.Backend(raylib_backend.RaylibBackend);
 
