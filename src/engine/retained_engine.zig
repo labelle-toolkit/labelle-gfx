@@ -1116,6 +1116,12 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     const scale_y = cont_h / sprite_h;
                     const scale = @max(scale_x, scale_y);
 
+                    // Guard against division by zero from non-positive container dimensions
+                    if (scale <= 0) {
+                        log.warn("Skipping cover render: non-positive scale ({d})", .{scale});
+                        return;
+                    }
+
                     // Calculate visible portion in sprite-local coordinates
                     const visible_w = cont_w / scale;
                     const visible_h = cont_h / scale;
