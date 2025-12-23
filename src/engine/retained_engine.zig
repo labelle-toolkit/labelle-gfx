@@ -1209,15 +1209,6 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     const container_tl_x = base_x - cont_w * visual.pivot_x;
                     const container_tl_y = base_y - cont_h * visual.pivot_y;
 
-                    // Get viewport bounds for culling (screen dimensions)
-                    // Note: This uses screen coordinates, not camera viewport. For world-space
-                    // layers, tiles may be culled incorrectly if camera is offset/zoomed.
-                    // This is a known limitation - culling is conservative (may draw extra tiles).
-                    const vp_x: f32 = 0;
-                    const vp_y: f32 = 0;
-                    const vp_w: f32 = @floatFromInt(BackendType.getScreenWidth());
-                    const vp_h: f32 = @floatFromInt(BackendType.getScreenHeight());
-
                     // Calculate total tile grid bounds with overflow protection
                     const cols_float = @ceil(cont_w / scaled_w);
                     const rows_float = @ceil(cont_h / scaled_h);
@@ -1238,29 +1229,42 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                         return;
                     }
 
-                    // Calculate visible tile range (with bounds clamping)
-                    // Start tile: first tile that could be visible
-                    const start_col = if (vp_x > container_tl_x)
-                        @min(total_cols, @as(u32, @intFromFloat(@floor((vp_x - container_tl_x) / scaled_w))))
-                    else
-                        0;
-                    const start_row = if (vp_y > container_tl_y)
-                        @min(total_rows, @as(u32, @intFromFloat(@floor((vp_y - container_tl_y) / scaled_h))))
-                    else
-                        0;
+                    // Calculate visible tile range based on layer space
+                    const layer_cfg = visual.layer.config();
+                    var start_col: u32 = 0;
+                    var start_row: u32 = 0;
+                    var end_col: u32 = total_cols;
+                    var end_row: u32 = total_rows;
 
-                    // End tile: last tile that could be visible (+1 for exclusive end)
-                    // Guard against negative values (container fully off-screen to the right/bottom)
-                    const end_col_dist = vp_x + vp_w - container_tl_x;
-                    const end_row_dist = vp_y + vp_h - container_tl_y;
-                    const end_col = if (end_col_dist <= 0)
-                        0
-                    else
-                        @min(total_cols, @as(u32, @intFromFloat(@ceil(end_col_dist / scaled_w))));
-                    const end_row = if (end_row_dist <= 0)
-                        0
-                    else
-                        @min(total_rows, @as(u32, @intFromFloat(@ceil(end_row_dist / scaled_h))));
+                    if (layer_cfg.space == .screen) {
+                        // Screen-space layers: apply viewport culling using screen coordinates
+                        const vp_w: f32 = @floatFromInt(BackendType.getScreenWidth());
+                        const vp_h: f32 = @floatFromInt(BackendType.getScreenHeight());
+
+                        // Start tile: first tile that could be visible
+                        if (0 > container_tl_x) {
+                            start_col = @min(total_cols, @as(u32, @intFromFloat(@floor(-container_tl_x / scaled_w))));
+                        }
+                        if (0 > container_tl_y) {
+                            start_row = @min(total_rows, @as(u32, @intFromFloat(@floor(-container_tl_y / scaled_h))));
+                        }
+
+                        // End tile: last tile that could be visible
+                        const end_col_dist = vp_w - container_tl_x;
+                        const end_row_dist = vp_h - container_tl_y;
+                        if (end_col_dist > 0) {
+                            end_col = @min(total_cols, @as(u32, @intFromFloat(@ceil(end_col_dist / scaled_w))));
+                        } else {
+                            end_col = 0;
+                        }
+                        if (end_row_dist > 0) {
+                            end_row = @min(total_rows, @as(u32, @intFromFloat(@ceil(end_row_dist / scaled_h))));
+                        } else {
+                            end_row = 0;
+                        }
+                    }
+                    // For world-space layers, we draw all tiles since screen-space culling
+                    // would be incorrect (camera transforms are not accounted for here)
 
                     // Only draw visible tiles
                     var row: u32 = start_row;
