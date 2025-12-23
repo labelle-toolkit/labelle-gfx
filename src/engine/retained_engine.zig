@@ -1111,29 +1111,41 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
                 },
                 .cover => {
-                    // Scale to cover container (may overflow)
+                    // Scale to cover container using UV cropping (samples only visible portion)
                     const scale_x = cont_w / sprite_w;
                     const scale_y = cont_h / sprite_h;
                     const scale = @max(scale_x, scale_y);
-                    const dest_w = sprite_w * scale;
-                    const dest_h = sprite_h * scale;
 
-                    // Offset to align the sprite's pivot within the container based on size difference
-                    // pivot_x=0.5 (center) gives offset=0, aligning centers
-                    const diff_w = cont_w - dest_w;
-                    const diff_h = cont_h - dest_h;
-                    const offset_x = diff_w * (visual.pivot_x - 0.5);
-                    const offset_y = diff_h * (visual.pivot_y - 0.5);
+                    // Calculate visible portion in sprite-local coordinates
+                    const visible_w = cont_w / scale;
+                    const visible_h = cont_h / scale;
 
-                    const dest_rect = BackendType.Rectangle{
-                        .x = pos.x - offset_x,
-                        .y = pos.y - offset_y,
-                        .width = dest_w,
-                        .height = dest_h,
+                    // Pivot determines which part of sprite stays visible
+                    // pivot 0.5 = center visible, 0.0 = left/top visible, 1.0 = right/bottom visible
+                    const crop_x = (sprite_w - visible_w) * visual.pivot_x;
+                    const crop_y = (sprite_h - visible_h) * visual.pivot_y;
+
+                    // Compute cropped source rect (UV cropping)
+                    const base_x: f32 = @floatFromInt(result.sprite.x);
+                    const base_y: f32 = @floatFromInt(result.sprite.y);
+                    const cropped_src = BackendType.Rectangle{
+                        .x = base_x + crop_x,
+                        .y = base_y + crop_y,
+                        .width = if (visual.flip_x) -visible_w else visible_w,
+                        .height = if (visual.flip_y) -visible_h else visible_h,
                     };
-                    const pivot_origin = visual.pivot.getOrigin(dest_w, dest_h, visual.pivot_x, visual.pivot_y);
+
+                    // Draw cropped portion at container size
+                    const dest_rect = BackendType.Rectangle{
+                        .x = pos.x,
+                        .y = pos.y,
+                        .width = cont_w,
+                        .height = cont_h,
+                    };
+
+                    const pivot_origin = visual.pivot.getOrigin(cont_w, cont_h, visual.pivot_x, visual.pivot_y);
                     const origin = BackendType.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
-                    BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
+                    BackendType.drawTexturePro(result.atlas.texture, cropped_src, dest_rect, origin, visual.rotation, tint);
                 },
                 .contain, .scale_down => {
                     // Scale to fit inside container (letterboxed)
