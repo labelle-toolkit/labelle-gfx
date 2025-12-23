@@ -1053,17 +1053,22 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             }
         }
 
+        /// Returns screen dimensions as a Container.Rect at origin.
+        fn getScreenRect() Container.Rect {
+            return Container.Rect{
+                .x = 0,
+                .y = 0,
+                .width = @floatFromInt(BackendType.getScreenWidth()),
+                .height = @floatFromInt(BackendType.getScreenHeight()),
+            };
+        }
+
         /// Resolves a Container specification to concrete dimensions (Rect).
         fn resolveContainer(visual: SpriteVisual, sprite_w: f32, sprite_h: f32) Container.Rect {
             if (visual.container) |c| {
                 return switch (c) {
                     .infer => resolveInferredContainer(visual, sprite_w, sprite_h),
-                    .viewport => Container.Rect{
-                        .x = 0,
-                        .y = 0,
-                        .width = @floatFromInt(BackendType.getScreenWidth()),
-                        .height = @floatFromInt(BackendType.getScreenHeight()),
-                    },
+                    .viewport => getScreenRect(),
                     .explicit => |rect| rect,
                 };
             }
@@ -1074,12 +1079,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         fn resolveInferredContainer(visual: SpriteVisual, sprite_w: f32, sprite_h: f32) Container.Rect {
             const layer_cfg = visual.layer.config();
             if (layer_cfg.space == .screen) {
-                return Container.Rect{
-                    .x = 0,
-                    .y = 0,
-                    .width = @floatFromInt(BackendType.getScreenWidth()),
-                    .height = @floatFromInt(BackendType.getScreenHeight()),
-                };
+                return getScreenRect();
             }
             // World-space with no container: use sprite's natural size
             // (sized modes ignore visual.scale, so we don't apply it here)
