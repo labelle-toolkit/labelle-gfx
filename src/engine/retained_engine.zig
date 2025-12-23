@@ -40,6 +40,7 @@ pub const types = @import("types.zig");
 pub const visuals = @import("visuals.zig");
 pub const config = @import("config.zig");
 pub const layer_mod = @import("layer.zig");
+const z_buckets = @import("z_buckets.zig");
 
 // Backend imports
 const backend_mod = @import("../backend/backend.zig");
@@ -77,117 +78,10 @@ pub const Line = visuals.Line;
 pub const Triangle = visuals.Triangle;
 pub const Polygon = visuals.Polygon;
 
-// ============================================
-// Render Item for Z-Index Buckets
-// ============================================
-
-const RenderItemType = enum { sprite, shape, text };
-
-const RenderItem = struct {
-    entity_id: EntityId,
-    item_type: RenderItemType,
-
-    pub fn eql(self: RenderItem, other: RenderItem) bool {
-        return self.entity_id == other.entity_id and self.item_type == other.item_type;
-    }
-};
-
-/// Z-index bucket storage for RetainedEngine.
-/// Uses 256 buckets for O(1) insertion and natural depth ordering.
-const ZBuckets = struct {
-    const Bucket = std.ArrayListUnmanaged(RenderItem);
-
-    buckets: [256]Bucket,
-    allocator: std.mem.Allocator,
-    total_count: usize,
-
-    pub fn init(allocator: std.mem.Allocator) ZBuckets {
-        return ZBuckets{
-            .buckets = [_]Bucket{.{}} ** 256,
-            .allocator = allocator,
-            .total_count = 0,
-        };
-    }
-
-    pub fn deinit(self: *ZBuckets) void {
-        for (&self.buckets) |*bucket| {
-            bucket.deinit(self.allocator);
-        }
-    }
-
-    pub fn insert(self: *ZBuckets, item: RenderItem, z: u8) !void {
-        try self.buckets[z].append(self.allocator, item);
-        self.total_count += 1;
-    }
-
-    pub fn remove(self: *ZBuckets, item: RenderItem, z: u8) bool {
-        const bucket = &self.buckets[z];
-        for (bucket.items, 0..) |existing, i| {
-            if (existing.eql(item)) {
-                _ = bucket.swapRemove(i);
-                self.total_count -= 1;
-                return true;
-            }
-        }
-        return false;
-    }
-
-    pub fn changeZIndex(self: *ZBuckets, item: RenderItem, old_z: u8, new_z: u8) !void {
-        if (old_z == new_z) return;
-        const removed = self.remove(item, old_z);
-        if (!removed) {
-            return error.ItemNotFound;
-        }
-        try self.insert(item, new_z);
-    }
-
-    pub fn clear(self: *ZBuckets) void {
-        for (&self.buckets) |*bucket| {
-            bucket.clearRetainingCapacity();
-        }
-        self.total_count = 0;
-    }
-
-    pub const Iterator = struct {
-        buckets: *const [256]Bucket,
-        z: u16,
-        idx: usize,
-
-        pub fn init(storage: *const ZBuckets) Iterator {
-            var iter = Iterator{
-                .buckets = &storage.buckets,
-                .z = 0,
-                .idx = 0,
-            };
-            iter.skipEmptyBuckets();
-            return iter;
-        }
-
-        pub fn next(self: *Iterator) ?RenderItem {
-            while (self.z < 256) {
-                const bucket = &self.buckets[self.z];
-                if (self.idx < bucket.items.len) {
-                    const item = bucket.items[self.idx];
-                    self.idx += 1;
-                    return item;
-                }
-                self.z += 1;
-                self.idx = 0;
-            }
-            return null;
-        }
-
-        fn skipEmptyBuckets(self: *Iterator) void {
-            while (self.z < 256 and self.buckets[self.z].items.len == 0) {
-                self.z += 1;
-            }
-        }
-    };
-
-    pub fn iterator(self: *const ZBuckets) Iterator {
-        return Iterator.init(self);
-    }
-};
+// Re-export z-bucket types
+const ZBuckets = z_buckets.ZBuckets;
+const RenderItem = z_buckets.RenderItem;
+const RenderItemType = z_buckets.RenderItemType;
 
 // ============================================
 // Retained Engine
