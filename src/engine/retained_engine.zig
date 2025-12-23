@@ -1194,7 +1194,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
                 },
                 .repeat => {
-                    // Tile sprite to fill container
+                    // Tile sprite to fill container with viewport culling
                     // Note: rotation applies per-tile, not to the tiled grid as a whole
                     const scaled_w = sprite_w * visual.scale;
                     const scaled_h = sprite_h * visual.scale;
@@ -1209,20 +1209,68 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     const container_tl_x = base_x - cont_w * visual.pivot_x;
                     const container_tl_y = base_y - cont_h * visual.pivot_y;
 
-                    const cols = @as(u32, @intFromFloat(@ceil(cont_w / scaled_w)));
-                    const rows = @as(u32, @intFromFloat(@ceil(cont_h / scaled_h)));
+                    // Calculate total tile grid bounds with overflow protection
+                    const cols_float = @ceil(cont_w / scaled_w);
+                    const rows_float = @ceil(cont_h / scaled_h);
+                    const max_u32: f32 = @floatFromInt(std.math.maxInt(u32));
+                    if (cols_float > max_u32 or rows_float > max_u32) {
+                        log.warn("Repeat tile count overflow: {d}x{d} cols/rows exceed u32 max", .{ cols_float, rows_float });
+                        return;
+                    }
+                    const total_cols: u32 = @intFromFloat(cols_float);
+                    const total_rows: u32 = @intFromFloat(rows_float);
 
-                    // Limit tile count to prevent performance issues or overflow
-                    const max_tiles: u32 = 10000;
-                    if (cols * rows > max_tiles) {
-                        log.warn("Repeat tile count ({d}x{d}={d}) exceeds limit ({d}), skipping", .{ cols, rows, cols * rows, max_tiles });
+                    // Limit tile count to prevent performance issues
+                    // Use u64 to prevent overflow in multiplication
+                    const max_tiles: u64 = 10000;
+                    const tile_count = @as(u64, total_cols) * @as(u64, total_rows);
+                    if (tile_count > max_tiles) {
+                        log.warn("Repeat tile count ({d}x{d}={d}) exceeds limit ({d}), skipping", .{ total_cols, total_rows, tile_count, max_tiles });
                         return;
                     }
 
-                    var row: u32 = 0;
-                    while (row < rows) : (row += 1) {
-                        var col: u32 = 0;
-                        while (col < cols) : (col += 1) {
+                    // Calculate visible tile range based on layer space
+                    const layer_cfg = visual.layer.config();
+                    var start_col: u32 = 0;
+                    var start_row: u32 = 0;
+                    var end_col: u32 = total_cols;
+                    var end_row: u32 = total_rows;
+
+                    if (layer_cfg.space == .screen) {
+                        // Screen-space layers: apply viewport culling using screen coordinates
+                        const vp_w: f32 = @floatFromInt(BackendType.getScreenWidth());
+                        const vp_h: f32 = @floatFromInt(BackendType.getScreenHeight());
+
+                        // Start tile: first tile that could be visible
+                        if (0 > container_tl_x) {
+                            start_col = @min(total_cols, @as(u32, @intFromFloat(@floor(-container_tl_x / scaled_w))));
+                        }
+                        if (0 > container_tl_y) {
+                            start_row = @min(total_rows, @as(u32, @intFromFloat(@floor(-container_tl_y / scaled_h))));
+                        }
+
+                        // End tile: last tile that could be visible
+                        const end_col_dist = vp_w - container_tl_x;
+                        const end_row_dist = vp_h - container_tl_y;
+                        if (end_col_dist > 0) {
+                            end_col = @min(total_cols, @as(u32, @intFromFloat(@ceil(end_col_dist / scaled_w))));
+                        } else {
+                            end_col = 0;
+                        }
+                        if (end_row_dist > 0) {
+                            end_row = @min(total_rows, @as(u32, @intFromFloat(@ceil(end_row_dist / scaled_h))));
+                        } else {
+                            end_row = 0;
+                        }
+                    }
+                    // For world-space layers, we draw all tiles since screen-space culling
+                    // would be incorrect (camera transforms are not accounted for here)
+
+                    // Only draw visible tiles
+                    var row: u32 = start_row;
+                    while (row < end_row) : (row += 1) {
+                        var col: u32 = start_col;
+                        while (col < end_col) : (col += 1) {
                             const tile_x = container_tl_x + @as(f32, @floatFromInt(col)) * scaled_w;
                             const tile_y = container_tl_y + @as(f32, @floatFromInt(row)) * scaled_h;
 
