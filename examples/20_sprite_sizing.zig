@@ -136,6 +136,8 @@ pub fn main() !void {
     // Camera-following background demo (world-space, camera_viewport)
     // This sprite fills the camera's visible area regardless of camera position/zoom.
     // The position acts as an offset from the camera viewport's top-left.
+    // Note: Any sprite can be used here - we reuse "hero/idle_0001" with a tint
+    // since this atlas doesn't have dedicated background sprites.
     engine.createSprite(EntityId.from(11), .{
         .sprite_name = "hero/idle_0001",
         .size_mode = .cover,
@@ -147,6 +149,10 @@ pub fn main() !void {
 
     std.debug.print("Created {} sprites\n", .{engine.spriteCount()});
 
+    // Camera sway animation constants
+    const camera_sway_speed: f32 = 0.02;
+    const camera_sway_amplitude: f32 = 50;
+
     var frame_count: u32 = 0;
     var camera_x: f32 = 0;
 
@@ -155,7 +161,7 @@ pub fn main() !void {
         frame_count += 1;
 
         // Move camera to show that camera_viewport background follows
-        camera_x = @sin(@as(f32, @floatFromInt(frame_count)) * 0.02) * 50;
+        camera_x = @sin(@as(f32, @floatFromInt(frame_count)) * camera_sway_speed) * camera_sway_amplitude;
         engine.setCameraPosition(camera_x, 0);
 
         engine.beginFrame();
