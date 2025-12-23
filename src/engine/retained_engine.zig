@@ -1047,7 +1047,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     } else {
                         // Sized mode: resolve container
                         const cont_rect = resolveContainer(visual, sprite_w, sprite_h, cam);
-                        renderSizedSprite(result, visual, pos, src_rect, sprite_w, sprite_h, cont_rect, tint);
+                        renderSizedSprite(result, visual, pos, src_rect, sprite_w, sprite_h, cont_rect, tint, cam);
                     }
                 }
             }
@@ -1109,6 +1109,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             sprite_h: f32,
             cont_rect: Container.Rect,
             tint: BackendType.Color,
+            cam: *const Camera,
         ) void {
             const cont_w = cont_rect.width;
             const cont_h = cont_rect.height;
@@ -1278,7 +1279,34 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     // For world-space layers, we draw all tiles since screen-space culling
                     // would be incorrect (camera transforms are not accounted for here)
 
-                    // Only draw visible tiles
+                    // Enable scissor clipping to container bounds
+                    // This prevents tiles from overflowing the container
+                    // Note: Scissor operates in screen coordinates, so we must transform
+                    // world coordinates through the camera for world-space layers.
+                    const scissor_x: i32, const scissor_y: i32, const scissor_w: i32, const scissor_h: i32 = blk: {
+                        if (layer_cfg.space == .world) {
+                            // Transform world coordinates to screen coordinates
+                            const screen_tl = cam.worldToScreen(container_tl_x, container_tl_y);
+                            const screen_br = cam.worldToScreen(container_tl_x + cont_w, container_tl_y + cont_h);
+                            break :blk .{
+                                @intFromFloat(screen_tl.x),
+                                @intFromFloat(screen_tl.y),
+                                @intFromFloat(screen_br.x - screen_tl.x),
+                                @intFromFloat(screen_br.y - screen_tl.y),
+                            };
+                        } else {
+                            // Screen-space: coordinates are already in screen space
+                            break :blk .{
+                                @intFromFloat(container_tl_x),
+                                @intFromFloat(container_tl_y),
+                                @intFromFloat(cont_w),
+                                @intFromFloat(cont_h),
+                            };
+                        }
+                    };
+                    BackendType.beginScissorMode(scissor_x, scissor_y, scissor_w, scissor_h);
+
+                    // Draw visible tiles
                     var row: u32 = start_row;
                     while (row < end_row) : (row += 1) {
                         var col: u32 = start_col;
@@ -1296,6 +1324,8 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                             BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
                         }
                     }
+
+                    BackendType.endScissorMode();
                 },
             }
         }
