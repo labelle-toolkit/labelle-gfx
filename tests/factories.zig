@@ -1,7 +1,8 @@
 //! Test Factories and Helpers for labelle
 //!
-//! Provides zspec Factory definitions and helper functions for common test data.
-//! These create objects with sensible defaults for testing.
+//! Provides zspec Factory definitions using .zon files for data separation.
+//! Simple types use .zon files in tests/factories/*.zon.
+//! Complex types with nested structs remain in Zig due to type coercion limitations.
 
 const std = @import("std");
 const zspec = @import("zspec");
@@ -26,32 +27,14 @@ pub const ShapeVisual = MockEngine.ShapeVisual;
 pub const TextVisual = MockEngine.TextVisual;
 
 // ============================================================================
-// Position Factory
+// Factory Definitions
 // ============================================================================
 
-/// Factory for creating Position with default values at origin
-pub const PositionFactory = Factory.define(Position, .{
-    .x = 0,
-    .y = 0,
-});
+// Simple types loaded from .zon files
+pub const PositionFactory = Factory.defineFrom(Position, @import("factories/position.zon"));
+pub const ColorFactory = Factory.defineFrom(Color, @import("factories/color.zon"));
 
-// ============================================================================
-// Color Factory
-// ============================================================================
-
-/// Factory for creating Color with white as default
-pub const ColorFactory = Factory.define(Color, .{
-    .r = 255,
-    .g = 255,
-    .b = 255,
-    .a = 255,
-});
-
-// ============================================================================
-// Visual Factories (with union support from zspec v0.4.0)
-// ============================================================================
-
-/// Factory for creating SpriteVisual with sensible defaults
+// Complex types with nested structs (Color, unions) remain in Zig
 pub const SpriteVisualFactory = Factory.define(SpriteVisual, .{
     .texture = .invalid,
     .sprite_name = "test_sprite",
@@ -70,7 +53,6 @@ pub const SpriteVisualFactory = Factory.define(SpriteVisual, .{
     .container = null,
 });
 
-/// Factory for creating circle ShapeVisual with sensible defaults
 pub const CircleShapeFactory = Factory.define(ShapeVisual, .{
     .shape = .{ .circle = .{ .radius = 50 } },
     .color = Color.white,
@@ -80,7 +62,6 @@ pub const CircleShapeFactory = Factory.define(ShapeVisual, .{
     .layer = .world,
 });
 
-/// Factory for creating rectangle ShapeVisual with sensible defaults
 pub const RectangleShapeFactory = Factory.define(ShapeVisual, .{
     .shape = .{ .rectangle = .{ .width = 100, .height = 50 } },
     .color = Color.white,
@@ -90,7 +71,6 @@ pub const RectangleShapeFactory = Factory.define(ShapeVisual, .{
     .layer = .world,
 });
 
-/// Factory for creating TextVisual with sensible defaults
 pub const TextVisualFactory = Factory.define(TextVisual, .{
     .font = .invalid,
     .text = "Test",
@@ -120,88 +100,23 @@ pub fn color(r: u8, g: u8, b: u8, a: u8) Color {
     return .{ .r = r, .g = g, .b = b, .a = a };
 }
 
-/// Create a default SpriteVisual for testing
-pub fn spriteVisual() SpriteVisual {
-    return .{
-        .sprite_name = "test_sprite",
-        .scale = 1.0,
-        .rotation = 0,
-        .tint = Color.white,
-        .z_index = 128,
-        .flip_x = false,
-        .flip_y = false,
-        .visible = true,
-        .pivot = .center,
-        .pivot_x = 0.5,
-        .pivot_y = 0.5,
-        .layer = .world,
-        .size_mode = .none,
-        .container = null,
-    };
-}
-
-/// Create a SpriteVisual with custom sprite name
-pub fn spriteVisualWithName(name: []const u8) SpriteVisual {
-    var visual = spriteVisual();
-    visual.sprite_name = name;
-    return visual;
-}
-
-/// Create a circle ShapeVisual for testing
+/// Create a circle ShapeVisual with custom radius
 pub fn circleShape(radius: f32) ShapeVisual {
-    return .{
-        .shape = .{ .circle = .{ .radius = radius } },
-        .color = Color.white,
-        .z_index = 128,
-        .rotation = 0,
-        .visible = true,
-        .layer = .world,
-    };
+    return CircleShapeFactory.build(.{ .shape = .{ .circle = .{ .radius = radius } } });
 }
 
-/// Create a rectangle ShapeVisual for testing
+/// Create a rectangle ShapeVisual with custom dimensions
 pub fn rectangleShape(width: f32, height: f32) ShapeVisual {
-    return .{
-        .shape = .{ .rectangle = .{ .width = width, .height = height } },
-        .color = Color.white,
-        .z_index = 128,
-        .rotation = 0,
-        .visible = true,
-        .layer = .world,
-    };
+    return RectangleShapeFactory.build(.{ .shape = .{ .rectangle = .{ .width = width, .height = height } } });
 }
 
-/// Create a line ShapeVisual for testing
+/// Create a line ShapeVisual
 pub fn lineShape(end_x: f32, end_y: f32, thickness: f32) ShapeVisual {
     return .{
         .shape = .{ .line = .{ .end = .{ .x = end_x, .y = end_y }, .thickness = thickness } },
         .color = Color.white,
         .z_index = 128,
         .rotation = 0,
-        .visible = true,
-        .layer = .world,
-    };
-}
-
-/// Create a default TextVisual for testing
-pub fn textVisual() TextVisual {
-    return .{
-        .text = "Test",
-        .size = 16,
-        .color = Color.white,
-        .z_index = 128,
-        .visible = true,
-        .layer = .world,
-    };
-}
-
-/// Create a TextVisual with custom text
-pub fn textVisualWithText(comptime text: [:0]const u8) TextVisual {
-    return .{
-        .text = text,
-        .size = 16,
-        .color = Color.white,
-        .z_index = 128,
         .visible = true,
         .layer = .world,
     };
@@ -253,19 +168,7 @@ pub const FactoryTests = struct {
         try expect.equal(@as(u8, 255), c.a);
     }
 
-    test "spriteVisual creates default sprite" {
-        const sprite = spriteVisual();
-        try expect.toBeTrue(std.mem.eql(u8, sprite.sprite_name, "test_sprite"));
-        try expect.equal(@as(f32, 1.0), sprite.scale);
-        try expect.equal(@as(u8, 128), sprite.z_index);
-    }
-
-    test "spriteVisualWithName creates sprite with custom name" {
-        const sprite = spriteVisualWithName("player");
-        try expect.toBeTrue(std.mem.eql(u8, sprite.sprite_name, "player"));
-    }
-
-    test "circleShape creates circle" {
+    test "circleShape creates circle with custom radius" {
         const shape = circleShape(25);
         switch (shape.shape) {
             .circle => |circle| {
@@ -275,7 +178,7 @@ pub const FactoryTests = struct {
         }
     }
 
-    test "rectangleShape creates rectangle" {
+    test "rectangleShape creates rectangle with custom dimensions" {
         const shape = rectangleShape(100, 50);
         switch (shape.shape) {
             .rectangle => |rect| {
@@ -297,19 +200,6 @@ pub const FactoryTests = struct {
             else => return error.UnexpectedShape,
         }
     }
-
-    test "textVisual creates default text" {
-        const text = textVisual();
-        try expect.toBeTrue(std.mem.eql(u8, text.text, "Test"));
-        try expect.equal(@as(f32, 16), text.size);
-    }
-
-    test "textVisualWithText creates text with custom content" {
-        const text = textVisualWithText("Hello World");
-        try expect.toBeTrue(std.mem.eql(u8, text.text, "Hello World"));
-    }
-
-    // Factory-based tests (using zspec v0.4.0 union support)
 
     test "SpriteVisualFactory creates sprite with defaults" {
         const sprite = SpriteVisualFactory.build(.{});
