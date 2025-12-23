@@ -6,7 +6,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 
-pub const EntityId = types.EntityId;
+const EntityId = types.EntityId;
 
 // ============================================
 // Render Item for Z-Index Buckets
