@@ -95,3 +95,100 @@ test "CoverCrop returns null for negative container" {
     const result = CoverCrop.calculate(100, 100, -100, 100, 0.5, 0.5);
     try testing.expect(result == null);
 }
+
+// ============================================================================
+// Container Tests
+// ============================================================================
+
+const Container = gfx.Container;
+
+test "Container.camera_viewport variant exists" {
+    const container: Container = .camera_viewport;
+    try testing.expect(container == .camera_viewport);
+}
+
+test "Container.size creates explicit container at origin" {
+    const container = Container.size(800, 600);
+    try testing.expect(container == .explicit);
+    try testing.expectApproxEqAbs(@as(f32, 0), container.explicit.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0), container.explicit.y, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 800), container.explicit.width, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 600), container.explicit.height, 0.001);
+}
+
+test "Container.rect creates explicit container with position" {
+    const container = Container.rect(100, 200, 400, 300);
+    try testing.expect(container == .explicit);
+    try testing.expectApproxEqAbs(@as(f32, 100), container.explicit.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 200), container.explicit.y, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 400), container.explicit.width, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 300), container.explicit.height, 0.001);
+}
+
+// ============================================================================
+// Camera Viewport Integration Tests
+// ============================================================================
+
+const MockBackend = gfx.mock_backend.MockBackend;
+const Camera = gfx.camera.CameraWith(gfx.Backend(MockBackend));
+
+test "camera_viewport resolves to camera world-space bounds at default position" {
+    // Camera at (400, 300) with 800x600 screen, zoom 1.0
+    var cam = Camera.init();
+    cam.x = 400;
+    cam.y = 300;
+
+    const viewport = cam.getViewport();
+
+    // At zoom 1.0, viewport matches screen size
+    // Camera centered at (400, 300) means viewport top-left is (0, 0)
+    try testing.expectApproxEqAbs(@as(f32, 0), viewport.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0), viewport.y, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 800), viewport.width, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 600), viewport.height, 0.001);
+}
+
+test "camera_viewport changes with camera position" {
+    var cam = Camera.init();
+    cam.x = 500; // Moved right by 100
+    cam.y = 400; // Moved down by 100
+
+    const viewport = cam.getViewport();
+
+    // Viewport top-left should be (100, 100)
+    try testing.expectApproxEqAbs(@as(f32, 100), viewport.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 100), viewport.y, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 800), viewport.width, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 600), viewport.height, 0.001);
+}
+
+test "camera_viewport changes with zoom level" {
+    var cam = Camera.init();
+    cam.x = 400;
+    cam.y = 300;
+    cam.zoom = 2.0; // Zoomed in 2x
+
+    const viewport = cam.getViewport();
+
+    // At zoom 2.0, visible area is half the screen size
+    // Camera at (400, 300) means viewport is centered there
+    try testing.expectApproxEqAbs(@as(f32, 200), viewport.x, 0.001); // 400 - 400/2
+    try testing.expectApproxEqAbs(@as(f32, 150), viewport.y, 0.001); // 300 - 300/2
+    try testing.expectApproxEqAbs(@as(f32, 400), viewport.width, 0.001); // 800/2
+    try testing.expectApproxEqAbs(@as(f32, 300), viewport.height, 0.001); // 600/2
+}
+
+test "camera_viewport changes with zoom out" {
+    var cam = Camera.init();
+    cam.x = 400;
+    cam.y = 300;
+    cam.zoom = 0.5; // Zoomed out 2x
+
+    const viewport = cam.getViewport();
+
+    // At zoom 0.5, visible area is double the screen size
+    try testing.expectApproxEqAbs(@as(f32, -400), viewport.x, 0.001); // 400 - 800
+    try testing.expectApproxEqAbs(@as(f32, -300), viewport.y, 0.001); // 300 - 600
+    try testing.expectApproxEqAbs(@as(f32, 1600), viewport.width, 0.001); // 800*2
+    try testing.expectApproxEqAbs(@as(f32, 1200), viewport.height, 0.001); // 600*2
+}
