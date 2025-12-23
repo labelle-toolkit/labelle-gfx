@@ -12,6 +12,16 @@ const Container = gfx.Container;
 const Position = gfx.retained_engine.Position;
 const Color = gfx.retained_engine.Color;
 
+/// Creates a rectangle outline shape at the given position
+fn createContainerOutline(engine: *RetainedEngine, id: u32, w: f32, h: f32, x: f32, y: f32) void {
+    const outline_color = Color{ .r = 100, .g = 100, .b = 100 };
+    var v = RetainedEngine.ShapeVisual.rectangle(w, h);
+    v.shape.rectangle.fill = .outline;
+    v.color = outline_color;
+    v.z_index = 200;
+    engine.createShape(EntityId.from(id), v, .{ .x = x, .y = y });
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -33,50 +43,14 @@ pub fn main() !void {
     const container_w: f32 = 150;
     const container_h: f32 = 100;
 
-    // Create visual container outlines (shapes) to show boundaries
-    const outline_color = Color{ .r = 100, .g = 100, .b = 100 };
-
+    // Create container outlines to show boundaries
     // Row 1: stretch, cover, contain
-    engine.createShape(EntityId.from(100), blk: {
-        var v = RetainedEngine.ShapeVisual.rectangle(container_w, container_h);
-        v.shape.rectangle.fill = .outline;
-        v.color = outline_color;
-        v.z_index = 200;
-        break :blk v;
-    }, .{ .x = 50, .y = 100 });
-
-    engine.createShape(EntityId.from(101), blk: {
-        var v = RetainedEngine.ShapeVisual.rectangle(container_w, container_h);
-        v.shape.rectangle.fill = .outline;
-        v.color = outline_color;
-        v.z_index = 200;
-        break :blk v;
-    }, .{ .x = 250, .y = 100 });
-
-    engine.createShape(EntityId.from(102), blk: {
-        var v = RetainedEngine.ShapeVisual.rectangle(container_w, container_h);
-        v.shape.rectangle.fill = .outline;
-        v.color = outline_color;
-        v.z_index = 200;
-        break :blk v;
-    }, .{ .x = 450, .y = 100 });
-
+    createContainerOutline(&engine, 100, container_w, container_h, 50, 100);
+    createContainerOutline(&engine, 101, container_w, container_h, 250, 100);
+    createContainerOutline(&engine, 102, container_w, container_h, 450, 100);
     // Row 2: scale_down, repeat
-    engine.createShape(EntityId.from(103), blk: {
-        var v = RetainedEngine.ShapeVisual.rectangle(container_w, container_h);
-        v.shape.rectangle.fill = .outline;
-        v.color = outline_color;
-        v.z_index = 200;
-        break :blk v;
-    }, .{ .x = 50, .y = 300 });
-
-    engine.createShape(EntityId.from(104), blk: {
-        var v = RetainedEngine.ShapeVisual.rectangle(container_w * 2, container_h);
-        v.shape.rectangle.fill = .outline;
-        v.color = outline_color;
-        v.z_index = 200;
-        break :blk v;
-    }, .{ .x = 250, .y = 300 });
+    createContainerOutline(&engine, 103, container_w, container_h, 50, 300);
+    createContainerOutline(&engine, 104, container_w * 2, container_h, 250, 300);
 
     // Sprite 1: STRETCH - fills container exactly (may distort)
     const stretch_id = EntityId.from(1);
@@ -130,40 +104,22 @@ pub fn main() !void {
     }, .{ .x = 250, .y = 300 });
 
     // Labels (using text visuals)
-    engine.createText(EntityId.from(200), .{
-        .text = "STRETCH",
-        .size = 16,
-        .color = Color.white,
-        .z_index = 250,
-    }, .{ .x = 90, .y = 210 });
+    const labels = [_]struct { text: []const u8, x: f32, y: f32 }{
+        .{ .text = "STRETCH", .x = 90, .y = 210 },
+        .{ .text = "COVER", .x = 300, .y = 210 },
+        .{ .text = "CONTAIN", .x = 490, .y = 210 },
+        .{ .text = "SCALE_DOWN", .x = 70, .y = 410 },
+        .{ .text = "REPEAT", .x = 320, .y = 410 },
+    };
 
-    engine.createText(EntityId.from(201), .{
-        .text = "COVER",
-        .size = 16,
-        .color = Color.white,
-        .z_index = 250,
-    }, .{ .x = 300, .y = 210 });
-
-    engine.createText(EntityId.from(202), .{
-        .text = "CONTAIN",
-        .size = 16,
-        .color = Color.white,
-        .z_index = 250,
-    }, .{ .x = 490, .y = 210 });
-
-    engine.createText(EntityId.from(203), .{
-        .text = "SCALE_DOWN",
-        .size = 16,
-        .color = Color.white,
-        .z_index = 250,
-    }, .{ .x = 70, .y = 410 });
-
-    engine.createText(EntityId.from(204), .{
-        .text = "REPEAT",
-        .size = 16,
-        .color = Color.white,
-        .z_index = 250,
-    }, .{ .x = 320, .y = 410 });
+    for (labels, 0..) |label, i| {
+        engine.createText(EntityId.from(200 + @as(u32, @intCast(i))), .{
+            .text = label.text,
+            .size = 16,
+            .color = Color.white,
+            .z_index = 250,
+        }, .{ .x = label.x, .y = label.y });
+    }
 
     // Fullscreen background demo (screen-space layer)
     // When layer is .background (screen space) and no container specified,

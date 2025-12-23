@@ -1046,14 +1046,14 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                         );
                     } else {
                         // Sized mode: resolve container
-                        const container = self.resolveContainer(visual);
+                        const container = self.resolveContainer(visual, sprite_w, sprite_h);
                         self.renderSizedSprite(result, visual, pos, src_rect, sprite_w, sprite_h, container, tint);
                     }
                 }
             }
         }
 
-        fn resolveContainer(_: *const Self, visual: SpriteVisual) Container {
+        fn resolveContainer(_: *const Self, visual: SpriteVisual, sprite_w: f32, sprite_h: f32) Container {
             if (visual.container) |c| {
                 if (c.isScreen()) {
                     return Container{
@@ -1071,8 +1071,8 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     .height = @floatFromInt(BackendType.getScreenHeight()),
                 };
             }
-            // World-space with no container: fallback to sprite's natural size (shouldn't happen)
-            return Container{ .width = 100, .height = 100 };
+            // World-space with no container: fallback to sprite's natural size
+            return Container{ .width = sprite_w, .height = sprite_h };
         }
 
         fn renderSizedSprite(
@@ -1112,18 +1112,20 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     const dest_w = sprite_w * scale;
                     const dest_h = sprite_h * scale;
 
-                    // Pivot determines which part stays centered/visible
-                    const pivot_origin = visual.pivot.getOrigin(dest_w, dest_h, visual.pivot_x, visual.pivot_y);
-                    // Offset to center the pivot point within container
-                    const offset_x = (cont_w - dest_w) * visual.pivot_x;
-                    const offset_y = (cont_h - dest_h) * visual.pivot_y;
+                    // Offset to align the sprite's pivot within the container based on size difference
+                    // pivot_x=0.5 (center) gives offset=0, aligning centers
+                    const diff_w = cont_w - dest_w;
+                    const diff_h = cont_h - dest_h;
+                    const offset_x = diff_w * (visual.pivot_x - 0.5);
+                    const offset_y = diff_h * (visual.pivot_y - 0.5);
 
                     const dest_rect = BackendType.Rectangle{
-                        .x = pos.x + offset_x,
-                        .y = pos.y + offset_y,
+                        .x = pos.x - offset_x,
+                        .y = pos.y - offset_y,
                         .width = dest_w,
                         .height = dest_h,
                     };
+                    const pivot_origin = visual.pivot.getOrigin(dest_w, dest_h, visual.pivot_x, visual.pivot_y);
                     const origin = BackendType.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
                     BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
                 },
@@ -1142,10 +1144,11 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     const dest_h = sprite_h * scale;
 
                     // Pivot determines where sprite sits in letterboxed area
+                    // pivot_x=0.5 (center) gives offset=0, centering in letterbox
                     const padding_x = cont_w - dest_w;
                     const padding_y = cont_h - dest_h;
-                    const offset_x = padding_x * visual.pivot_x;
-                    const offset_y = padding_y * visual.pivot_y;
+                    const offset_x = padding_x * (visual.pivot_x - 0.5);
+                    const offset_y = padding_y * (visual.pivot_y - 0.5);
 
                     const dest_rect = BackendType.Rectangle{
                         .x = pos.x + offset_x,
@@ -1164,6 +1167,11 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
 
                     if (scaled_w <= 0 or scaled_h <= 0) return;
 
+                    // Calculate container's top-left based on pos and pivot
+                    // This makes repeat mode consistent with other sizing modes
+                    const container_tl_x = pos.x - cont_w * visual.pivot_x;
+                    const container_tl_y = pos.y - cont_h * visual.pivot_y;
+
                     const cols = @as(u32, @intFromFloat(@ceil(cont_w / scaled_w)));
                     const rows = @as(u32, @intFromFloat(@ceil(cont_h / scaled_h)));
 
@@ -1171,8 +1179,8 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     while (row < rows) : (row += 1) {
                         var col: u32 = 0;
                         while (col < cols) : (col += 1) {
-                            const tile_x = pos.x + @as(f32, @floatFromInt(col)) * scaled_w;
-                            const tile_y = pos.y + @as(f32, @floatFromInt(row)) * scaled_h;
+                            const tile_x = container_tl_x + @as(f32, @floatFromInt(col)) * scaled_w;
+                            const tile_y = container_tl_y + @as(f32, @floatFromInt(row)) * scaled_h;
 
                             const dest_rect = BackendType.Rectangle{
                                 .x = tile_x,
