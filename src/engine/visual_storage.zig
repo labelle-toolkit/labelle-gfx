@@ -58,25 +58,25 @@ pub fn VisualStorage(
             pos: Position,
             layer_buckets: []ZBuckets,
         ) void {
-            // If entity already exists, remove old bucket entry first
-            if (self.items.get(id)) |existing| {
-                const old_layer_idx = @intFromEnum(existing.visual.layer);
-                _ = layer_buckets[old_layer_idx].remove(
+            if (self.items.get(id)) |_| {
+                // Update existing entity.
+                // The `update` function correctly handles bucket changes with rollbacks.
+                self.update(id, visual, layer_buckets);
+                // `updatePosition` is a separate, safe operation.
+                self.updatePosition(id, pos);
+            } else {
+                // Create new entity.
+                self.items.put(id, .{ .visual = visual, .position = pos }) catch return;
+                const layer_idx = @intFromEnum(visual.layer);
+                layer_buckets[layer_idx].insert(
                     .{ .entity_id = id, .item_type = item_type },
-                    existing.visual.z_index,
-                );
+                    visual.z_index,
+                ) catch {
+                    // Bucket insert failed - remove map entry to maintain consistency
+                    _ = self.items.swapRemove(id);
+                    return;
+                };
             }
-
-            self.items.put(id, .{ .visual = visual, .position = pos }) catch return;
-            const layer_idx = @intFromEnum(visual.layer);
-            layer_buckets[layer_idx].insert(
-                .{ .entity_id = id, .item_type = item_type },
-                visual.z_index,
-            ) catch {
-                // Bucket insert failed - remove map entry to maintain consistency
-                _ = self.items.swapRemove(id);
-                return;
-            };
         }
 
         /// Update a visual entity (handles layer and z-index changes).
