@@ -104,7 +104,7 @@ pub fn main() !void {
     }, .{ .x = 250, .y = 300 });
 
     // Labels (using text visuals)
-    const labels = [_]struct { text: []const u8, x: f32, y: f32 }{
+    const labels = [_]struct { text: [:0]const u8, x: f32, y: f32 }{
         .{ .text = "STRETCH", .x = 90, .y = 210 },
         .{ .text = "COVER", .x = 300, .y = 210 },
         .{ .text = "CONTAIN", .x = 490, .y = 210 },
