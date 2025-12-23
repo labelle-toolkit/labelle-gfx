@@ -1065,15 +1065,12 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
 
         /// Resolves a Container specification to concrete dimensions (Rect).
         fn resolveContainer(visual: SpriteVisual, sprite_w: f32, sprite_h: f32) Container.Rect {
-            if (visual.container) |c| {
-                return switch (c) {
-                    .infer => resolveInferredContainer(visual, sprite_w, sprite_h),
-                    .viewport => getScreenRect(),
-                    .explicit => |rect| rect,
-                };
-            }
-            // No container specified: infer from layer space
-            return resolveInferredContainer(visual, sprite_w, sprite_h);
+            const c = visual.container orelse .infer;
+            return switch (c) {
+                .infer => resolveInferredContainer(visual, sprite_w, sprite_h),
+                .viewport => getScreenRect(),
+                .explicit => |rect| rect,
+            };
         }
 
         fn resolveInferredContainer(visual: SpriteVisual, sprite_w: f32, sprite_h: f32) Container.Rect {
