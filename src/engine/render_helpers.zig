@@ -404,15 +404,15 @@ pub fn RenderHelpers(comptime Backend: type) type {
             sprite_w: f32,
             sprite_h: f32,
         ) Container.Rect {
-            if (layer_space == .screen) {
-                return getScreenRect();
-            }
-            // World-space with no container: use sprite's natural size
-            return Container.Rect{
-                .x = 0,
-                .y = 0,
-                .width = sprite_w,
-                .height = sprite_h,
+            return switch (layer_space) {
+                .screen => getScreenRect(),
+                .world => .{
+                    // World-space with no container: use sprite's natural size
+                    .x = 0,
+                    .y = 0,
+                    .width = sprite_w,
+                    .height = sprite_h,
+                },
             };
         }
     };
