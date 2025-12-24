@@ -687,6 +687,8 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             Helpers.renderShape(entry.visual.shape, entry.position, entry.visual.color, entry.visual.rotation);
         }
 
+        /// Render a text visual by entity ID.
+        /// Text rendering logic is delegated to Helpers.renderText.
         fn renderText(self: *Self, id: EntityId) void {
             const entry = self.texts.getEntryConst(id) orelse return;
             Helpers.renderText(entry.visual.text, entry.position, entry.visual.size, entry.visual.color);
