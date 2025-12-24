@@ -208,7 +208,7 @@ pub fn getSortedLayers(comptime LayerEnum: type) [layerCount(LayerEnum)]LayerEnu
 ///
 /// // Get the mask for direct manipulation
 /// const mask = engine.getCameraLayerMask(0);
-/// mask.toggle(.particles);
+/// mask.toggle(.background);
 /// ```
 ///
 /// ## Implementation
