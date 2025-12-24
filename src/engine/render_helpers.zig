@@ -8,8 +8,10 @@ const log = @import("../log.zig").engine;
 
 const types = @import("types.zig");
 const visuals_mod = @import("visuals.zig");
+const layer_mod = @import("layer.zig");
 
 pub const Position = types.Position;
+pub const LayerSpace = layer_mod.LayerSpace;
 pub const Pivot = types.Pivot;
 pub const Color = types.Color;
 pub const SizeMode = types.SizeMode;
@@ -377,6 +379,40 @@ pub fn RenderHelpers(comptime Backend: type) type {
                 .y = 0,
                 .width = @floatFromInt(Backend.getScreenWidth()),
                 .height = @floatFromInt(Backend.getScreenHeight()),
+            };
+        }
+
+        /// Resolves a Container specification to concrete dimensions (Rect).
+        /// Takes the container, layer space, and sprite dimensions as parameters.
+        pub fn resolveContainer(
+            container: ?Container,
+            layer_space: LayerSpace,
+            sprite_w: f32,
+            sprite_h: f32,
+        ) Container.Rect {
+            const c = container orelse .infer;
+            return switch (c) {
+                .infer => resolveInferredContainer(layer_space, sprite_w, sprite_h),
+                .viewport => getScreenRect(),
+                .explicit => |rect| rect,
+            };
+        }
+
+        /// Resolves an inferred container based on layer space.
+        fn resolveInferredContainer(
+            layer_space: LayerSpace,
+            sprite_w: f32,
+            sprite_h: f32,
+        ) Container.Rect {
+            return switch (layer_space) {
+                .screen => getScreenRect(),
+                .world => .{
+                    // World-space with no container: use sprite's natural size
+                    .x = 0,
+                    .y = 0,
+                    .width = sprite_w,
+                    .height = sprite_h,
+                },
             };
         }
     };
