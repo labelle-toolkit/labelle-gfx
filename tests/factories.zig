@@ -26,41 +26,38 @@ pub const ShapeVisual = MockEngine.ShapeVisual;
 pub const TextVisual = MockEngine.TextVisual;
 
 // ============================================================================
-// Factory Definitions from .zon file
+// Factory Definitions from individual .zon files
 // ============================================================================
-
-/// Load all factory definitions from a single .zon file
-const factory_defs = @import("factory_data/factory_definitions.zon");
 
 // ============================================================================
 // Position Factory
 // ============================================================================
 
 /// Factory for creating Position with default values at origin
-pub const PositionFactory = Factory.defineFrom(Position, factory_defs.position);
+pub const PositionFactory = Factory.defineFrom(Position, @import("factories/position.zon"));
 
 // ============================================================================
 // Color Factory
 // ============================================================================
 
 /// Factory for creating Color with white as default
-pub const ColorFactory = Factory.defineFrom(Color, factory_defs.color);
+pub const ColorFactory = Factory.defineFrom(Color, @import("factories/color.zon"));
 
 // ============================================================================
 // Visual Factories (using .zon files from zspec v0.6.0)
 // ============================================================================
 
 /// Factory for creating SpriteVisual with sensible defaults
-pub const SpriteVisualFactory = Factory.defineFrom(SpriteVisual, factory_defs.sprite_visual);
+pub const SpriteVisualFactory = Factory.defineFrom(SpriteVisual, @import("factories/sprite_visual.zon"));
 
 /// Factory for creating circle ShapeVisual with sensible defaults
-pub const CircleShapeFactory = Factory.defineFrom(ShapeVisual, factory_defs.circle_shape);
+pub const CircleShapeFactory = Factory.defineFrom(ShapeVisual, @import("factories/circle_shape.zon"));
 
 /// Factory for creating rectangle ShapeVisual with sensible defaults
-pub const RectangleShapeFactory = Factory.defineFrom(ShapeVisual, factory_defs.rectangle_shape);
+pub const RectangleShapeFactory = Factory.defineFrom(ShapeVisual, @import("factories/rectangle_shape.zon"));
 
 /// Factory for creating TextVisual with sensible defaults
-pub const TextVisualFactory = Factory.defineFrom(TextVisual, factory_defs.text_visual);
+pub const TextVisualFactory = Factory.defineFrom(TextVisual, @import("factories/text_visual.zon"));
 
 // ============================================================================
 // Helper Functions

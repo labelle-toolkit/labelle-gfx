@@ -94,9 +94,9 @@ pub fn RenderHelpers(comptime Backend: type) type {
         /// For repeat mode, if `screen_viewport` is provided, tiles outside the viewport
         /// are culled. Pass null for world-space layers where camera transforms apply.
         pub fn renderSizedSprite(
-            texture: Backend.Texture2D,
-            sprite_x: i32,
-            sprite_y: i32,
+            texture: Backend.Texture,
+            sprite_x: anytype,
+            sprite_y: anytype,
             src_rect: Backend.Rectangle,
             sprite_w: f32,
             sprite_h: f32,
@@ -287,7 +287,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
         /// Render a basic sprite (no sizing mode, just scale).
         /// Flipping is handled by negating src_rect dimensions.
         pub fn renderBasicSprite(
-            texture: Backend.Texture2D,
+            texture: Backend.Texture,
             src_rect: Backend.Rectangle,
             sprite_w: f32,
             sprite_h: f32,
@@ -374,7 +374,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
 
         /// Create a source rectangle from sprite coordinates and dimensions.
         /// Helper for sprite rendering that produces consistent src_rect format.
-        pub fn createSrcRect(sprite_x: i32, sprite_y: i32, width: u32, height: u32) Backend.Rectangle {
+        pub fn createSrcRect(sprite_x: anytype, sprite_y: anytype, width: anytype, height: anytype) Backend.Rectangle {
             return Backend.Rectangle{
                 .x = @floatFromInt(sprite_x),
                 .y = @floatFromInt(sprite_y),

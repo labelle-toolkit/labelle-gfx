@@ -672,6 +672,44 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                         else
                             null;
 
+                        // For repeat mode, use getNormalized to correctly interpret the Pivot enum
+                        // (pivot_x/pivot_y fields default to 0.5, but .top_left should use 0,0)
+                        // Other modes use pivot_x/pivot_y directly for letterbox positioning
+                        const pivot_x, const pivot_y = if (visual.size_mode == .repeat) blk: {
+                            const normalized = visual.pivot.getNormalized(visual.pivot_x, visual.pivot_y);
+                            break :blk .{ normalized.x, normalized.y };
+                        } else .{ visual.pivot_x, visual.pivot_y };
+
+                        // For repeat mode, enable scissor clipping to prevent tiles from overflowing container
+                        // Note: Scissor operates in screen coordinates, so transform world coords if needed
+                        if (visual.size_mode == .repeat) {
+                            const container_tl_x = pos.x + cont_rect.x - cont_rect.width * pivot_x;
+                            const container_tl_y = pos.y + cont_rect.y - cont_rect.height * pivot_y;
+
+                            const scissor_x: i32, const scissor_y: i32, const scissor_w: i32, const scissor_h: i32 = blk: {
+                                if (layer_cfg.space == .world) {
+                                    // Transform world coordinates to screen coordinates
+                                    const screen_tl = self.camera.worldToScreen(container_tl_x, container_tl_y);
+                                    const screen_br = self.camera.worldToScreen(container_tl_x + cont_rect.width, container_tl_y + cont_rect.height);
+                                    break :blk .{
+                                        @intFromFloat(screen_tl.x),
+                                        @intFromFloat(screen_tl.y),
+                                        @intFromFloat(screen_br.x - screen_tl.x),
+                                        @intFromFloat(screen_br.y - screen_tl.y),
+                                    };
+                                } else {
+                                    // Screen-space: coordinates are already in screen space
+                                    break :blk .{
+                                        @intFromFloat(container_tl_x),
+                                        @intFromFloat(container_tl_y),
+                                        @intFromFloat(cont_rect.width),
+                                        @intFromFloat(cont_rect.height),
+                                    };
+                                }
+                            };
+                            BackendType.beginScissorMode(scissor_x, scissor_y, scissor_w, scissor_h);
+                        }
+
                         Helpers.renderSizedSprite(
                             result.atlas.texture,
                             result.sprite.x,
@@ -683,8 +721,8 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                             visual.size_mode,
                             cont_rect,
                             visual.pivot,
-                            visual.pivot_x,
-                            visual.pivot_y,
+                            pivot_x,
+                            pivot_y,
                             visual.rotation,
                             visual.flip_x,
                             visual.flip_y,
@@ -692,6 +730,10 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                             tint,
                             screen_vp,
                         );
+
+                        if (visual.size_mode == .repeat) {
+                            BackendType.endScissorMode();
+                        }
                     }
                 }
             }
