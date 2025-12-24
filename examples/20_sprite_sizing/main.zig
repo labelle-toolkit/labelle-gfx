@@ -1,7 +1,10 @@
 //! Example 20: Sprite Sizing Modes
 //!
 //! Demonstrates container-based sprite sizing similar to CSS background-size.
-//! Shows stretch, cover, contain, scale_down, and repeat modes.
+//! Shows stretch, cover, contain, scale_down, repeat, and camera_viewport modes.
+//!
+//! The camera_viewport container type makes sprites fill the camera's visible
+//! world-space area, so backgrounds follow the camera as it moves.
 
 const std = @import("std");
 const gfx = @import("labelle");
@@ -10,6 +13,10 @@ const EntityId = gfx.EntityId;
 const SizeMode = gfx.SizeMode;
 const Container = gfx.Container;
 const Color = gfx.retained_engine.Color;
+
+// Camera movement constants
+const CAMERA_SWAY_SPEED: f32 = 0.02;
+const CAMERA_SWAY_AMPLITUDE: f32 = 30;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -28,6 +35,19 @@ pub fn main() !void {
     // Container dimensions
     const container_w: f32 = 150;
     const container_h: f32 = 100;
+
+    // Background: camera_viewport - fills camera's visible world-space area
+    // This sprite follows the camera as it moves, ideal for world-space backgrounds
+    engine.createSprite(EntityId.from(10), .{
+        .sprite_name = "idle_0001",
+        .size_mode = .repeat,
+        .container = .camera_viewport, // Uses camera's world-space bounds
+        .pivot = .top_left,
+        .scale = 3.0,
+        .tint = .{ .r = 40, .g = 40, .b = 60, .a = 255 }, // Subtle tint for background
+        .z_index = 1, // Behind everything else
+        .layer = .world,
+    }, .{ .x = 0, .y = 0 });
 
     // Row 1: stretch, cover, contain (y = 150)
     // Row 2: scale_down, repeat (y = 350)
@@ -110,6 +130,7 @@ pub fn main() !void {
     }
 
     std.debug.print("Sprite Sizing Modes Demo - Created {} sprites\n", .{engine.spriteCount()});
+    std.debug.print("Note: Camera sways to demonstrate camera_viewport background\n", .{});
 
     // Center camera on content
     engine.setCameraPosition(400, 300);
@@ -117,6 +138,11 @@ pub fn main() !void {
     var frame_count: u32 = 0;
     while (engine.isRunning()) {
         frame_count += 1;
+
+        // Gentle camera sway to demonstrate camera_viewport
+        // The tiled background follows the camera due to .camera_viewport container
+        const camera_x = 400 + @sin(@as(f32, @floatFromInt(frame_count)) * CAMERA_SWAY_SPEED) * CAMERA_SWAY_AMPLITUDE;
+        engine.setCameraPosition(camera_x, 300);
 
         engine.beginFrame();
         engine.render();

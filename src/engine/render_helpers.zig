@@ -407,7 +407,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
             return switch (c) {
                 .infer => resolveInferredContainer(layer_space, sprite_w, sprite_h),
                 .viewport => getScreenRect(),
-                .camera_viewport => camera_viewport_rect orelse getScreenRect(),
+                .camera_viewport => camera_viewport_rect orelse resolveInferredContainer(layer_space, sprite_w, sprite_h),
                 .explicit => |rect| rect,
             };
         }

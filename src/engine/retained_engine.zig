@@ -474,7 +474,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     if (!self.isVisible(item)) continue;
 
                     switch (item.item_type) {
-                        .sprite => self.renderSprite(item.entity_id, cam_viewport_rect),
+                        .sprite => self.renderSprite(item.entity_id, cam_viewport_rect, &self.camera),
                         .shape => self.renderShape(item.entity_id),
                         .text => self.renderText(item.entity_id),
                     }
@@ -525,7 +525,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                         switch (item.item_type) {
                             .sprite => {
                                 if (cfg.space == .screen or self.shouldRenderSpriteInViewport(item.entity_id, viewport)) {
-                                    self.renderSprite(item.entity_id, cam_viewport_rect);
+                                    self.renderSprite(item.entity_id, cam_viewport_rect, cam);
                                 }
                             },
                             .shape => {
@@ -626,7 +626,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             BackendType.endMode2D();
         }
 
-        fn renderSprite(self: *Self, id: EntityId, cam_viewport: ?Container.Rect) void {
+        fn renderSprite(self: *Self, id: EntityId, cam_viewport: ?Container.Rect, cam: *const Camera) void {
             const entry = self.sprites.getEntryConst(id) orelse return;
             const visual = entry.visual;
             const pos = entry.position;
@@ -689,8 +689,9 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                             const scissor_x: i32, const scissor_y: i32, const scissor_w: i32, const scissor_h: i32 = blk: {
                                 if (layer_cfg.space == .world) {
                                     // Transform world coordinates to screen coordinates
-                                    const screen_tl = self.camera.worldToScreen(container_tl_x, container_tl_y);
-                                    const screen_br = self.camera.worldToScreen(container_tl_x + cont_rect.width, container_tl_y + cont_rect.height);
+                                    // Use the passed camera (not self.camera) for correct multi-camera support
+                                    const screen_tl = cam.worldToScreen(container_tl_x, container_tl_y);
+                                    const screen_br = cam.worldToScreen(container_tl_x + cont_rect.width, container_tl_y + cont_rect.height);
                                     break :blk .{
                                         @intFromFloat(screen_tl.x),
                                         @intFromFloat(screen_tl.y),

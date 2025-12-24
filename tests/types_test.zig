@@ -192,3 +192,69 @@ test "camera_viewport changes with zoom out" {
     try testing.expectApproxEqAbs(@as(f32, 1600), viewport.width, 0.001); // 800*2
     try testing.expectApproxEqAbs(@as(f32, 1200), viewport.height, 0.001); // 600*2
 }
+
+// ============================================================================
+// Container Resolution Tests (Helpers.resolveContainer)
+// ============================================================================
+
+const Helpers = gfx.render_helpers.RenderHelpers(gfx.Backend(MockBackend));
+const LayerSpace = gfx.layer.LayerSpace;
+
+test "resolveContainer with camera_viewport uses provided rect" {
+    const cam_rect = Container.Rect{ .x = 100, .y = 50, .width = 400, .height = 300 };
+    const result = Helpers.resolveContainer(.camera_viewport, .world, 32, 32, cam_rect);
+
+    try testing.expectApproxEqAbs(@as(f32, 100), result.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 50), result.y, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 400), result.width, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 300), result.height, 0.001);
+}
+
+test "resolveContainer with camera_viewport fallback uses inferred for world-space" {
+    // When camera_viewport_rect is null in world-space, should fall back to sprite size
+    const result = Helpers.resolveContainer(.camera_viewport, .world, 64, 48, null);
+
+    // World-space inferred container uses sprite's natural size
+    try testing.expectApproxEqAbs(@as(f32, 0), result.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0), result.y, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 64), result.width, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 48), result.height, 0.001);
+}
+
+test "resolveContainer with camera_viewport fallback uses screen for screen-space" {
+    // When camera_viewport_rect is null in screen-space, should fall back to screen size
+    const result = Helpers.resolveContainer(.camera_viewport, .screen, 64, 48, null);
+
+    // Screen-space inferred container uses screen dimensions (MockBackend returns 800x600)
+    try testing.expectApproxEqAbs(@as(f32, 0), result.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0), result.y, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 800), result.width, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 600), result.height, 0.001);
+}
+
+test "resolveContainer with infer uses sprite size for world-space" {
+    const result = Helpers.resolveContainer(.infer, .world, 100, 80, null);
+
+    try testing.expectApproxEqAbs(@as(f32, 0), result.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0), result.y, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 100), result.width, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 80), result.height, 0.001);
+}
+
+test "resolveContainer with infer uses screen for screen-space" {
+    const result = Helpers.resolveContainer(.infer, .screen, 100, 80, null);
+
+    try testing.expectApproxEqAbs(@as(f32, 0), result.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0), result.y, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 800), result.width, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 600), result.height, 0.001);
+}
+
+test "resolveContainer with viewport always uses screen dimensions" {
+    const result = Helpers.resolveContainer(.viewport, .world, 100, 80, null);
+
+    try testing.expectApproxEqAbs(@as(f32, 0), result.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0), result.y, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 800), result.width, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 600), result.height, 0.001);
+}

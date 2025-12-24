@@ -184,6 +184,7 @@ pub const z_index_buckets = @import("engine/z_index_buckets.zig");
 pub const scene = @import("engine/scene.zig");
 pub const animation_def = @import("animation_def.zig");
 pub const layer = @import("engine/layer.zig");
+pub const render_helpers = @import("engine/render_helpers.zig");
 
 // Re-export RetainedEngine types at top level
 pub const RetainedEngine = retained_engine.RetainedEngine;
