@@ -87,6 +87,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
 
         /// Render a sized sprite with the given size mode.
         /// This handles stretch, cover, contain, scale_down, and repeat modes.
+        /// Flipping is handled internally by negating source rect dimensions.
         ///
         /// For repeat mode, if `screen_viewport` is provided, tiles outside the viewport
         /// are culled. Pass null for world-space layers where camera transforms apply.
@@ -120,6 +121,14 @@ pub fn RenderHelpers(comptime Backend: type) type {
                 return;
             }
 
+            // Apply flipping by negating source rect dimensions
+            const flipped_src = Backend.Rectangle{
+                .x = src_rect.x,
+                .y = src_rect.y,
+                .width = if (flip_x) -src_rect.width else src_rect.width,
+                .height = if (flip_y) -src_rect.height else src_rect.height,
+            };
+
             switch (size_mode) {
                 .none => unreachable,
                 .stretch => {
@@ -131,7 +140,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
                     };
                     const pivot_origin = pivot.getOrigin(cont_w, cont_h, pivot_x, pivot_y);
                     const origin = Backend.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
-                    Backend.drawTexturePro(texture, src_rect, dest_rect, origin, rotation, tint);
+                    Backend.drawTexturePro(texture, flipped_src, dest_rect, origin, rotation, tint);
                 },
                 .cover => {
                     const crop = CoverCrop.calculate(
@@ -191,7 +200,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
                     };
                     const pivot_origin = pivot.getOrigin(dest_w, dest_h, pivot_x, pivot_y);
                     const origin = Backend.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
-                    Backend.drawTexturePro(texture, src_rect, dest_rect, origin, rotation, tint);
+                    Backend.drawTexturePro(texture, flipped_src, dest_rect, origin, rotation, tint);
                 },
                 .repeat => {
                     const scaled_w = sprite_w * scale;
@@ -266,7 +275,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
                                 .height = scaled_h,
                             };
                             const origin = Backend.Vector2{ .x = 0, .y = 0 };
-                            Backend.drawTexturePro(texture, src_rect, dest_rect, origin, rotation, tint);
+                            Backend.drawTexturePro(texture, flipped_src, dest_rect, origin, rotation, tint);
                         }
                     }
                 },
@@ -274,6 +283,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
         }
 
         /// Render a basic sprite (no sizing mode, just scale).
+        /// Flipping is handled by negating src_rect dimensions.
         pub fn renderBasicSprite(
             texture: Backend.Texture2D,
             src_rect: Backend.Rectangle,
@@ -285,10 +295,20 @@ pub fn RenderHelpers(comptime Backend: type) type {
             pivot_x: f32,
             pivot_y: f32,
             rotation: f32,
+            flip_x: bool,
+            flip_y: bool,
             tint: Backend.Color,
         ) void {
             const scaled_width = sprite_w * scale;
             const scaled_height = sprite_h * scale;
+
+            // Apply flipping by negating source rect dimensions
+            const flipped_src = Backend.Rectangle{
+                .x = src_rect.x,
+                .y = src_rect.y,
+                .width = if (flip_x) -src_rect.width else src_rect.width,
+                .height = if (flip_y) -src_rect.height else src_rect.height,
+            };
 
             const dest_rect = Backend.Rectangle{
                 .x = pos.x,
@@ -303,7 +323,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
                 .y = pivot_origin.y,
             };
 
-            Backend.drawTexturePro(texture, src_rect, dest_rect, origin, rotation, tint);
+            Backend.drawTexturePro(texture, flipped_src, dest_rect, origin, rotation, tint);
         }
 
         /// Calculate shape bounds for viewport culling.

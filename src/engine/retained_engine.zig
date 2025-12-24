@@ -624,11 +624,12 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     const sprite_w: f32 = @floatFromInt(sprite.width);
                     const sprite_h: f32 = @floatFromInt(sprite.height);
 
+                    // Base source rectangle (un-flipped - flipping handled by render helpers)
                     const src_rect = BackendType.Rectangle{
                         .x = @floatFromInt(sprite.x),
                         .y = @floatFromInt(sprite.y),
-                        .width = if (visual.flip_x) -sprite_w else sprite_w,
-                        .height = if (visual.flip_y) -sprite_h else sprite_h,
+                        .width = sprite_w,
+                        .height = sprite_h,
                     };
 
                     // Handle sizing modes
@@ -645,6 +646,8 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                             visual.pivot_x,
                             visual.pivot_y,
                             visual.rotation,
+                            visual.flip_x,
+                            visual.flip_y,
                             tint,
                         );
                     } else {
