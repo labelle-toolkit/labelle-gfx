@@ -17,6 +17,7 @@ pub const z_index_buckets_test = @import("z_index_buckets_test.zig");
 pub const layer_test = @import("layer_test.zig");
 pub const types_test = @import("types_test.zig");
 pub const sizing_modes_test = @import("sizing_modes_test.zig");
+pub const retained_engine_v2_test = @import("retained_engine_v2_test.zig");
 
 // Entry point for zspec
 comptime {

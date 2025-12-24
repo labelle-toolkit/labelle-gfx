@@ -15,6 +15,7 @@ pub const single_sprite_test = @import("single_sprite_test.zig");
 pub const shape_test = @import("shape_test.zig");
 pub const z_index_buckets_test = @import("z_index_buckets_test.zig");
 pub const layer_test = @import("layer_test.zig");
+pub const retained_engine_v2_test = @import("retained_engine_v2_test.zig");
 
 test {
     // Run all tests from imported modules

@@ -176,9 +176,15 @@ pub const Flash = effects.Flash;
 pub const FlashWith = effects.FlashWith;
 
 // Self-contained rendering engine (recommended for new projects)
-pub const rendering_engine = @import("engine/rendering_engine.zig");
 pub const visual_engine = @import("engine/visual_engine.zig");
-pub const retained_engine = @import("engine/retained_engine.zig");
+pub const retained_engine = @import("engine/retained_engine_v2.zig");
+pub const subsystems = struct {
+    pub const visual = @import("engine/subsystems/visual_subsystem.zig");
+    pub const camera = @import("engine/subsystems/camera_subsystem.zig");
+    pub const resource = @import("engine/subsystems/resource_subsystem.zig");
+    pub const render = @import("engine/subsystems/render_subsystem.zig");
+    pub const window = @import("engine/subsystems/window_subsystem.zig");
+};
 pub const sprite_storage = @import("engine/sprite_storage.zig");
 pub const shape_storage = @import("engine/shape_storage.zig");
 pub const z_index_buckets = @import("engine/z_index_buckets.zig");
@@ -187,9 +193,11 @@ pub const animation_def = @import("animation_def.zig");
 pub const layer = @import("engine/layer.zig");
 pub const render_helpers = @import("engine/render_helpers.zig");
 
-// Re-export RetainedEngine types at top level
-pub const RetainedEngine = retained_engine.RetainedEngine;
-pub const RetainedEngineWith = retained_engine.RetainedEngineWith;
+// Re-export RetainedEngine types at top level (V2 is now the sole implementation)
+pub const RetainedEngine = retained_engine.RetainedEngineV2;
+pub const RetainedEngineWith = retained_engine.RetainedEngineWithV2;
+pub const RetainedEngineV2 = retained_engine.RetainedEngineV2;
+pub const RetainedEngineWithV2 = retained_engine.RetainedEngineWithV2;
 pub const EntityId = retained_engine.EntityId;
 pub const TextureId = retained_engine.TextureId;
 pub const FontId = retained_engine.FontId;
@@ -289,11 +297,17 @@ pub fn withBackend(comptime Impl: type) type {
 
         // RetainedEngine with custom backend - use with custom LayerEnum
         pub fn RetainedEngineT(comptime LayerEnum: type) type {
-            return retained_engine.RetainedEngineWith(B, LayerEnum);
+            return retained_engine.RetainedEngineWithV2(B, LayerEnum);
         }
 
         // Default RetainedEngine with DefaultLayers
-        pub const RetainedEngine = retained_engine.RetainedEngineWith(B, layer.DefaultLayers);
+        pub const RetainedEngine = retained_engine.RetainedEngineWithV2(B, layer.DefaultLayers);
+
+        // V2 aliases (same as above, for compatibility)
+        pub fn RetainedEngineV2T(comptime LayerEnum: type) type {
+            return retained_engine.RetainedEngineWithV2(B, LayerEnum);
+        }
+        pub const RetainedEngineV2 = retained_engine.RetainedEngineWithV2(B, layer.DefaultLayers);
 
         // Layer types
         pub const LayerConfig = layer.LayerConfig;
