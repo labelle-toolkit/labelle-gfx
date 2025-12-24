@@ -125,7 +125,17 @@ pub fn VisualSubsystem(comptime LayerEnum: type) type {
         }
 
         // ==================== Position Management ====================
+        //
+        // Note: These functions intentionally use explicit triple-storage lookups
+        // rather than a generic helper. This design choice prioritizes:
+        // - Explicit, debuggable code paths
+        // - No runtime abstraction overhead
+        // - Bounded duplication (exactly 3 storage types, unlikely to grow)
+        //
+        // The early-return pattern ensures only one lookup succeeds per call.
 
+        /// Update position for an entity in any storage type (sprite, shape, or text).
+        /// Exits early on the first match found.
         pub fn updatePosition(self: *Self, id: EntityId, pos: Position) void {
             if (self.sprites.getEntry(id)) |entry| {
                 entry.position = pos;
@@ -140,6 +150,8 @@ pub fn VisualSubsystem(comptime LayerEnum: type) type {
             }
         }
 
+        /// Get position for an entity from any storage type.
+        /// Checks sprites, then shapes, then texts. Returns first match or null.
         pub fn getPosition(self: *const Self, id: EntityId) ?Position {
             if (self.sprites.getPosition(id)) |pos| return pos;
             if (self.shapes.getPosition(id)) |pos| return pos;
