@@ -24,13 +24,13 @@ pub fn VisualStorage(
     comptime Visual: type,
     comptime item_type: RenderItemType,
 ) type {
-    const Entry = struct {
-        visual: Visual,
-        position: Position,
-    };
-
     return struct {
         const Self = @This();
+
+        pub const Entry = struct {
+            visual: Visual,
+            position: Position,
+        };
 
         items: std.AutoArrayHashMap(EntityId, Entry),
         allocator: std.mem.Allocator,
