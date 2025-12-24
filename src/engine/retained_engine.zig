@@ -648,9 +648,37 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                             tint,
                         );
                     } else {
-                        // Sized mode: resolve container
+                        // Sized mode: resolve container and render
                         const cont_rect = resolveContainer(visual, sprite_w, sprite_h);
-                        renderSizedSprite(result, visual, pos, src_rect, sprite_w, sprite_h, cont_rect, tint);
+                        const layer_cfg = visual.layer.config();
+                        const screen_vp: ?Helpers.ScreenViewport = if (layer_cfg.space == .screen)
+                            .{
+                                .width = @floatFromInt(BackendType.getScreenWidth()),
+                                .height = @floatFromInt(BackendType.getScreenHeight()),
+                            }
+                        else
+                            null;
+
+                        Helpers.renderSizedSprite(
+                            result.atlas.texture,
+                            result.sprite.x,
+                            result.sprite.y,
+                            src_rect,
+                            sprite_w,
+                            sprite_h,
+                            pos,
+                            visual.size_mode,
+                            cont_rect,
+                            visual.pivot,
+                            visual.pivot_x,
+                            visual.pivot_y,
+                            visual.rotation,
+                            visual.flip_x,
+                            visual.flip_y,
+                            visual.scale,
+                            tint,
+                            screen_vp,
+                        );
                     }
                 }
             }
@@ -677,213 +705,12 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                 return getScreenRect();
             }
             // World-space with no container: use sprite's natural size
-            // (sized modes ignore visual.scale, so we don't apply it here)
             return Container.Rect{
                 .x = 0,
                 .y = 0,
                 .width = sprite_w,
                 .height = sprite_h,
             };
-        }
-
-        fn renderSizedSprite(
-            result: anytype,
-            visual: SpriteVisual,
-            pos: Position,
-            src_rect: BackendType.Rectangle,
-            sprite_w: f32,
-            sprite_h: f32,
-            cont_rect: Container.Rect,
-            tint: BackendType.Color,
-        ) void {
-            const cont_w = cont_rect.width;
-            const cont_h = cont_rect.height;
-            // Base position includes container offset (for UI panels not at origin)
-            const base_x = pos.x + cont_rect.x;
-            const base_y = pos.y + cont_rect.y;
-
-            // Guard against division by zero from invalid sprite dimensions
-            if (sprite_w <= 0 or sprite_h <= 0) {
-                log.warn("Skipping sized sprite render: invalid sprite dimensions ({d}x{d})", .{ sprite_w, sprite_h });
-                return;
-            }
-
-            switch (visual.size_mode) {
-                .none => unreachable, // Handled above
-                // Note: stretch, cover, contain, scale_down modes ignore visual.scale field
-                // (scale is determined by container/sprite ratio). Only repeat uses visual.scale.
-                .stretch => {
-                    // Fill container exactly (may distort)
-                    const dest_rect = BackendType.Rectangle{
-                        .x = base_x,
-                        .y = base_y,
-                        .width = cont_w,
-                        .height = cont_h,
-                    };
-                    const pivot_origin = visual.pivot.getOrigin(cont_w, cont_h, visual.pivot_x, visual.pivot_y);
-                    const origin = BackendType.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
-                    BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
-                },
-                .cover => {
-                    // Scale to cover container using UV cropping (samples only visible portion)
-                    const crop = types.CoverCrop.calculate(
-                        sprite_w,
-                        sprite_h,
-                        cont_w,
-                        cont_h,
-                        visual.pivot_x,
-                        visual.pivot_y,
-                    ) orelse {
-                        log.warn("Skipping cover render: non-positive scale", .{});
-                        return;
-                    };
-
-                    // Compute cropped source rect (UV cropping)
-                    const src_x: f32 = @floatFromInt(result.sprite.x);
-                    const src_y: f32 = @floatFromInt(result.sprite.y);
-                    const cropped_src = BackendType.Rectangle{
-                        .x = src_x + crop.crop_x,
-                        .y = src_y + crop.crop_y,
-                        .width = if (visual.flip_x) -crop.visible_w else crop.visible_w,
-                        .height = if (visual.flip_y) -crop.visible_h else crop.visible_h,
-                    };
-
-                    // Draw cropped portion at container size
-                    const dest_rect = BackendType.Rectangle{
-                        .x = base_x,
-                        .y = base_y,
-                        .width = cont_w,
-                        .height = cont_h,
-                    };
-
-                    const pivot_origin = visual.pivot.getOrigin(cont_w, cont_h, visual.pivot_x, visual.pivot_y);
-                    const origin = BackendType.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
-                    BackendType.drawTexturePro(result.atlas.texture, cropped_src, dest_rect, origin, visual.rotation, tint);
-                },
-                .contain, .scale_down => {
-                    // Scale to fit inside container (letterboxed)
-                    const scale_x = cont_w / sprite_w;
-                    const scale_y = cont_h / sprite_h;
-                    var scale = @min(scale_x, scale_y);
-
-                    // scale_down: never scale up
-                    if (visual.size_mode == .scale_down) {
-                        scale = @min(scale, 1.0);
-                    }
-
-                    const dest_w = sprite_w * scale;
-                    const dest_h = sprite_h * scale;
-
-                    // Pivot determines where sprite sits in letterboxed area
-                    // pivot_x=0.5 (center) gives offset=0, centering in letterbox
-                    const padding_x = cont_w - dest_w;
-                    const padding_y = cont_h - dest_h;
-                    const offset_x = padding_x * (visual.pivot_x - 0.5);
-                    const offset_y = padding_y * (visual.pivot_y - 0.5);
-
-                    const dest_rect = BackendType.Rectangle{
-                        .x = base_x + offset_x,
-                        .y = base_y + offset_y,
-                        .width = dest_w,
-                        .height = dest_h,
-                    };
-                    const pivot_origin = visual.pivot.getOrigin(dest_w, dest_h, visual.pivot_x, visual.pivot_y);
-                    const origin = BackendType.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
-                    BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
-                },
-                .repeat => {
-                    // Tile sprite to fill container with viewport culling
-                    // Note: rotation applies per-tile, not to the tiled grid as a whole
-                    const scaled_w = sprite_w * visual.scale;
-                    const scaled_h = sprite_h * visual.scale;
-
-                    if (scaled_w <= 0 or scaled_h <= 0) {
-                        log.warn("Skipping repeat render: non-positive tile dimensions ({d}x{d})", .{ scaled_w, scaled_h });
-                        return;
-                    }
-
-                    // Calculate container's top-left based on pivot
-                    // This makes repeat mode consistent with other sizing modes
-                    const container_tl_x = base_x - cont_w * visual.pivot_x;
-                    const container_tl_y = base_y - cont_h * visual.pivot_y;
-
-                    // Calculate total tile grid bounds with overflow protection
-                    const cols_float = @ceil(cont_w / scaled_w);
-                    const rows_float = @ceil(cont_h / scaled_h);
-                    const max_u32: f32 = @floatFromInt(std.math.maxInt(u32));
-                    if (cols_float > max_u32 or rows_float > max_u32) {
-                        log.warn("Repeat tile count overflow: {d}x{d} cols/rows exceed u32 max", .{ cols_float, rows_float });
-                        return;
-                    }
-                    const total_cols: u32 = @intFromFloat(cols_float);
-                    const total_rows: u32 = @intFromFloat(rows_float);
-
-                    // Limit tile count to prevent performance issues
-                    // Use u64 to prevent overflow in multiplication
-                    const max_tiles: u64 = 10000;
-                    const tile_count = @as(u64, total_cols) * @as(u64, total_rows);
-                    if (tile_count > max_tiles) {
-                        log.warn("Repeat tile count ({d}x{d}={d}) exceeds limit ({d}), skipping", .{ total_cols, total_rows, tile_count, max_tiles });
-                        return;
-                    }
-
-                    // Calculate visible tile range based on layer space
-                    const layer_cfg = visual.layer.config();
-                    var start_col: u32 = 0;
-                    var start_row: u32 = 0;
-                    var end_col: u32 = total_cols;
-                    var end_row: u32 = total_rows;
-
-                    if (layer_cfg.space == .screen) {
-                        // Screen-space layers: apply viewport culling using screen coordinates
-                        const vp_w: f32 = @floatFromInt(BackendType.getScreenWidth());
-                        const vp_h: f32 = @floatFromInt(BackendType.getScreenHeight());
-
-                        // Start tile: first tile that could be visible
-                        if (0 > container_tl_x) {
-                            start_col = @min(total_cols, @as(u32, @intFromFloat(@floor(-container_tl_x / scaled_w))));
-                        }
-                        if (0 > container_tl_y) {
-                            start_row = @min(total_rows, @as(u32, @intFromFloat(@floor(-container_tl_y / scaled_h))));
-                        }
-
-                        // End tile: last tile that could be visible
-                        const end_col_dist = vp_w - container_tl_x;
-                        const end_row_dist = vp_h - container_tl_y;
-                        if (end_col_dist > 0) {
-                            end_col = @min(total_cols, @as(u32, @intFromFloat(@ceil(end_col_dist / scaled_w))));
-                        } else {
-                            end_col = 0;
-                        }
-                        if (end_row_dist > 0) {
-                            end_row = @min(total_rows, @as(u32, @intFromFloat(@ceil(end_row_dist / scaled_h))));
-                        } else {
-                            end_row = 0;
-                        }
-                    }
-                    // For world-space layers, we draw all tiles since screen-space culling
-                    // would be incorrect (camera transforms are not accounted for here)
-
-                    // Only draw visible tiles
-                    var row: u32 = start_row;
-                    while (row < end_row) : (row += 1) {
-                        var col: u32 = start_col;
-                        while (col < end_col) : (col += 1) {
-                            const tile_x = container_tl_x + @as(f32, @floatFromInt(col)) * scaled_w;
-                            const tile_y = container_tl_y + @as(f32, @floatFromInt(row)) * scaled_h;
-
-                            const dest_rect = BackendType.Rectangle{
-                                .x = tile_x,
-                                .y = tile_y,
-                                .width = scaled_w,
-                                .height = scaled_h,
-                            };
-                            const origin = BackendType.Vector2{ .x = 0, .y = 0 };
-                            BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
-                        }
-                    }
-                },
-            }
         }
 
         fn renderShape(self: *Self, id: EntityId) void {
