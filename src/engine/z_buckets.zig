@@ -1,7 +1,7 @@
 //! Z-Index Bucket Storage
 //!
 //! Provides O(1) insertion and natural depth ordering for render items
-//! using buckets (one per z-index value).
+//! using Z_INDEX_BUCKET_COUNT buckets (one per z-index value).
 
 const std = @import("std");
 const types = @import("types.zig");
@@ -12,8 +12,8 @@ const EntityId = types.EntityId;
 // Configuration
 // ============================================
 
-/// Number of z-index buckets. Using 256 provides one bucket per possible u8 z-index value.
-pub const Z_INDEX_BUCKET_COUNT: u16 = 256;
+/// Number of z-index buckets. This provides one bucket per possible u8 z-index value.
+pub const Z_INDEX_BUCKET_COUNT: u16 = std.math.maxInt(u8) + 1;
 
 // ============================================
 // Render Item for Z-Index Buckets
