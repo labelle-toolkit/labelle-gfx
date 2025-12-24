@@ -26,80 +26,41 @@ pub const ShapeVisual = MockEngine.ShapeVisual;
 pub const TextVisual = MockEngine.TextVisual;
 
 // ============================================================================
+// Factory Definitions from .zon file
+// ============================================================================
+
+/// Load all factory definitions from a single .zon file
+const factory_defs = @import("factory_data/factory_definitions.zon");
+
+// ============================================================================
 // Position Factory
 // ============================================================================
 
 /// Factory for creating Position with default values at origin
-pub const PositionFactory = Factory.define(Position, .{
-    .x = 0,
-    .y = 0,
-});
+pub const PositionFactory = Factory.defineFrom(Position, factory_defs.position);
 
 // ============================================================================
 // Color Factory
 // ============================================================================
 
 /// Factory for creating Color with white as default
-pub const ColorFactory = Factory.define(Color, .{
-    .r = 255,
-    .g = 255,
-    .b = 255,
-    .a = 255,
-});
+pub const ColorFactory = Factory.defineFrom(Color, factory_defs.color);
 
 // ============================================================================
-// Visual Factories (with union support from zspec v0.4.0)
+// Visual Factories (using .zon files from zspec v0.6.0)
 // ============================================================================
 
 /// Factory for creating SpriteVisual with sensible defaults
-pub const SpriteVisualFactory = Factory.define(SpriteVisual, .{
-    .texture = .invalid,
-    .sprite_name = "test_sprite",
-    .scale = 1.0,
-    .rotation = 0,
-    .tint = Color.white,
-    .z_index = 128,
-    .flip_x = false,
-    .flip_y = false,
-    .visible = true,
-    .pivot = .center,
-    .pivot_x = 0.5,
-    .pivot_y = 0.5,
-    .layer = .world,
-    .size_mode = .none,
-    .container = null,
-});
+pub const SpriteVisualFactory = Factory.defineFrom(SpriteVisual, factory_defs.sprite_visual);
 
 /// Factory for creating circle ShapeVisual with sensible defaults
-pub const CircleShapeFactory = Factory.define(ShapeVisual, .{
-    .shape = .{ .circle = .{ .radius = 50 } },
-    .color = Color.white,
-    .z_index = 128,
-    .rotation = 0,
-    .visible = true,
-    .layer = .world,
-});
+pub const CircleShapeFactory = Factory.defineFrom(ShapeVisual, factory_defs.circle_shape);
 
 /// Factory for creating rectangle ShapeVisual with sensible defaults
-pub const RectangleShapeFactory = Factory.define(ShapeVisual, .{
-    .shape = .{ .rectangle = .{ .width = 100, .height = 50 } },
-    .color = Color.white,
-    .z_index = 128,
-    .rotation = 0,
-    .visible = true,
-    .layer = .world,
-});
+pub const RectangleShapeFactory = Factory.defineFrom(ShapeVisual, factory_defs.rectangle_shape);
 
 /// Factory for creating TextVisual with sensible defaults
-pub const TextVisualFactory = Factory.define(TextVisual, .{
-    .font = .invalid,
-    .text = "Test",
-    .size = 16,
-    .color = Color.white,
-    .z_index = 128,
-    .visible = true,
-    .layer = .world,
-});
+pub const TextVisualFactory = Factory.defineFrom(TextVisual, factory_defs.text_visual);
 
 // ============================================================================
 // Helper Functions

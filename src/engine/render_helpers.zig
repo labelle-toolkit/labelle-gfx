@@ -79,12 +79,18 @@ pub fn RenderHelpers(comptime Backend: type) type {
             Backend.drawText(text.ptr, @intFromFloat(pos.x), @intFromFloat(pos.y), @intFromFloat(size), col);
         }
 
+        /// Viewport bounds for screen-space culling (used by repeat mode).
+        pub const ScreenViewport = struct {
+            width: f32,
+            height: f32,
+        };
+
         /// Render a sized sprite with the given size mode.
         /// This handles stretch, cover, contain, scale_down, and repeat modes.
+        /// Flipping is handled internally by negating source rect dimensions.
         ///
-        /// NOTE: Currently unused. RetainedEngine uses a local version that accesses
-        /// sprite lookup results directly. Consider integrating during facade refactoring (#112)
-        /// or removing if the facade keeps its own implementation for viewport culling.
+        /// For repeat mode, if `screen_viewport` is provided, tiles outside the viewport
+        /// are culled. Pass null for world-space layers where camera transforms apply.
         pub fn renderSizedSprite(
             texture: Backend.Texture2D,
             sprite_x: i32,
@@ -103,6 +109,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
             flip_y: bool,
             scale: f32,
             tint: Backend.Color,
+            screen_viewport: ?ScreenViewport,
         ) void {
             const cont_w = cont_rect.width;
             const cont_h = cont_rect.height;
@@ -113,6 +120,14 @@ pub fn RenderHelpers(comptime Backend: type) type {
                 log.warn("Skipping sized sprite render: invalid sprite dimensions ({d}x{d})", .{ sprite_w, sprite_h });
                 return;
             }
+
+            // Apply flipping by negating source rect dimensions
+            const flipped_src = Backend.Rectangle{
+                .x = src_rect.x,
+                .y = src_rect.y,
+                .width = if (flip_x) -src_rect.width else src_rect.width,
+                .height = if (flip_y) -src_rect.height else src_rect.height,
+            };
 
             switch (size_mode) {
                 .none => unreachable,
@@ -125,7 +140,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
                     };
                     const pivot_origin = pivot.getOrigin(cont_w, cont_h, pivot_x, pivot_y);
                     const origin = Backend.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
-                    Backend.drawTexturePro(texture, src_rect, dest_rect, origin, rotation, tint);
+                    Backend.drawTexturePro(texture, flipped_src, dest_rect, origin, rotation, tint);
                 },
                 .cover => {
                     const crop = CoverCrop.calculate(
@@ -185,7 +200,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
                     };
                     const pivot_origin = pivot.getOrigin(dest_w, dest_h, pivot_x, pivot_y);
                     const origin = Backend.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
-                    Backend.drawTexturePro(texture, src_rect, dest_rect, origin, rotation, tint);
+                    Backend.drawTexturePro(texture, flipped_src, dest_rect, origin, rotation, tint);
                 },
                 .repeat => {
                     const scaled_w = sprite_w * scale;
@@ -216,11 +231,40 @@ pub fn RenderHelpers(comptime Backend: type) type {
                         return;
                     }
 
-                    // For repeat mode, we draw all tiles (culling would require layer info)
-                    var row: u32 = 0;
-                    while (row < total_rows) : (row += 1) {
-                        var col: u32 = 0;
-                        while (col < total_cols) : (col += 1) {
+                    // Calculate visible tile range with optional viewport culling
+                    var start_col: u32 = 0;
+                    var start_row: u32 = 0;
+                    var end_col: u32 = total_cols;
+                    var end_row: u32 = total_rows;
+
+                    if (screen_viewport) |vp| {
+                        // Screen-space culling: only draw visible tiles
+                        if (0 > container_tl_x) {
+                            start_col = @min(total_cols, @as(u32, @intFromFloat(@floor(-container_tl_x / scaled_w))));
+                        }
+                        if (0 > container_tl_y) {
+                            start_row = @min(total_rows, @as(u32, @intFromFloat(@floor(-container_tl_y / scaled_h))));
+                        }
+
+                        const end_col_dist = vp.width - container_tl_x;
+                        const end_row_dist = vp.height - container_tl_y;
+                        if (end_col_dist > 0) {
+                            end_col = @min(total_cols, @as(u32, @intFromFloat(@ceil(end_col_dist / scaled_w))));
+                        } else {
+                            end_col = 0;
+                        }
+                        if (end_row_dist > 0) {
+                            end_row = @min(total_rows, @as(u32, @intFromFloat(@ceil(end_row_dist / scaled_h))));
+                        } else {
+                            end_row = 0;
+                        }
+                    }
+
+                    // Draw visible tiles
+                    var row: u32 = start_row;
+                    while (row < end_row) : (row += 1) {
+                        var col: u32 = start_col;
+                        while (col < end_col) : (col += 1) {
                             const tile_x = container_tl_x + @as(f32, @floatFromInt(col)) * scaled_w;
                             const tile_y = container_tl_y + @as(f32, @floatFromInt(row)) * scaled_h;
 
@@ -231,7 +275,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
                                 .height = scaled_h,
                             };
                             const origin = Backend.Vector2{ .x = 0, .y = 0 };
-                            Backend.drawTexturePro(texture, src_rect, dest_rect, origin, rotation, tint);
+                            Backend.drawTexturePro(texture, flipped_src, dest_rect, origin, rotation, tint);
                         }
                     }
                 },
@@ -239,6 +283,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
         }
 
         /// Render a basic sprite (no sizing mode, just scale).
+        /// Flipping is handled by negating src_rect dimensions.
         pub fn renderBasicSprite(
             texture: Backend.Texture2D,
             src_rect: Backend.Rectangle,
@@ -250,10 +295,20 @@ pub fn RenderHelpers(comptime Backend: type) type {
             pivot_x: f32,
             pivot_y: f32,
             rotation: f32,
+            flip_x: bool,
+            flip_y: bool,
             tint: Backend.Color,
         ) void {
             const scaled_width = sprite_w * scale;
             const scaled_height = sprite_h * scale;
+
+            // Apply flipping by negating source rect dimensions
+            const flipped_src = Backend.Rectangle{
+                .x = src_rect.x,
+                .y = src_rect.y,
+                .width = if (flip_x) -src_rect.width else src_rect.width,
+                .height = if (flip_y) -src_rect.height else src_rect.height,
+            };
 
             const dest_rect = Backend.Rectangle{
                 .x = pos.x,
@@ -268,7 +323,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
                 .y = pivot_origin.y,
             };
 
-            Backend.drawTexturePro(texture, src_rect, dest_rect, origin, rotation, tint);
+            Backend.drawTexturePro(texture, flipped_src, dest_rect, origin, rotation, tint);
         }
 
         /// Calculate shape bounds for viewport culling.
