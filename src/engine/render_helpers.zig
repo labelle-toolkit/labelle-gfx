@@ -2,6 +2,34 @@
 //!
 //! Pure rendering functions that take visuals and positions as parameters.
 //! These functions don't access storage - they just draw.
+//!
+//! ## Container Resolution
+//!
+//! Sized sprites (`size_mode != .none`) need a container to determine their
+//! final dimensions. The container is resolved based on the sprite's settings:
+//!
+//! | Container Value    | Screen-Space Layer          | World-Space Layer           |
+//! |--------------------|-----------------------------|-----------------------------|
+//! | `.infer`           | Full screen dimensions      | Sprite's natural size       |
+//! | `.viewport`        | Full screen dimensions      | Full screen dimensions      |
+//! | `.camera_viewport` | Camera's visible world area | Camera's visible world area |
+//! | `.explicit`        | Use provided rect           | Use provided rect           |
+//!
+//! ### Common Use Cases
+//!
+//! - **Fullscreen background**: `.infer` on a screen-space layer auto-fills the screen
+//! - **World-space tile**: `.camera_viewport` fills the visible world area
+//! - **Fixed-size panel**: `.explicit` with specific width/height
+//!
+//! ## Sizing Modes
+//!
+//! Once the container is resolved, the sizing mode determines how the sprite fills it:
+//!
+//! - `.stretch` - Distort to fill exactly
+//! - `.cover` - Scale uniformly to cover (may crop)
+//! - `.contain` - Scale uniformly to fit (may letterbox)
+//! - `.scale_down` - Like contain, but never scales up
+//! - `.repeat` - Tile to fill the container
 
 const std = @import("std");
 const log = @import("../log.zig").engine;

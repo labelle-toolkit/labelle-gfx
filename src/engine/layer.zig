@@ -181,8 +181,40 @@ pub fn getSortedLayers(comptime LayerEnum: type) [layerCount(LayerEnum)]LayerEnu
     }
 }
 
-/// Layer visibility mask for cameras.
-/// Stores which layers a camera should render as a bitmask.
+/// Layer visibility mask for filtering which layers a camera renders.
+///
+/// Each camera can have its own LayerMask, allowing different cameras to render
+/// different subsets of layers. This is useful for:
+/// - Split-screen: Each player camera renders only their UI layer
+/// - Minimap: Render only terrain and markers, not full detail
+/// - Picture-in-picture: Show a subset of the scene
+///
+/// ## Layer Visibility vs Layer Masks
+///
+/// There are two independent visibility controls:
+/// - **Layer visibility** (`setLayerVisible`): Global toggle for a layer. If disabled,
+///   the layer won't render on ANY camera.
+/// - **Layer mask** (per-camera): Which layers this specific camera renders.
+///   A layer must pass BOTH checks to be rendered.
+///
+/// ## Usage
+///
+/// ```zig
+/// // Set up camera 1 to only render world and ui layers
+/// engine.setCameraLayers(1, &[_]GameLayers{ .world, .ui });
+///
+/// // Toggle a single layer for a camera
+/// engine.setCameraLayerEnabled(0, .debug, true);
+///
+/// // Get the mask for direct manipulation
+/// const mask = engine.getCameraLayerMask(0);
+/// mask.toggle(.background);
+/// ```
+///
+/// ## Implementation
+///
+/// Uses a bitmask where bit N corresponds to enum value N. The mask type is
+/// automatically sized: u8 for ≤8 layers, u16 for ≤16, u32 for ≤32, u64 for ≤64.
 pub fn LayerMask(comptime LayerEnum: type) type {
     comptime {
         validateLayerEnum(LayerEnum);
