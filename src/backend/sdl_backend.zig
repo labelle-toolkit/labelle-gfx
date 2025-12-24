@@ -42,6 +42,11 @@ pub const SdlBackend = struct {
     var sdl_image_initialized: bool = false;
     var sdl_ttf_initialized: bool = false;
     var default_font: ?sdl_ttf.Font = null;
+    var should_close: bool = false;
+
+    // Keyboard state - tracks which keys are currently pressed or were just pressed
+    var keys_pressed: [512]bool = [_]bool{false} ** 512;
+    var keys_just_pressed: [512]bool = [_]bool{false} ** 512;
 
     // =========================================================================
     // REQUIRED TYPES
@@ -455,9 +460,10 @@ pub const SdlBackend = struct {
         return window != null and renderer != null;
     }
 
-    // Note: windowShouldClose is intentionally not implemented for SDL backend.
-    // Applications using SDL should manage their own event loop and quit condition,
-    // which is the standard pattern for SDL applications.
+    /// Check if the window should close (quit event received)
+    pub fn windowShouldClose() bool {
+        return should_close;
+    }
 
     pub fn setTargetFPS(fps: i32) void {
         _ = fps;
@@ -484,6 +490,44 @@ pub const SdlBackend = struct {
         const freq = sdl.getPerformanceFrequency();
         frame_time = @as(f32, @floatFromInt(now - last_frame_time)) / @as(f32, @floatFromInt(freq));
         last_frame_time = now;
+
+        // Clear just-pressed state from previous frame
+        @memset(&keys_just_pressed, false);
+
+        // Poll events - SDL.zig uses a tagged union
+        while (sdl.pollEvent()) |event| {
+            switch (event) {
+                .quit => {
+                    should_close = true;
+                },
+                .key_down => |key| {
+                    const scancode = @intFromEnum(key.scancode);
+                    if (scancode < keys_pressed.len) {
+                        if (!keys_pressed[scancode]) {
+                            keys_just_pressed[scancode] = true;
+                        }
+                        keys_pressed[scancode] = true;
+                    }
+                },
+                .key_up => |key| {
+                    const scancode = @intFromEnum(key.scancode);
+                    if (scancode < keys_pressed.len) {
+                        keys_pressed[scancode] = false;
+                    }
+                },
+                .window => |win| {
+                    // Handle window resize events - type is a tagged union with Size for resize events
+                    switch (win.type) {
+                        .resized, .size_changed => |size| {
+                            screen_width = size.width;
+                            screen_height = size.height;
+                        },
+                        else => {},
+                    }
+                },
+                else => {},
+            }
+        }
     }
 
     pub fn endDrawing() void {
@@ -505,6 +549,98 @@ pub const SdlBackend = struct {
 
     pub fn getFrameTime() f32 {
         return frame_time;
+    }
+
+    // =========================================================================
+    // OPTIONAL: INPUT HANDLING
+    // =========================================================================
+
+    /// Key codes for input handling (maps to SDL scancodes)
+    pub const Key = enum(u16) {
+        // Letters
+        a = 4,
+        b = 5,
+        c = 6,
+        d = 7,
+        e = 8,
+        f = 9,
+        g = 10,
+        h = 11,
+        i = 12,
+        j = 13,
+        k = 14,
+        l = 15,
+        m = 16,
+        n = 17,
+        o = 18,
+        p = 19,
+        q = 20,
+        r = 21,
+        s = 22,
+        t = 23,
+        u = 24,
+        v = 25,
+        w = 26,
+        x = 27,
+        y = 28,
+        z = 29,
+
+        // Numbers
+        @"1" = 30,
+        @"2" = 31,
+        @"3" = 32,
+        @"4" = 33,
+        @"5" = 34,
+        @"6" = 35,
+        @"7" = 36,
+        @"8" = 37,
+        @"9" = 38,
+        @"0" = 39,
+
+        // Special keys
+        @"return" = 40,
+        escape = 41,
+        backspace = 42,
+        tab = 43,
+        space = 44,
+
+        // Function keys
+        f1 = 58,
+        f2 = 59,
+        f3 = 60,
+        f4 = 61,
+        f5 = 62,
+        f6 = 63,
+        f7 = 64,
+        f8 = 65,
+        f9 = 66,
+        f10 = 67,
+        f11 = 68,
+        f12 = 69,
+
+        // Arrow keys
+        right = 79,
+        left = 80,
+        down = 81,
+        up = 82,
+    };
+
+    /// Check if a key is currently held down
+    pub fn isKeyDown(key: Key) bool {
+        const scancode = @intFromEnum(key);
+        if (scancode < keys_pressed.len) {
+            return keys_pressed[scancode];
+        }
+        return false;
+    }
+
+    /// Check if a key was just pressed this frame
+    pub fn isKeyPressed(key: Key) bool {
+        const scancode = @intFromEnum(key);
+        if (scancode < keys_just_pressed.len) {
+            return keys_just_pressed[scancode];
+        }
+        return false;
     }
 
     // =========================================================================
@@ -847,5 +983,57 @@ pub const SdlBackend = struct {
         ren.setClipRect(null) catch |err| {
             if (@import("builtin").mode == .Debug) std.debug.print("SDL setClipRect(null) failed: {}\n", .{err});
         };
+    }
+
+    // =========================================================================
+    // FULLSCREEN FUNCTIONS
+    // =========================================================================
+
+    threadlocal var is_fullscreen: bool = false;
+
+    /// Toggle between fullscreen and windowed mode
+    pub fn toggleFullscreen() void {
+        const win = window orelse return;
+        is_fullscreen = !is_fullscreen;
+        // Use .fullscreen_desktop for borderless fullscreen, .default for windowed
+        win.setFullscreen(if (is_fullscreen) .fullscreen_desktop else .default) catch |err| {
+            if (@import("builtin").mode == .Debug) std.debug.print("SDL setFullscreen failed: {}\n", .{err});
+            is_fullscreen = !is_fullscreen; // Revert on failure
+            return;
+        };
+        // Update screen dimensions after any fullscreen change
+        const size = win.getSize();
+        screen_width = size.width;
+        screen_height = size.height;
+    }
+
+    /// Set fullscreen mode explicitly
+    pub fn setFullscreen(fullscreen: bool) void {
+        if (fullscreen != is_fullscreen) {
+            toggleFullscreen();
+        }
+    }
+
+    /// Check if window is currently in fullscreen mode
+    pub fn isWindowFullscreen() bool {
+        return is_fullscreen;
+    }
+
+    /// Get the current display width (for fullscreen resolution)
+    pub fn getMonitorWidth() i32 {
+        // Query the primary display's desktop mode
+        const mode = sdl.DisplayMode.getDesktopInfo(0) catch {
+            return 1920; // Fallback if query fails
+        };
+        return @intCast(mode.w);
+    }
+
+    /// Get the current display height (for fullscreen resolution)
+    pub fn getMonitorHeight() i32 {
+        // Query the primary display's desktop mode
+        const mode = sdl.DisplayMode.getDesktopInfo(0) catch {
+            return 1080; // Fallback if query fails
+        };
+        return @intCast(mode.h);
     }
 };

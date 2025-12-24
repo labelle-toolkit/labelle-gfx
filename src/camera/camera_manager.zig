@@ -11,6 +11,18 @@ pub const ScreenViewport = camera_mod.ScreenViewport;
 /// Maximum number of cameras supported
 pub const MAX_CAMERAS: u3 = 4;
 
+/// Screen size change information
+pub const ScreenSizeChange = struct {
+    old_width: i32,
+    old_height: i32,
+    new_width: i32,
+    new_height: i32,
+
+    pub fn hasChanged(self: ScreenSizeChange) bool {
+        return self.old_width != self.new_width or self.old_height != self.new_height;
+    }
+};
+
 /// Split-screen layout presets
 pub const SplitScreenLayout = enum {
     /// Single camera (fullscreen)
@@ -36,6 +48,11 @@ pub fn CameraManagerWith(comptime BackendType: type) type {
         active_mask: u4,
         /// Index of the primary camera (used for single-camera operations)
         primary_index: u2,
+        /// Current split-screen layout (for recalculation on resize)
+        current_layout: SplitScreenLayout,
+        /// Cached screen dimensions for change detection
+        cached_screen_width: i32,
+        cached_screen_height: i32,
 
         /// Initialize camera manager with a single fullscreen camera
         pub fn init() Self {
@@ -43,6 +60,9 @@ pub fn CameraManagerWith(comptime BackendType: type) type {
                 .cameras = undefined,
                 .active_mask = 0b0001, // Only camera 0 active by default
                 .primary_index = 0,
+                .current_layout = .single,
+                .cached_screen_width = BackendType.getScreenWidth(),
+                .cached_screen_height = BackendType.getScreenHeight(),
             };
 
             // Initialize all cameras with defaults
@@ -111,10 +131,20 @@ pub fn CameraManagerWith(comptime BackendType: type) type {
 
         /// Setup split-screen layout
         pub fn setupSplitScreen(self: *Self, layout: SplitScreenLayout) void {
+            self.current_layout = layout;
+            self.recalculateViewports();
+        }
+
+        /// Recalculate viewport rectangles based on current screen size and layout
+        /// Call this when screen size changes (e.g., fullscreen toggle, window resize)
+        pub fn recalculateViewports(self: *Self) void {
             const screen_w = BackendType.getScreenWidth();
             const screen_h = BackendType.getScreenHeight();
 
-            switch (layout) {
+            self.cached_screen_width = screen_w;
+            self.cached_screen_height = screen_h;
+
+            switch (self.current_layout) {
                 .single => {
                     self.active_mask = 0b0001;
                     self.cameras[0].screen_viewport = null;
@@ -144,6 +174,25 @@ pub fn CameraManagerWith(comptime BackendType: type) type {
                     }
                 },
             }
+        }
+
+        /// Check if screen size has changed and recalculate viewports if needed
+        /// Returns the size change info if changed, null otherwise
+        pub fn handleScreenSizeChange(self: *Self) ?ScreenSizeChange {
+            const current_w = BackendType.getScreenWidth();
+            const current_h = BackendType.getScreenHeight();
+
+            if (current_w != self.cached_screen_width or current_h != self.cached_screen_height) {
+                const change = ScreenSizeChange{
+                    .old_width = self.cached_screen_width,
+                    .old_height = self.cached_screen_height,
+                    .new_width = current_w,
+                    .new_height = current_h,
+                };
+                self.recalculateViewports();
+                return change;
+            }
+            return null;
         }
 
         /// Iterator for active cameras

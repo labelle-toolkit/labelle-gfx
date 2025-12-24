@@ -171,6 +171,11 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         // Texture ID counter
         next_texture_id: u32,
 
+        // Screen size tracking for resize detection
+        prev_screen_width: i32,
+        prev_screen_height: i32,
+        screen_size_changed: bool,
+
         // ==================== Lifecycle ====================
 
         pub fn init(allocator: std.mem.Allocator, cfg: EngineConfig) !Self {
@@ -224,6 +229,9 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     cfg.clear_color.a,
                 ),
                 .next_texture_id = 1,
+                .prev_screen_width = BackendType.getScreenWidth(),
+                .prev_screen_height = BackendType.getScreenHeight(),
+                .screen_size_changed = false,
             };
         }
 
@@ -374,9 +382,12 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             return BackendType.getFrameTime();
         }
 
-        pub fn beginFrame(self: *const Self) void {
+        pub fn beginFrame(self: *Self) void {
             BackendType.beginDrawing();
             BackendType.clearBackground(self.clear_color);
+
+            // Check for screen size changes (fullscreen toggle, window resize)
+            self.checkScreenSizeChange();
         }
 
         pub fn endFrame(self: *const Self) void {
@@ -390,6 +401,75 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                 .w = BackendType.getScreenWidth(),
                 .h = BackendType.getScreenHeight(),
             };
+        }
+
+        // ==================== Fullscreen ====================
+
+        /// Toggle between fullscreen and windowed mode
+        pub fn toggleFullscreen(self: *Self) void {
+            BackendType.toggleFullscreen();
+            self.handleScreenResize();
+        }
+
+        /// Set fullscreen mode explicitly
+        pub fn setFullscreen(self: *Self, fullscreen: bool) void {
+            BackendType.setFullscreen(fullscreen);
+            self.handleScreenResize();
+        }
+
+        /// Check if window is currently in fullscreen mode
+        pub fn isFullscreen(self: *const Self) bool {
+            _ = self;
+            return BackendType.isWindowFullscreen();
+        }
+
+        /// Check if screen size changed this frame (after calling beginFrame)
+        pub fn screenSizeChanged(self: *const Self) bool {
+            return self.screen_size_changed;
+        }
+
+        /// Get the screen size change info if size changed, null otherwise
+        pub fn getScreenSizeChange(self: *const Self) ?camera_manager_mod.ScreenSizeChange {
+            if (!self.screen_size_changed) return null;
+            return .{
+                .old_width = self.prev_screen_width,
+                .old_height = self.prev_screen_height,
+                .new_width = BackendType.getScreenWidth(),
+                .new_height = BackendType.getScreenHeight(),
+            };
+        }
+
+        /// Handle screen resize (update camera viewports, culling bounds, etc.)
+        /// Called automatically by toggleFullscreen/setFullscreen and beginFrame,
+        /// but can also be called manually to handle window resize events.
+        /// This is idempotent - calling it multiple times per frame is safe.
+        pub fn handleScreenResize(self: *Self) void {
+            const current_w = BackendType.getScreenWidth();
+            const current_h = BackendType.getScreenHeight();
+
+            self.screen_size_changed = (current_w != self.prev_screen_width) or
+                (current_h != self.prev_screen_height);
+
+            if (self.screen_size_changed) {
+                // Update camera manager viewports for multi-camera
+                if (self.multi_camera_enabled) {
+                    self.camera_manager.recalculateViewports();
+                }
+
+                // Center single camera if not following anything
+                self.camera.centerOnScreen();
+
+                // Update previous size to prevent re-handling until the next change
+                self.prev_screen_width = current_w;
+                self.prev_screen_height = current_h;
+            }
+        }
+
+        /// Check for screen size changes at the start of a frame.
+        /// Call this in beginFrame if you want automatic resize detection.
+        fn checkScreenSizeChange(self: *Self) void {
+            // Delegate to handleScreenResize which handles everything
+            self.handleScreenResize();
         }
 
         // ==================== Camera ====================

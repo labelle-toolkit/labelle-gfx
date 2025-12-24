@@ -111,6 +111,8 @@ pub const MockBackend = struct {
         texture_counter = 1;
         in_camera_mode = false;
         current_camera = null;
+        resetScissorTracking();
+        resetFullscreenState();
     }
 
     /// Get recorded draw calls for assertions
@@ -294,6 +296,64 @@ pub const MockBackend = struct {
     /// Test helper: reset scissor call tracking
     pub fn resetScissorTracking() void {
         scissor_call_count = 0;
+    }
+
+    // Fullscreen functions (mock implementation for testing)
+    threadlocal var is_fullscreen_val: bool = false;
+    threadlocal var monitor_width_val: i32 = 1920;
+    threadlocal var monitor_height_val: i32 = 1080;
+    // Store windowed size to restore when exiting fullscreen
+    threadlocal var windowed_width_val: i32 = 800;
+    threadlocal var windowed_height_val: i32 = 600;
+
+    /// Toggle between fullscreen and windowed mode
+    pub fn toggleFullscreen() void {
+        is_fullscreen_val = !is_fullscreen_val;
+        if (is_fullscreen_val) {
+            // Save windowed size before entering fullscreen
+            windowed_width_val = screen_width_val;
+            windowed_height_val = screen_height_val;
+            // Simulate fullscreen by setting screen size to monitor size
+            screen_width_val = monitor_width_val;
+            screen_height_val = monitor_height_val;
+        } else {
+            // Restore windowed size when exiting fullscreen
+            screen_width_val = windowed_width_val;
+            screen_height_val = windowed_height_val;
+        }
+    }
+
+    /// Set fullscreen mode explicitly
+    pub fn setFullscreen(fullscreen: bool) void {
+        if (fullscreen != is_fullscreen_val) {
+            toggleFullscreen();
+        }
+    }
+
+    /// Check if window is currently in fullscreen mode
+    pub fn isWindowFullscreen() bool {
+        return is_fullscreen_val;
+    }
+
+    /// Get the mock monitor width
+    pub fn getMonitorWidth() i32 {
+        return monitor_width_val;
+    }
+
+    /// Get the mock monitor height
+    pub fn getMonitorHeight() i32 {
+        return monitor_height_val;
+    }
+
+    /// Test helper: set mock monitor dimensions
+    pub fn setMonitorSize(width: i32, height: i32) void {
+        monitor_width_val = width;
+        monitor_height_val = height;
+    }
+
+    /// Test helper: reset fullscreen state
+    pub fn resetFullscreenState() void {
+        is_fullscreen_val = false;
     }
 
     // Test helpers

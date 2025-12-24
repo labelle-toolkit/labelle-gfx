@@ -166,6 +166,7 @@ pub const camera_manager = @import("camera/camera_manager.zig");
 pub const CameraManager = camera_manager.CameraManagerWith(DefaultBackend);
 pub const CameraManagerWith = camera_manager.CameraManagerWith;
 pub const SplitScreenLayout = camera_manager.SplitScreenLayout;
+pub const ScreenSizeChange = camera_manager.ScreenSizeChange;
 
 // Effects exports
 pub const effects = @import("effects/effects.zig");
