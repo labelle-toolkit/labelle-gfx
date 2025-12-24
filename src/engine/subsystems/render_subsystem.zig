@@ -273,6 +273,35 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
             BackendType.beginMode2D(rl_camera);
         }
 
+        /// Calculate world-space bounds for a sprite, accounting for scale and pivot.
+        /// Returns null if the sprite cannot be found in resources.
+        /// Note: Reuses Helpers.ShapeBounds which has identical structure (x, y, w, h).
+        fn getSpriteWorldBounds(
+            entry: Visuals.SpriteEntry,
+            resources: *Resources,
+        ) ?Helpers.ShapeBounds {
+            const visual = entry.visual;
+            const pos = entry.position;
+
+            if (visual.sprite_name.len == 0) return null;
+
+            const result = resources.findSprite(visual.sprite_name) orelse return null;
+            const sprite = result.sprite;
+
+            const scaled_width = @as(f32, @floatFromInt(sprite.width)) * visual.scale;
+            const scaled_height = @as(f32, @floatFromInt(sprite.height)) * visual.scale;
+            const pivot_origin = visual.pivot.getOrigin(scaled_width, scaled_height, visual.pivot_x, visual.pivot_y);
+
+            return .{
+                .x = pos.x - pivot_origin.x,
+                .y = pos.y - pivot_origin.y,
+                .w = scaled_width,
+                .h = scaled_height,
+            };
+        }
+
+        /// Check if a sprite should be rendered based on viewport culling.
+        /// Returns true if visible, or if bounds cannot be determined (conservative).
         fn shouldRenderSpriteInViewport(
             visuals: *const Visuals,
             resources: *Resources,
@@ -280,34 +309,18 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
             viewport: Camera.ViewportRect,
         ) bool {
             const entry = visuals.getSpriteEntry(id) orelse return false;
-            const visual = entry.visual;
-            const pos = entry.position;
-
-            if (visual.sprite_name.len > 0) {
-                if (resources.findSprite(visual.sprite_name)) |result| {
-                    const sprite = result.sprite;
-                    const scaled_width = @as(f32, @floatFromInt(sprite.width)) * visual.scale;
-                    const scaled_height = @as(f32, @floatFromInt(sprite.height)) * visual.scale;
-
-                    const pivot_origin = visual.pivot.getOrigin(scaled_width, scaled_height, visual.pivot_x, visual.pivot_y);
-                    const sprite_x = pos.x - pivot_origin.x;
-                    const sprite_y = pos.y - pivot_origin.y;
-                    return viewport.overlapsRect(sprite_x, sprite_y, scaled_width, scaled_height);
-                }
-            }
-            return true;
+            const bounds = getSpriteWorldBounds(entry, resources) orelse return true;
+            return viewport.overlapsRect(bounds.x, bounds.y, bounds.w, bounds.h);
         }
 
+        /// Check if a shape should be rendered based on viewport culling.
         fn shouldRenderShapeInViewport(
             visuals: *const Visuals,
             id: EntityId,
             viewport: Camera.ViewportRect,
         ) bool {
             const entry = visuals.getShapeEntry(id) orelse return false;
-            const visual = entry.visual;
-            const pos = entry.position;
-
-            const bounds = Helpers.getShapeBounds(visual.shape, pos);
+            const bounds = Helpers.getShapeBounds(entry.visual.shape, entry.position);
             return viewport.overlapsRect(bounds.x, bounds.y, bounds.w, bounds.h);
         }
 
