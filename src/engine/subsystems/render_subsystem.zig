@@ -286,6 +286,119 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
             return viewport.overlapsRect(bounds.x, bounds.y, bounds.w, bounds.h);
         }
 
+        /// Sprite lookup result containing atlas data and sprite info.
+        const SpriteLookup = struct {
+            texture: BackendType.Texture,
+            sprite_x: u32,
+            sprite_y: u32,
+            sprite_w: f32,
+            sprite_h: f32,
+            src_rect: BackendType.Rectangle,
+        };
+
+        /// Look up sprite atlas data from resources.
+        fn lookupSprite(resources: *Resources, sprite_name: []const u8) ?SpriteLookup {
+            if (sprite_name.len == 0) return null;
+            const result = resources.findSprite(sprite_name) orelse return null;
+            const sprite = result.sprite;
+            return .{
+                .texture = result.atlas.texture,
+                .sprite_x = sprite.x,
+                .sprite_y = sprite.y,
+                .sprite_w = @floatFromInt(sprite.width),
+                .sprite_h = @floatFromInt(sprite.height),
+                .src_rect = Helpers.createSrcRect(sprite.x, sprite.y, sprite.width, sprite.height),
+            };
+        }
+
+        /// Calculate scissor bounds for repeat mode clipping.
+        fn calculateRepeatScissor(
+            pos: Position,
+            cont_rect: Container.Rect,
+            pivot_x: f32,
+            pivot_y: f32,
+            layer_space: layer_mod.LayerSpace,
+            cam: *const Camera,
+        ) struct { x: i32, y: i32, w: i32, h: i32 } {
+            const container_tl_x = pos.x + cont_rect.x - cont_rect.width * pivot_x;
+            const container_tl_y = pos.y + cont_rect.y - cont_rect.height * pivot_y;
+
+            if (layer_space == .world) {
+                const screen_tl = cam.worldToScreen(container_tl_x, container_tl_y);
+                const screen_br = cam.worldToScreen(container_tl_x + cont_rect.width, container_tl_y + cont_rect.height);
+                return .{
+                    .x = @intFromFloat(screen_tl.x),
+                    .y = @intFromFloat(screen_tl.y),
+                    .w = @intFromFloat(screen_br.x - screen_tl.x),
+                    .h = @intFromFloat(screen_br.y - screen_tl.y),
+                };
+            } else {
+                return .{
+                    .x = @intFromFloat(container_tl_x),
+                    .y = @intFromFloat(container_tl_y),
+                    .w = @intFromFloat(cont_rect.width),
+                    .h = @intFromFloat(cont_rect.height),
+                };
+            }
+        }
+
+        /// Render sprite with a sizing mode (stretch, cover, contain, scale_down, repeat).
+        fn renderSizedSpriteMode(
+            lookup: SpriteLookup,
+            visual: Visuals.SpriteVisual,
+            pos: Position,
+            cam_viewport: ?Container.Rect,
+            cam: *const Camera,
+            tint: BackendType.Color,
+        ) void {
+            const layer_cfg = visual.layer.config();
+            const cont_rect = Helpers.resolveContainer(visual.container, layer_cfg.space, lookup.sprite_w, lookup.sprite_h, cam_viewport);
+            const screen_vp: ?Helpers.ScreenViewport = if (layer_cfg.space == .screen)
+                .{
+                    .width = @floatFromInt(BackendType.getScreenWidth()),
+                    .height = @floatFromInt(BackendType.getScreenHeight()),
+                }
+            else
+                null;
+
+            const pivot_x, const pivot_y = if (visual.size_mode == .repeat) blk: {
+                const normalized = visual.pivot.getNormalized(visual.pivot_x, visual.pivot_y);
+                break :blk .{ normalized.x, normalized.y };
+            } else .{ visual.pivot_x, visual.pivot_y };
+
+            // Set up scissor clipping for repeat mode
+            if (visual.size_mode == .repeat) {
+                const scissor = calculateRepeatScissor(pos, cont_rect, pivot_x, pivot_y, layer_cfg.space, cam);
+                BackendType.beginScissorMode(scissor.x, scissor.y, scissor.w, scissor.h);
+            }
+
+            Helpers.renderSizedSprite(
+                lookup.texture,
+                lookup.sprite_x,
+                lookup.sprite_y,
+                lookup.src_rect,
+                lookup.sprite_w,
+                lookup.sprite_h,
+                pos,
+                visual.size_mode,
+                cont_rect,
+                visual.pivot,
+                pivot_x,
+                pivot_y,
+                visual.rotation,
+                visual.flip_x,
+                visual.flip_y,
+                visual.scale,
+                tint,
+                screen_vp,
+            );
+
+            if (visual.size_mode == .repeat) {
+                BackendType.endScissorMode();
+            }
+        }
+
+        /// Main sprite rendering entry point.
         fn renderSprite(
             visuals: *const Visuals,
             resources: *Resources,
@@ -296,101 +409,28 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
             const entry = visuals.getSpriteEntry(id) orelse return;
             const visual = entry.visual;
             const pos = entry.position;
-
             const tint = BackendType.color(visual.tint.r, visual.tint.g, visual.tint.b, visual.tint.a);
 
-            if (visual.sprite_name.len > 0) {
-                if (resources.findSprite(visual.sprite_name)) |result| {
-                    const sprite = result.sprite;
-                    const sprite_w: f32 = @floatFromInt(sprite.width);
-                    const sprite_h: f32 = @floatFromInt(sprite.height);
+            const lookup = lookupSprite(resources, visual.sprite_name) orelse return;
 
-                    const src_rect = Helpers.createSrcRect(sprite.x, sprite.y, sprite.width, sprite.height);
-
-                    if (visual.size_mode == .none) {
-                        Helpers.renderBasicSprite(
-                            result.atlas.texture,
-                            src_rect,
-                            sprite_w,
-                            sprite_h,
-                            pos,
-                            visual.scale,
-                            visual.pivot,
-                            visual.pivot_x,
-                            visual.pivot_y,
-                            visual.rotation,
-                            visual.flip_x,
-                            visual.flip_y,
-                            tint,
-                        );
-                    } else {
-                        const layer_cfg = visual.layer.config();
-                        const cont_rect = Helpers.resolveContainer(visual.container, layer_cfg.space, sprite_w, sprite_h, cam_viewport);
-                        const screen_vp: ?Helpers.ScreenViewport = if (layer_cfg.space == .screen)
-                            .{
-                                .width = @floatFromInt(BackendType.getScreenWidth()),
-                                .height = @floatFromInt(BackendType.getScreenHeight()),
-                            }
-                        else
-                            null;
-
-                        const pivot_x, const pivot_y = if (visual.size_mode == .repeat) blk: {
-                            const normalized = visual.pivot.getNormalized(visual.pivot_x, visual.pivot_y);
-                            break :blk .{ normalized.x, normalized.y };
-                        } else .{ visual.pivot_x, visual.pivot_y };
-
-                        if (visual.size_mode == .repeat) {
-                            const container_tl_x = pos.x + cont_rect.x - cont_rect.width * pivot_x;
-                            const container_tl_y = pos.y + cont_rect.y - cont_rect.height * pivot_y;
-
-                            const scissor_x: i32, const scissor_y: i32, const scissor_w: i32, const scissor_h: i32 = blk: {
-                                if (layer_cfg.space == .world) {
-                                    const screen_tl = cam.worldToScreen(container_tl_x, container_tl_y);
-                                    const screen_br = cam.worldToScreen(container_tl_x + cont_rect.width, container_tl_y + cont_rect.height);
-                                    break :blk .{
-                                        @intFromFloat(screen_tl.x),
-                                        @intFromFloat(screen_tl.y),
-                                        @intFromFloat(screen_br.x - screen_tl.x),
-                                        @intFromFloat(screen_br.y - screen_tl.y),
-                                    };
-                                } else {
-                                    break :blk .{
-                                        @intFromFloat(container_tl_x),
-                                        @intFromFloat(container_tl_y),
-                                        @intFromFloat(cont_rect.width),
-                                        @intFromFloat(cont_rect.height),
-                                    };
-                                }
-                            };
-                            BackendType.beginScissorMode(scissor_x, scissor_y, scissor_w, scissor_h);
-                        }
-
-                        Helpers.renderSizedSprite(
-                            result.atlas.texture,
-                            result.sprite.x,
-                            result.sprite.y,
-                            src_rect,
-                            sprite_w,
-                            sprite_h,
-                            pos,
-                            visual.size_mode,
-                            cont_rect,
-                            visual.pivot,
-                            pivot_x,
-                            pivot_y,
-                            visual.rotation,
-                            visual.flip_x,
-                            visual.flip_y,
-                            visual.scale,
-                            tint,
-                            screen_vp,
-                        );
-
-                        if (visual.size_mode == .repeat) {
-                            BackendType.endScissorMode();
-                        }
-                    }
-                }
+            if (visual.size_mode == .none) {
+                Helpers.renderBasicSprite(
+                    lookup.texture,
+                    lookup.src_rect,
+                    lookup.sprite_w,
+                    lookup.sprite_h,
+                    pos,
+                    visual.scale,
+                    visual.pivot,
+                    visual.pivot_x,
+                    visual.pivot_y,
+                    visual.rotation,
+                    visual.flip_x,
+                    visual.flip_y,
+                    tint,
+                );
+            } else {
+                renderSizedSpriteMode(lookup, visual, pos, cam_viewport, cam, tint);
             }
         }
 
