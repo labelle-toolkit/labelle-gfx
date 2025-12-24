@@ -372,6 +372,17 @@ pub fn RenderHelpers(comptime Backend: type) type {
             };
         }
 
+        /// Create a source rectangle from sprite coordinates and dimensions.
+        /// Helper for sprite rendering that produces consistent src_rect format.
+        pub fn createSrcRect(sprite_x: i32, sprite_y: i32, width: u32, height: u32) Backend.Rectangle {
+            return Backend.Rectangle{
+                .x = @floatFromInt(sprite_x),
+                .y = @floatFromInt(sprite_y),
+                .width = @floatFromInt(width),
+                .height = @floatFromInt(height),
+            };
+        }
+
         /// Returns screen dimensions as a Container.Rect at origin.
         pub fn getScreenRect() Container.Rect {
             return Container.Rect{

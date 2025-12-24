@@ -625,12 +625,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     const sprite_h: f32 = @floatFromInt(sprite.height);
 
                     // Base source rectangle (un-flipped - flipping handled by render helpers)
-                    const src_rect = BackendType.Rectangle{
-                        .x = @floatFromInt(sprite.x),
-                        .y = @floatFromInt(sprite.y),
-                        .width = sprite_w,
-                        .height = sprite_h,
-                    };
+                    const src_rect = Helpers.createSrcRect(sprite.x, sprite.y, sprite.width, sprite.height);
 
                     // Handle sizing modes
                     if (visual.size_mode == .none) {
