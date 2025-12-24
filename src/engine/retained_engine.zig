@@ -652,8 +652,8 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                         );
                     } else {
                         // Sized mode: resolve container and render
-                        const cont_rect = resolveContainer(visual, sprite_w, sprite_h);
                         const layer_cfg = visual.layer.config();
+                        const cont_rect = Helpers.resolveContainer(visual.container, layer_cfg.space, sprite_w, sprite_h);
                         const screen_vp: ?Helpers.ScreenViewport = if (layer_cfg.space == .screen)
                             .{
                                 .width = @floatFromInt(BackendType.getScreenWidth()),
@@ -685,35 +685,6 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     }
                 }
             }
-        }
-
-        /// Returns screen dimensions as a Container.Rect at origin.
-        fn getScreenRect() Container.Rect {
-            return Helpers.getScreenRect();
-        }
-
-        /// Resolves a Container specification to concrete dimensions (Rect).
-        fn resolveContainer(visual: SpriteVisual, sprite_w: f32, sprite_h: f32) Container.Rect {
-            const c = visual.container orelse .infer;
-            return switch (c) {
-                .infer => resolveInferredContainer(visual, sprite_w, sprite_h),
-                .viewport => getScreenRect(),
-                .explicit => |rect| rect,
-            };
-        }
-
-        fn resolveInferredContainer(visual: SpriteVisual, sprite_w: f32, sprite_h: f32) Container.Rect {
-            const layer_cfg = visual.layer.config();
-            if (layer_cfg.space == .screen) {
-                return getScreenRect();
-            }
-            // World-space with no container: use sprite's natural size
-            return Container.Rect{
-                .x = 0,
-                .y = 0,
-                .width = sprite_w,
-                .height = sprite_h,
-            };
         }
 
         fn renderShape(self: *Self, id: EntityId) void {
