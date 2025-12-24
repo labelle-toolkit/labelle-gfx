@@ -2,6 +2,31 @@
 //!
 //! Manages layer buckets, layer visibility, layer masks,
 //! and orchestrates the rendering pipeline.
+//!
+//! ## Rendering Flow
+//!
+//! 1. Layers are iterated in sorted order (by `LayerConfig.order`)
+//! 2. For each layer, visibility is checked (global toggle + camera mask)
+//! 3. World-space layers apply camera transforms (position, zoom, parallax)
+//! 4. Items within each layer are rendered in z-index order
+//!
+//! ## Scissor Mode for Repeat Sprites
+//!
+//! When rendering sprites with `size_mode = .repeat`, scissor clipping is used
+//! to constrain the tiled pattern to the container bounds:
+//!
+//! - For **screen-space** layers: Scissor bounds are calculated in screen coordinates
+//! - For **world-space** layers: World coordinates are transformed to screen space
+//!   using `camera.worldToScreen()` before setting scissor bounds
+//!
+//! This ensures the repeated tiles don't overflow their container, even when
+//! the camera is zoomed or panned. The scissor mode is enabled before rendering
+//! the tiles and disabled immediately after.
+//!
+//! ## Multi-Camera Rendering
+//!
+//! In split-screen mode, each camera renders within its own scissor viewport.
+//! Layer masks allow each camera to render different layer subsets.
 
 const std = @import("std");
 
