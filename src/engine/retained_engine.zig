@@ -40,6 +40,9 @@ pub const types = @import("types.zig");
 pub const visuals = @import("visuals.zig");
 pub const config = @import("config.zig");
 pub const layer_mod = @import("layer.zig");
+const z_buckets = @import("z_buckets.zig");
+pub const visual_types = @import("visual_types.zig");
+const render_helpers = @import("render_helpers.zig");
 
 // Backend imports
 const backend_mod = @import("../backend/backend.zig");
@@ -77,117 +80,13 @@ pub const Line = visuals.Line;
 pub const Triangle = visuals.Triangle;
 pub const Polygon = visuals.Polygon;
 
-// ============================================
-// Render Item for Z-Index Buckets
-// ============================================
+// Re-export z-bucket types
+const ZBuckets = z_buckets.ZBuckets;
+const RenderItem = z_buckets.RenderItem;
+const RenderItemType = z_buckets.RenderItemType;
 
-const RenderItemType = enum { sprite, shape, text };
-
-const RenderItem = struct {
-    entity_id: EntityId,
-    item_type: RenderItemType,
-
-    pub fn eql(self: RenderItem, other: RenderItem) bool {
-        return self.entity_id == other.entity_id and self.item_type == other.item_type;
-    }
-};
-
-/// Z-index bucket storage for RetainedEngine.
-/// Uses 256 buckets for O(1) insertion and natural depth ordering.
-const ZBuckets = struct {
-    const Bucket = std.ArrayListUnmanaged(RenderItem);
-
-    buckets: [256]Bucket,
-    allocator: std.mem.Allocator,
-    total_count: usize,
-
-    pub fn init(allocator: std.mem.Allocator) ZBuckets {
-        return ZBuckets{
-            .buckets = [_]Bucket{.{}} ** 256,
-            .allocator = allocator,
-            .total_count = 0,
-        };
-    }
-
-    pub fn deinit(self: *ZBuckets) void {
-        for (&self.buckets) |*bucket| {
-            bucket.deinit(self.allocator);
-        }
-    }
-
-    pub fn insert(self: *ZBuckets, item: RenderItem, z: u8) !void {
-        try self.buckets[z].append(self.allocator, item);
-        self.total_count += 1;
-    }
-
-    pub fn remove(self: *ZBuckets, item: RenderItem, z: u8) bool {
-        const bucket = &self.buckets[z];
-        for (bucket.items, 0..) |existing, i| {
-            if (existing.eql(item)) {
-                _ = bucket.swapRemove(i);
-                self.total_count -= 1;
-                return true;
-            }
-        }
-        return false;
-    }
-
-    pub fn changeZIndex(self: *ZBuckets, item: RenderItem, old_z: u8, new_z: u8) !void {
-        if (old_z == new_z) return;
-        const removed = self.remove(item, old_z);
-        if (!removed) {
-            return error.ItemNotFound;
-        }
-        try self.insert(item, new_z);
-    }
-
-    pub fn clear(self: *ZBuckets) void {
-        for (&self.buckets) |*bucket| {
-            bucket.clearRetainingCapacity();
-        }
-        self.total_count = 0;
-    }
-
-    pub const Iterator = struct {
-        buckets: *const [256]Bucket,
-        z: u16,
-        idx: usize,
-
-        pub fn init(storage: *const ZBuckets) Iterator {
-            var iter = Iterator{
-                .buckets = &storage.buckets,
-                .z = 0,
-                .idx = 0,
-            };
-            iter.skipEmptyBuckets();
-            return iter;
-        }
-
-        pub fn next(self: *Iterator) ?RenderItem {
-            while (self.z < 256) {
-                const bucket = &self.buckets[self.z];
-                if (self.idx < bucket.items.len) {
-                    const item = bucket.items[self.idx];
-                    self.idx += 1;
-                    return item;
-                }
-                self.z += 1;
-                self.idx = 0;
-            }
-            return null;
-        }
-
-        fn skipEmptyBuckets(self: *Iterator) void {
-            while (self.z < 256 and self.buckets[self.z].items.len == 0) {
-                self.z += 1;
-            }
-        }
-    };
-
-    pub fn iterator(self: *const ZBuckets) Iterator {
-        return Iterator.init(self);
-    }
-};
+// Visual storage
+const visual_storage = @import("visual_storage.zig");
 
 // ============================================
 // Retained Engine
@@ -210,6 +109,12 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
     const sorted_layers = layer_mod.getSortedLayers(LayerEnum);
     const LMask = layer_mod.LayerMask(LayerEnum);
 
+    // Import visual types for this layer enum
+    const VisualTypesFor = visual_types.VisualTypes(LayerEnum);
+
+    // Create render helpers for this backend
+    const Helpers = render_helpers.RenderHelpers(BackendType);
+
     return struct {
         const Self = @This();
         pub const Backend = BackendType;
@@ -218,106 +123,19 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         pub const SplitScreenLayout = camera_manager_mod.SplitScreenLayout;
         pub const CameraType = Camera;
 
+        // Re-export visual types from module
+        pub const getDefaultLayer = VisualTypesFor.getDefaultLayer;
+        pub const SpriteVisual = VisualTypesFor.SpriteVisual;
+        pub const ShapeVisual = VisualTypesFor.ShapeVisual;
+        pub const TextVisual = VisualTypesFor.TextVisual;
+
         // ============================================
-        // Visual Types
+        // Storage Types (via generic VisualStorage)
         // ============================================
 
-        /// Get the default layer (first world-space layer, or first layer)
-        pub fn getDefaultLayer() LayerEnum {
-            for (sorted_layers) |layer| {
-                if (layer.config().space == .world) {
-                    return layer;
-                }
-            }
-            return sorted_layers[0];
-        }
-
-        /// Sprite visual data
-        pub const SpriteVisual = struct {
-            // TODO: texture field is unused - rendering uses sprite_name lookup instead.
-            // Consider removing or implementing direct texture rendering path.
-            texture: TextureId = .invalid,
-            sprite_name: []const u8 = "",
-            scale: f32 = 1,
-            rotation: f32 = 0,
-            flip_x: bool = false,
-            flip_y: bool = false,
-            tint: Color = Color.white,
-            z_index: u8 = 128,
-            visible: bool = true,
-            pivot: Pivot = .center,
-            pivot_x: f32 = 0.5,
-            pivot_y: f32 = 0.5,
-            layer: LayerEnum = getDefaultLayer(),
-            /// Sizing mode for container-based rendering
-            size_mode: SizeMode = .none,
-            /// Container dimensions (null = infer from layer space)
-            container: ?Container = null,
-        };
-
-        /// Shape visual data
-        pub const ShapeVisual = struct {
-            shape: Shape,
-            color: Color = Color.white,
-            rotation: f32 = 0,
-            z_index: u8 = 128,
-            visible: bool = true,
-            layer: LayerEnum = getDefaultLayer(),
-
-            // Helper constructors
-            pub fn circle(radius: f32) ShapeVisual {
-                return .{ .shape = .{ .circle = .{ .radius = radius } } };
-            }
-
-            pub fn circleOn(radius: f32, layer: LayerEnum) ShapeVisual {
-                return .{ .shape = .{ .circle = .{ .radius = radius } }, .layer = layer };
-            }
-
-            pub fn rectangle(width: f32, height: f32) ShapeVisual {
-                return .{ .shape = .{ .rectangle = .{ .width = width, .height = height } } };
-            }
-
-            pub fn rectangleOn(width: f32, height: f32, layer: LayerEnum) ShapeVisual {
-                return .{ .shape = .{ .rectangle = .{ .width = width, .height = height } }, .layer = layer };
-            }
-
-            pub fn line(end_x: f32, end_y: f32, thickness: f32) ShapeVisual {
-                return .{ .shape = .{ .line = .{ .end = .{ .x = end_x, .y = end_y }, .thickness = thickness } } };
-            }
-
-            pub fn lineOn(end_x: f32, end_y: f32, thickness: f32, layer: LayerEnum) ShapeVisual {
-                return .{ .shape = .{ .line = .{ .end = .{ .x = end_x, .y = end_y }, .thickness = thickness } }, .layer = layer };
-            }
-
-            pub fn triangle(p2: Position, p3: Position) ShapeVisual {
-                return .{ .shape = .{ .triangle = .{ .p2 = p2, .p3 = p3 } } };
-            }
-
-            pub fn triangleOn(p2: Position, p3: Position, layer: LayerEnum) ShapeVisual {
-                return .{ .shape = .{ .triangle = .{ .p2 = p2, .p3 = p3 } }, .layer = layer };
-            }
-
-            pub fn polygon(sides: i32, radius: f32) ShapeVisual {
-                return .{ .shape = .{ .polygon = .{ .sides = sides, .radius = radius } } };
-            }
-
-            pub fn polygonOn(sides: i32, radius: f32, layer: LayerEnum) ShapeVisual {
-                return .{ .shape = .{ .polygon = .{ .sides = sides, .radius = radius } }, .layer = layer };
-            }
-        };
-
-        /// Text visual data
-        pub const TextVisual = struct {
-            // TODO: font field is unused - rendering uses default font.
-            // Implement font loading and selection when needed.
-            font: FontId = .invalid,
-            text: [:0]const u8 = "",
-            size: f32 = 16,
-            color: Color = Color.white,
-            z_index: u8 = 128,
-            visible: bool = true,
-            layer: LayerEnum = getDefaultLayer(),
-        };
+        const SpriteStorage = visual_storage.VisualStorage(SpriteVisual, .sprite);
+        const ShapeStorage = visual_storage.VisualStorage(ShapeVisual, .shape);
+        const TextStorage = visual_storage.VisualStorage(TextVisual, .text);
 
         // ============================================
         // Engine State
@@ -329,10 +147,10 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         camera_manager: CameraManager,
         multi_camera_enabled: bool,
 
-        // Internal storage - keyed by EntityId
-        sprites: std.AutoArrayHashMap(EntityId, SpriteEntry),
-        shapes: std.AutoArrayHashMap(EntityId, ShapeEntry),
-        texts: std.AutoArrayHashMap(EntityId, TextEntry),
+        // Internal storage - using generic VisualStorage
+        sprites: SpriteStorage,
+        shapes: ShapeStorage,
+        texts: TextStorage,
 
         // Per-layer z-index bucket storage
         layer_buckets: [layer_count]ZBuckets,
@@ -352,21 +170,6 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
 
         // Texture ID counter
         next_texture_id: u32,
-
-        const SpriteEntry = struct {
-            visual: SpriteVisual,
-            position: Position,
-        };
-
-        const ShapeEntry = struct {
-            visual: ShapeVisual,
-            position: Position,
-        };
-
-        const TextEntry = struct {
-            visual: TextVisual,
-            position: Position,
-        };
 
         // ==================== Lifecycle ====================
 
@@ -406,9 +209,9 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                 .camera = Camera.init(),
                 .camera_manager = CameraManager.init(),
                 .multi_camera_enabled = false,
-                .sprites = std.AutoArrayHashMap(EntityId, SpriteEntry).init(allocator),
-                .shapes = std.AutoArrayHashMap(EntityId, ShapeEntry).init(allocator),
-                .texts = std.AutoArrayHashMap(EntityId, TextEntry).init(allocator),
+                .sprites = SpriteStorage.init(allocator),
+                .shapes = ShapeStorage.init(allocator),
+                .texts = TextStorage.init(allocator),
                 .layer_buckets = layer_buckets,
                 .layer_visibility = layer_visibility,
                 .camera_layer_masks = camera_layer_masks,
@@ -492,225 +295,70 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         // ==================== Sprite Management ====================
 
         pub fn createSprite(self: *Self, id: EntityId, visual: SpriteVisual, pos: Position) void {
-            // If sprite already exists, remove old bucket entry first to prevent duplicates
-            if (self.sprites.get(id)) |existing| {
-                const old_layer_idx = @intFromEnum(existing.visual.layer);
-                _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, existing.visual.z_index);
-            }
-
-            self.sprites.put(id, .{ .visual = visual, .position = pos }) catch return;
-            const layer_idx = @intFromEnum(visual.layer);
-            self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch {
-                // Bucket insert failed - remove map entry to maintain consistency
-                _ = self.sprites.swapRemove(id);
-                return;
-            };
+            self.sprites.create(id, visual, pos, &self.layer_buckets);
         }
 
         pub fn updateSprite(self: *Self, id: EntityId, visual: SpriteVisual) void {
-            if (self.sprites.getPtr(id)) |entry| {
-                const old_z = entry.visual.z_index;
-                const old_layer = entry.visual.layer;
-
-                if (old_layer != visual.layer) {
-                    // Layer change: remove from old bucket, insert into new, then update visual
-                    const old_layer_idx = @intFromEnum(old_layer);
-                    const new_layer_idx = @intFromEnum(visual.layer);
-                    _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, old_z);
-                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, visual.z_index) catch {
-                        // Rollback: re-insert into old bucket to maintain consistency
-                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .sprite }, old_z) catch {
-                            log.err("Failed to rollback sprite layer change for entity {}", .{id.toInt()});
-                        };
-                        return;
-                    };
-                    entry.visual = visual;
-                } else if (old_z != visual.z_index) {
-                    const layer_idx = @intFromEnum(visual.layer);
-                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .sprite }, old_z, visual.z_index) catch |err| {
-                        log.err("Failed to change sprite z-index for entity {}: {}", .{ id.toInt(), err });
-                        return;
-                    };
-                    entry.visual = visual;
-                } else {
-                    // No bucket changes needed, just update visual
-                    entry.visual = visual;
-                }
-            }
+            self.sprites.update(id, visual, &self.layer_buckets);
         }
 
         pub fn destroySprite(self: *Self, id: EntityId) void {
-            if (self.sprites.get(id)) |entry| {
-                const layer_idx = @intFromEnum(entry.visual.layer);
-                _ = self.layer_buckets[layer_idx].remove(.{ .entity_id = id, .item_type = .sprite }, entry.visual.z_index);
-            }
-            _ = self.sprites.swapRemove(id);
+            self.sprites.destroy(id, &self.layer_buckets);
         }
 
         pub fn getSprite(self: *const Self, id: EntityId) ?SpriteVisual {
-            if (self.sprites.get(id)) |entry| {
-                return entry.visual;
-            }
-            return null;
+            return self.sprites.get(id);
         }
 
         // ==================== Shape Management ====================
 
         pub fn createShape(self: *Self, id: EntityId, visual: ShapeVisual, pos: Position) void {
-            // If shape already exists, remove old bucket entry first to prevent duplicates
-            if (self.shapes.get(id)) |existing| {
-                const old_layer_idx = @intFromEnum(existing.visual.layer);
-                _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, existing.visual.z_index);
-            }
-
-            self.shapes.put(id, .{ .visual = visual, .position = pos }) catch return;
-            const layer_idx = @intFromEnum(visual.layer);
-            self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch {
-                // Bucket insert failed - remove map entry to maintain consistency
-                _ = self.shapes.swapRemove(id);
-                return;
-            };
+            self.shapes.create(id, visual, pos, &self.layer_buckets);
         }
 
         pub fn updateShape(self: *Self, id: EntityId, visual: ShapeVisual) void {
-            if (self.shapes.getPtr(id)) |entry| {
-                const old_z = entry.visual.z_index;
-                const old_layer = entry.visual.layer;
-
-                if (old_layer != visual.layer) {
-                    // Layer change: remove from old bucket, insert into new, then update visual
-                    const old_layer_idx = @intFromEnum(old_layer);
-                    const new_layer_idx = @intFromEnum(visual.layer);
-                    _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, old_z);
-                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, visual.z_index) catch {
-                        // Rollback: re-insert into old bucket to maintain consistency
-                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .shape }, old_z) catch {
-                            log.err("Failed to rollback shape layer change for entity {}", .{id.toInt()});
-                        };
-                        return;
-                    };
-                    entry.visual = visual;
-                } else if (old_z != visual.z_index) {
-                    const layer_idx = @intFromEnum(visual.layer);
-                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .shape }, old_z, visual.z_index) catch |err| {
-                        log.err("Failed to change shape z-index for entity {}: {}", .{ id.toInt(), err });
-                        return;
-                    };
-                    entry.visual = visual;
-                } else {
-                    // No bucket changes needed, just update visual
-                    entry.visual = visual;
-                }
-            }
+            self.shapes.update(id, visual, &self.layer_buckets);
         }
 
         pub fn destroyShape(self: *Self, id: EntityId) void {
-            if (self.shapes.get(id)) |entry| {
-                const layer_idx = @intFromEnum(entry.visual.layer);
-                _ = self.layer_buckets[layer_idx].remove(.{ .entity_id = id, .item_type = .shape }, entry.visual.z_index);
-            }
-            _ = self.shapes.swapRemove(id);
+            self.shapes.destroy(id, &self.layer_buckets);
         }
 
         pub fn getShape(self: *const Self, id: EntityId) ?ShapeVisual {
-            if (self.shapes.get(id)) |entry| {
-                return entry.visual;
-            }
-            return null;
+            return self.shapes.get(id);
         }
 
         // ==================== Text Management ====================
 
         pub fn createText(self: *Self, id: EntityId, visual: TextVisual, pos: Position) void {
-            // If text already exists, remove old bucket entry first to prevent duplicates
-            if (self.texts.get(id)) |existing| {
-                const old_layer_idx = @intFromEnum(existing.visual.layer);
-                _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .text }, existing.visual.z_index);
-            }
-
-            self.texts.put(id, .{ .visual = visual, .position = pos }) catch return;
-            const layer_idx = @intFromEnum(visual.layer);
-            self.layer_buckets[layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch {
-                // Bucket insert failed - remove map entry to maintain consistency
-                _ = self.texts.swapRemove(id);
-                return;
-            };
+            self.texts.create(id, visual, pos, &self.layer_buckets);
         }
 
         pub fn updateText(self: *Self, id: EntityId, visual: TextVisual) void {
-            if (self.texts.getPtr(id)) |entry| {
-                const old_z = entry.visual.z_index;
-                const old_layer = entry.visual.layer;
-
-                if (old_layer != visual.layer) {
-                    // Layer change: remove from old bucket, insert into new, then update visual
-                    const old_layer_idx = @intFromEnum(old_layer);
-                    const new_layer_idx = @intFromEnum(visual.layer);
-                    _ = self.layer_buckets[old_layer_idx].remove(.{ .entity_id = id, .item_type = .text }, old_z);
-                    self.layer_buckets[new_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, visual.z_index) catch {
-                        // Rollback: re-insert into old bucket to maintain consistency
-                        self.layer_buckets[old_layer_idx].insert(.{ .entity_id = id, .item_type = .text }, old_z) catch {
-                            log.err("Failed to rollback text layer change for entity {}", .{id.toInt()});
-                        };
-                        return;
-                    };
-                    entry.visual = visual;
-                } else if (old_z != visual.z_index) {
-                    const layer_idx = @intFromEnum(visual.layer);
-                    self.layer_buckets[layer_idx].changeZIndex(.{ .entity_id = id, .item_type = .text }, old_z, visual.z_index) catch |err| {
-                        log.err("Failed to change text z-index for entity {}: {}", .{ id.toInt(), err });
-                        return;
-                    };
-                    entry.visual = visual;
-                } else {
-                    // No bucket changes needed, just update visual
-                    entry.visual = visual;
-                }
-            }
+            self.texts.update(id, visual, &self.layer_buckets);
         }
 
         pub fn destroyText(self: *Self, id: EntityId) void {
-            if (self.texts.get(id)) |entry| {
-                const layer_idx = @intFromEnum(entry.visual.layer);
-                _ = self.layer_buckets[layer_idx].remove(.{ .entity_id = id, .item_type = .text }, entry.visual.z_index);
-            }
-            _ = self.texts.swapRemove(id);
+            self.texts.destroy(id, &self.layer_buckets);
         }
 
         pub fn getText(self: *const Self, id: EntityId) ?TextVisual {
-            if (self.texts.get(id)) |entry| {
-                return entry.visual;
-            }
-            return null;
+            return self.texts.get(id);
         }
 
         // ==================== Position Management ====================
 
         pub fn updatePosition(self: *Self, id: EntityId, pos: Position) void {
-            if (self.sprites.getPtr(id)) |entry| {
-                entry.position = pos;
-                return;
-            }
-            if (self.shapes.getPtr(id)) |entry| {
-                entry.position = pos;
-                return;
-            }
-            if (self.texts.getPtr(id)) |entry| {
-                entry.position = pos;
-                return;
-            }
+            // Try each storage type
+            self.sprites.updatePosition(id, pos);
+            self.shapes.updatePosition(id, pos);
+            self.texts.updatePosition(id, pos);
         }
 
         pub fn getPosition(self: *const Self, id: EntityId) ?Position {
-            if (self.sprites.get(id)) |entry| {
-                return entry.position;
-            }
-            if (self.shapes.get(id)) |entry| {
-                return entry.position;
-            }
-            if (self.texts.get(id)) |entry| {
-                return entry.position;
-            }
+            if (self.sprites.getPosition(id)) |pos| return pos;
+            if (self.shapes.getPosition(id)) |pos| return pos;
+            if (self.texts.getPosition(id)) |pos| return pos;
             return null;
         }
 
@@ -800,6 +448,15 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         }
 
         fn renderSingleCamera(self: *Self) void {
+            // Get camera viewport for camera_viewport container support
+            const cam_vp = self.camera.getViewport();
+            const cam_viewport_rect: Container.Rect = .{
+                .x = cam_vp.x,
+                .y = cam_vp.y,
+                .width = cam_vp.width,
+                .height = cam_vp.height,
+            };
+
             for (sorted_layers) |layer| {
                 const layer_idx = @intFromEnum(layer);
 
@@ -817,7 +474,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     if (!self.isVisible(item)) continue;
 
                     switch (item.item_type) {
-                        .sprite => self.renderSprite(item.entity_id, self.getCamera()),
+                        .sprite => self.renderSprite(item.entity_id, cam_viewport_rect),
                         .shape => self.renderShape(item.entity_id),
                         .text => self.renderText(item.entity_id),
                     }
@@ -842,6 +499,12 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                 }
 
                 const viewport = cam.getViewport();
+                const cam_viewport_rect: Container.Rect = .{
+                    .x = viewport.x,
+                    .y = viewport.y,
+                    .width = viewport.width,
+                    .height = viewport.height,
+                };
 
                 for (sorted_layers) |layer| {
                     const layer_idx = @intFromEnum(layer);
@@ -862,7 +525,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                         switch (item.item_type) {
                             .sprite => {
                                 if (cfg.space == .screen or self.shouldRenderSpriteInViewport(item.entity_id, viewport)) {
-                                    self.renderSprite(item.entity_id, cam);
+                                    self.renderSprite(item.entity_id, cam_viewport_rect);
                                 }
                             },
                             .shape => {
@@ -886,7 +549,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         }
 
         fn shouldRenderSpriteInViewport(self: *Self, id: EntityId, viewport: Camera.ViewportRect) bool {
-            const entry = self.sprites.get(id) orelse return false;
+            const entry = self.sprites.getEntryConst(id) orelse return false;
             const visual = entry.visual;
             const pos = entry.position;
 
@@ -905,54 +568,20 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             return true;
         }
 
-        const ShapeBounds = struct { x: f32, y: f32, w: f32, h: f32 };
-
         fn shouldRenderShapeInViewport(self: *const Self, id: EntityId, viewport: Camera.ViewportRect) bool {
-            const entry = self.shapes.get(id) orelse return false;
+            const entry = self.shapes.getEntryConst(id) orelse return false;
             const visual = entry.visual;
             const pos = entry.position;
 
-            const bounds: ShapeBounds = switch (visual.shape) {
-                .circle => |c| .{
-                    .x = pos.x - c.radius,
-                    .y = pos.y - c.radius,
-                    .w = c.radius * 2,
-                    .h = c.radius * 2,
-                },
-                .rectangle => |r| .{
-                    .x = pos.x,
-                    .y = pos.y,
-                    .w = r.width,
-                    .h = r.height,
-                },
-                .line => |l| .{
-                    .x = @min(pos.x, pos.x + l.end.x),
-                    .y = @min(pos.y, pos.y + l.end.y),
-                    .w = @abs(l.end.x) + l.thickness,
-                    .h = @abs(l.end.y) + l.thickness,
-                },
-                .triangle => |t| .{
-                    .x = @min(pos.x, @min(pos.x + t.p2.x, pos.x + t.p3.x)),
-                    .y = @min(pos.y, @min(pos.y + t.p2.y, pos.y + t.p3.y)),
-                    .w = @max(pos.x, @max(pos.x + t.p2.x, pos.x + t.p3.x)) - @min(pos.x, @min(pos.x + t.p2.x, pos.x + t.p3.x)),
-                    .h = @max(pos.y, @max(pos.y + t.p2.y, pos.y + t.p3.y)) - @min(pos.y, @min(pos.y + t.p2.y, pos.y + t.p3.y)),
-                },
-                .polygon => |p| .{
-                    .x = pos.x - p.radius,
-                    .y = pos.y - p.radius,
-                    .w = p.radius * 2,
-                    .h = p.radius * 2,
-                },
-            };
-
+            const bounds = Helpers.getShapeBounds(visual.shape, pos);
             return viewport.overlapsRect(bounds.x, bounds.y, bounds.w, bounds.h);
         }
 
         fn isVisible(self: *const Self, item: RenderItem) bool {
             return switch (item.item_type) {
-                .sprite => if (self.sprites.get(item.entity_id)) |e| e.visual.visible else false,
-                .shape => if (self.shapes.get(item.entity_id)) |e| e.visual.visible else false,
-                .text => if (self.texts.get(item.entity_id)) |e| e.visual.visible else false,
+                .sprite => if (self.sprites.get(item.entity_id)) |v| v.visible else false,
+                .shape => if (self.shapes.get(item.entity_id)) |v| v.visible else false,
+                .text => if (self.texts.get(item.entity_id)) |v| v.visible else false,
             };
         }
 
@@ -997,8 +626,8 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             BackendType.endMode2D();
         }
 
-        fn renderSprite(self: *Self, id: EntityId, cam: *const Camera) void {
-            const entry = self.sprites.get(id) orelse return;
+        fn renderSprite(self: *Self, id: EntityId, cam_viewport: ?Container.Rect) void {
+            const entry = self.sprites.getEntryConst(id) orelse return;
             const visual = entry.visual;
             const pos = entry.position;
 
@@ -1010,382 +639,76 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     const sprite_w: f32 = @floatFromInt(sprite.width);
                     const sprite_h: f32 = @floatFromInt(sprite.height);
 
-                    const src_rect = BackendType.Rectangle{
-                        .x = @floatFromInt(sprite.x),
-                        .y = @floatFromInt(sprite.y),
-                        .width = if (visual.flip_x) -sprite_w else sprite_w,
-                        .height = if (visual.flip_y) -sprite_h else sprite_h,
-                    };
+                    // Base source rectangle (un-flipped - flipping handled by render helpers)
+                    const src_rect = Helpers.createSrcRect(sprite.x, sprite.y, sprite.width, sprite.height);
 
                     // Handle sizing modes
                     if (visual.size_mode == .none) {
                         // Default behavior: use scale
-                        const scaled_width = sprite_w * visual.scale;
-                        const scaled_height = sprite_h * visual.scale;
-
-                        const dest_rect = BackendType.Rectangle{
-                            .x = pos.x,
-                            .y = pos.y,
-                            .width = scaled_width,
-                            .height = scaled_height,
-                        };
-
-                        const pivot_origin = visual.pivot.getOrigin(scaled_width, scaled_height, visual.pivot_x, visual.pivot_y);
-                        const origin = BackendType.Vector2{
-                            .x = pivot_origin.x,
-                            .y = pivot_origin.y,
-                        };
-
-                        BackendType.drawTexturePro(
+                        Helpers.renderBasicSprite(
                             result.atlas.texture,
                             src_rect,
-                            dest_rect,
-                            origin,
+                            sprite_w,
+                            sprite_h,
+                            pos,
+                            visual.scale,
+                            visual.pivot,
+                            visual.pivot_x,
+                            visual.pivot_y,
                             visual.rotation,
+                            visual.flip_x,
+                            visual.flip_y,
                             tint,
                         );
                     } else {
-                        // Sized mode: resolve container
-                        const cont_rect = resolveContainer(visual, sprite_w, sprite_h, cam);
-                        renderSizedSprite(result, visual, pos, src_rect, sprite_w, sprite_h, cont_rect, tint, cam);
+                        // Sized mode: resolve container and render
+                        const layer_cfg = visual.layer.config();
+                        const cont_rect = Helpers.resolveContainer(visual.container, layer_cfg.space, sprite_w, sprite_h, cam_viewport);
+                        const screen_vp: ?Helpers.ScreenViewport = if (layer_cfg.space == .screen)
+                            .{
+                                .width = @floatFromInt(BackendType.getScreenWidth()),
+                                .height = @floatFromInt(BackendType.getScreenHeight()),
+                            }
+                        else
+                            null;
+
+                        Helpers.renderSizedSprite(
+                            result.atlas.texture,
+                            result.sprite.x,
+                            result.sprite.y,
+                            src_rect,
+                            sprite_w,
+                            sprite_h,
+                            pos,
+                            visual.size_mode,
+                            cont_rect,
+                            visual.pivot,
+                            visual.pivot_x,
+                            visual.pivot_y,
+                            visual.rotation,
+                            visual.flip_x,
+                            visual.flip_y,
+                            visual.scale,
+                            tint,
+                            screen_vp,
+                        );
                     }
                 }
             }
         }
 
-        /// Returns screen dimensions as a Container.Rect at origin.
-        fn getScreenRect() Container.Rect {
-            return Container.Rect{
-                .x = 0,
-                .y = 0,
-                .width = @floatFromInt(BackendType.getScreenWidth()),
-                .height = @floatFromInt(BackendType.getScreenHeight()),
-            };
-        }
-
-        /// Resolves a Container specification to concrete dimensions (Rect).
-        fn resolveContainer(visual: SpriteVisual, sprite_w: f32, sprite_h: f32, cam: *const Camera) Container.Rect {
-            const c = visual.container orelse .infer;
-            return switch (c) {
-                .infer => resolveInferredContainer(visual, sprite_w, sprite_h),
-                .viewport => getScreenRect(),
-                .camera_viewport => getCameraViewportRect(cam),
-                .explicit => |rect| rect,
-            };
-        }
-
-        /// Returns the camera's world-space visible area as a Container.Rect.
-        fn getCameraViewportRect(cam: *const Camera) Container.Rect {
-            const viewport = cam.getViewport();
-            return Container.Rect{
-                .x = viewport.x,
-                .y = viewport.y,
-                .width = viewport.width,
-                .height = viewport.height,
-            };
-        }
-
-        fn resolveInferredContainer(visual: SpriteVisual, sprite_w: f32, sprite_h: f32) Container.Rect {
-            const layer_cfg = visual.layer.config();
-            if (layer_cfg.space == .screen) {
-                return getScreenRect();
-            }
-            // World-space with no container: use sprite's natural size
-            // (sized modes ignore visual.scale, so we don't apply it here)
-            return Container.Rect{
-                .x = 0,
-                .y = 0,
-                .width = sprite_w,
-                .height = sprite_h,
-            };
-        }
-
-        fn renderSizedSprite(
-            result: anytype,
-            visual: SpriteVisual,
-            pos: Position,
-            src_rect: BackendType.Rectangle,
-            sprite_w: f32,
-            sprite_h: f32,
-            cont_rect: Container.Rect,
-            tint: BackendType.Color,
-            cam: *const Camera,
-        ) void {
-            const cont_w = cont_rect.width;
-            const cont_h = cont_rect.height;
-            // Base position includes container offset (for UI panels not at origin)
-            const base_x = pos.x + cont_rect.x;
-            const base_y = pos.y + cont_rect.y;
-
-            // Guard against division by zero from invalid sprite dimensions
-            if (sprite_w <= 0 or sprite_h <= 0) {
-                log.warn("Skipping sized sprite render: invalid sprite dimensions ({d}x{d})", .{ sprite_w, sprite_h });
-                return;
-            }
-
-            switch (visual.size_mode) {
-                .none => unreachable, // Handled above
-                // Note: stretch, cover, contain, scale_down modes ignore visual.scale field
-                // (scale is determined by container/sprite ratio). Only repeat uses visual.scale.
-                .stretch => {
-                    // Fill container exactly (may distort)
-                    const dest_rect = BackendType.Rectangle{
-                        .x = base_x,
-                        .y = base_y,
-                        .width = cont_w,
-                        .height = cont_h,
-                    };
-                    const pivot_origin = visual.pivot.getOrigin(cont_w, cont_h, visual.pivot_x, visual.pivot_y);
-                    const origin = BackendType.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
-                    BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
-                },
-                .cover => {
-                    // Scale to cover container using UV cropping (samples only visible portion)
-                    const crop = types.CoverCrop.calculate(
-                        sprite_w,
-                        sprite_h,
-                        cont_w,
-                        cont_h,
-                        visual.pivot_x,
-                        visual.pivot_y,
-                    ) orelse {
-                        log.warn("Skipping cover render: non-positive scale", .{});
-                        return;
-                    };
-
-                    // Compute cropped source rect (UV cropping)
-                    const src_x: f32 = @floatFromInt(result.sprite.x);
-                    const src_y: f32 = @floatFromInt(result.sprite.y);
-                    const cropped_src = BackendType.Rectangle{
-                        .x = src_x + crop.crop_x,
-                        .y = src_y + crop.crop_y,
-                        .width = if (visual.flip_x) -crop.visible_w else crop.visible_w,
-                        .height = if (visual.flip_y) -crop.visible_h else crop.visible_h,
-                    };
-
-                    // Draw cropped portion at container size
-                    const dest_rect = BackendType.Rectangle{
-                        .x = base_x,
-                        .y = base_y,
-                        .width = cont_w,
-                        .height = cont_h,
-                    };
-
-                    const pivot_origin = visual.pivot.getOrigin(cont_w, cont_h, visual.pivot_x, visual.pivot_y);
-                    const origin = BackendType.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
-                    BackendType.drawTexturePro(result.atlas.texture, cropped_src, dest_rect, origin, visual.rotation, tint);
-                },
-                .contain, .scale_down => {
-                    // Scale to fit inside container (letterboxed)
-                    const scale_x = cont_w / sprite_w;
-                    const scale_y = cont_h / sprite_h;
-                    var scale = @min(scale_x, scale_y);
-
-                    // scale_down: never scale up
-                    if (visual.size_mode == .scale_down) {
-                        scale = @min(scale, 1.0);
-                    }
-
-                    const dest_w = sprite_w * scale;
-                    const dest_h = sprite_h * scale;
-
-                    // Pivot determines where sprite sits in letterboxed area
-                    // pivot_x=0.5 (center) gives offset=0, centering in letterbox
-                    const padding_x = cont_w - dest_w;
-                    const padding_y = cont_h - dest_h;
-                    const offset_x = padding_x * (visual.pivot_x - 0.5);
-                    const offset_y = padding_y * (visual.pivot_y - 0.5);
-
-                    const dest_rect = BackendType.Rectangle{
-                        .x = base_x + offset_x,
-                        .y = base_y + offset_y,
-                        .width = dest_w,
-                        .height = dest_h,
-                    };
-                    const pivot_origin = visual.pivot.getOrigin(dest_w, dest_h, visual.pivot_x, visual.pivot_y);
-                    const origin = BackendType.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
-                    BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
-                },
-                .repeat => {
-                    // Tile sprite to fill container with viewport culling
-                    // Note: rotation applies per-tile, not to the tiled grid as a whole
-                    const scaled_w = sprite_w * visual.scale;
-                    const scaled_h = sprite_h * visual.scale;
-
-                    if (scaled_w <= 0 or scaled_h <= 0) {
-                        log.warn("Skipping repeat render: non-positive tile dimensions ({d}x{d})", .{ scaled_w, scaled_h });
-                        return;
-                    }
-
-                    // Calculate container's top-left based on pivot
-                    // Use getNormalized to correctly interpret the Pivot enum
-                    // (pivot_x/pivot_y fields default to 0.5, but .top_left should use 0,0)
-                    const normalized_pivot = visual.pivot.getNormalized(visual.pivot_x, visual.pivot_y);
-                    const container_tl_x = base_x - cont_w * normalized_pivot.x;
-                    const container_tl_y = base_y - cont_h * normalized_pivot.y;
-
-                    // Calculate total tile grid bounds with overflow protection
-                    const cols_float = @ceil(cont_w / scaled_w);
-                    const rows_float = @ceil(cont_h / scaled_h);
-                    const max_u32: f32 = @floatFromInt(std.math.maxInt(u32));
-                    if (cols_float > max_u32 or rows_float > max_u32) {
-                        log.warn("Repeat tile count overflow: {d}x{d} cols/rows exceed u32 max", .{ cols_float, rows_float });
-                        return;
-                    }
-                    const total_cols: u32 = @intFromFloat(cols_float);
-                    const total_rows: u32 = @intFromFloat(rows_float);
-
-                    // Limit tile count to prevent performance issues
-                    // Use u64 to prevent overflow in multiplication
-                    const max_tiles: u64 = 10000;
-                    const tile_count = @as(u64, total_cols) * @as(u64, total_rows);
-                    if (tile_count > max_tiles) {
-                        log.warn("Repeat tile count ({d}x{d}={d}) exceeds limit ({d}), skipping", .{ total_cols, total_rows, tile_count, max_tiles });
-                        return;
-                    }
-
-                    // Calculate visible tile range based on layer space
-                    const layer_cfg = visual.layer.config();
-                    var start_col: u32 = 0;
-                    var start_row: u32 = 0;
-                    var end_col: u32 = total_cols;
-                    var end_row: u32 = total_rows;
-
-                    if (layer_cfg.space == .screen) {
-                        // Screen-space layers: apply viewport culling using screen coordinates
-                        const vp_w: f32 = @floatFromInt(BackendType.getScreenWidth());
-                        const vp_h: f32 = @floatFromInt(BackendType.getScreenHeight());
-
-                        // Start tile: first tile that could be visible
-                        if (0 > container_tl_x) {
-                            start_col = @min(total_cols, @as(u32, @intFromFloat(@floor(-container_tl_x / scaled_w))));
-                        }
-                        if (0 > container_tl_y) {
-                            start_row = @min(total_rows, @as(u32, @intFromFloat(@floor(-container_tl_y / scaled_h))));
-                        }
-
-                        // End tile: last tile that could be visible
-                        const end_col_dist = vp_w - container_tl_x;
-                        const end_row_dist = vp_h - container_tl_y;
-                        if (end_col_dist > 0) {
-                            end_col = @min(total_cols, @as(u32, @intFromFloat(@ceil(end_col_dist / scaled_w))));
-                        } else {
-                            end_col = 0;
-                        }
-                        if (end_row_dist > 0) {
-                            end_row = @min(total_rows, @as(u32, @intFromFloat(@ceil(end_row_dist / scaled_h))));
-                        } else {
-                            end_row = 0;
-                        }
-                    }
-                    // For world-space layers, we draw all tiles since screen-space culling
-                    // would be incorrect (camera transforms are not accounted for here)
-
-                    // Enable scissor clipping to container bounds
-                    // This prevents tiles from overflowing the container
-                    // Note: Scissor operates in screen coordinates, so we must transform
-                    // world coordinates through the camera for world-space layers.
-                    const scissor_x: i32, const scissor_y: i32, const scissor_w: i32, const scissor_h: i32 = blk: {
-                        if (layer_cfg.space == .world) {
-                            // Transform world coordinates to screen coordinates
-                            const screen_tl = cam.worldToScreen(container_tl_x, container_tl_y);
-                            const screen_br = cam.worldToScreen(container_tl_x + cont_w, container_tl_y + cont_h);
-                            break :blk .{
-                                @intFromFloat(screen_tl.x),
-                                @intFromFloat(screen_tl.y),
-                                @intFromFloat(screen_br.x - screen_tl.x),
-                                @intFromFloat(screen_br.y - screen_tl.y),
-                            };
-                        } else {
-                            // Screen-space: coordinates are already in screen space
-                            break :blk .{
-                                @intFromFloat(container_tl_x),
-                                @intFromFloat(container_tl_y),
-                                @intFromFloat(cont_w),
-                                @intFromFloat(cont_h),
-                            };
-                        }
-                    };
-                    BackendType.beginScissorMode(scissor_x, scissor_y, scissor_w, scissor_h);
-
-                    // Draw visible tiles
-                    var row: u32 = start_row;
-                    while (row < end_row) : (row += 1) {
-                        var col: u32 = start_col;
-                        while (col < end_col) : (col += 1) {
-                            const tile_x = container_tl_x + @as(f32, @floatFromInt(col)) * scaled_w;
-                            const tile_y = container_tl_y + @as(f32, @floatFromInt(row)) * scaled_h;
-
-                            const dest_rect = BackendType.Rectangle{
-                                .x = tile_x,
-                                .y = tile_y,
-                                .width = scaled_w,
-                                .height = scaled_h,
-                            };
-                            const origin = BackendType.Vector2{ .x = 0, .y = 0 };
-                            BackendType.drawTexturePro(result.atlas.texture, src_rect, dest_rect, origin, visual.rotation, tint);
-                        }
-                    }
-
-                    BackendType.endScissorMode();
-                },
-            }
-        }
-
+        /// Render a shape visual by entity ID.
+        /// Shape rendering logic is delegated to Helpers.renderShape.
         fn renderShape(self: *Self, id: EntityId) void {
-            const entry = self.shapes.get(id) orelse return;
-            const visual = entry.visual;
-            const pos = entry.position;
-
-            const col = BackendType.color(visual.color.r, visual.color.g, visual.color.b, visual.color.a);
-
-            switch (visual.shape) {
-                .circle => |circle| {
-                    if (circle.fill == .filled) {
-                        BackendType.drawCircle(pos.x, pos.y, circle.radius, col);
-                    } else {
-                        BackendType.drawCircleLines(pos.x, pos.y, circle.radius, col);
-                    }
-                },
-                .rectangle => |rect| {
-                    if (rect.fill == .filled) {
-                        BackendType.drawRectangleV(pos.x, pos.y, rect.width, rect.height, col);
-                    } else {
-                        BackendType.drawRectangleLinesV(pos.x, pos.y, rect.width, rect.height, col);
-                    }
-                },
-                .line => |l| {
-                    if (l.thickness > 1) {
-                        BackendType.drawLineEx(pos.x, pos.y, pos.x + l.end.x, pos.y + l.end.y, l.thickness, col);
-                    } else {
-                        BackendType.drawLine(pos.x, pos.y, pos.x + l.end.x, pos.y + l.end.y, col);
-                    }
-                },
-                .triangle => |tri| {
-                    if (tri.fill == .filled) {
-                        BackendType.drawTriangle(pos.x, pos.y, pos.x + tri.p2.x, pos.y + tri.p2.y, pos.x + tri.p3.x, pos.y + tri.p3.y, col);
-                    } else {
-                        BackendType.drawTriangleLines(pos.x, pos.y, pos.x + tri.p2.x, pos.y + tri.p2.y, pos.x + tri.p3.x, pos.y + tri.p3.y, col);
-                    }
-                },
-                .polygon => |poly| {
-                    if (poly.fill == .filled) {
-                        BackendType.drawPoly(pos.x, pos.y, poly.sides, poly.radius, visual.rotation, col);
-                    } else {
-                        BackendType.drawPolyLines(pos.x, pos.y, poly.sides, poly.radius, visual.rotation, col);
-                    }
-                },
-            }
+            const entry = self.shapes.getEntryConst(id) orelse return;
+            Helpers.renderShape(entry.visual.shape, entry.position, entry.visual.color, entry.visual.rotation);
         }
 
+        /// Render a text visual by entity ID.
+        /// Text rendering logic is delegated to Helpers.renderText.
         fn renderText(self: *Self, id: EntityId) void {
-            const entry = self.texts.get(id) orelse return;
-            const visual = entry.visual;
-            const pos = entry.position;
-
-            const col = BackendType.color(visual.color.r, visual.color.g, visual.color.b, visual.color.a);
-
-            BackendType.drawText(visual.text.ptr, @intFromFloat(pos.x), @intFromFloat(pos.y), @intFromFloat(visual.size), col);
+            const entry = self.texts.getEntryConst(id) orelse return;
+            Helpers.renderText(entry.visual.text, entry.position, entry.visual.size, entry.visual.color);
         }
 
         // ==================== Queries ====================
