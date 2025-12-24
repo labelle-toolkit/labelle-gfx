@@ -385,6 +385,52 @@ pub fn Backend(comptime Impl: type) type {
                 Impl.endScissorMode();
             }
         }
+
+        // Fullscreen functions
+
+        /// Toggle between fullscreen and windowed mode
+        pub inline fn toggleFullscreen() void {
+            if (@hasDecl(Impl, "toggleFullscreen")) {
+                Impl.toggleFullscreen();
+            }
+        }
+
+        /// Set fullscreen mode explicitly
+        pub inline fn setFullscreen(fullscreen: bool) void {
+            if (@hasDecl(Impl, "setFullscreen")) {
+                Impl.setFullscreen(fullscreen);
+            } else if (@hasDecl(Impl, "toggleFullscreen")) {
+                // Fallback: use toggle if explicit set isn't available
+                const current = isWindowFullscreen();
+                if (current != fullscreen) {
+                    Impl.toggleFullscreen();
+                }
+            }
+        }
+
+        /// Check if window is currently in fullscreen mode
+        pub inline fn isWindowFullscreen() bool {
+            if (@hasDecl(Impl, "isWindowFullscreen")) {
+                return Impl.isWindowFullscreen();
+            }
+            return false;
+        }
+
+        /// Get the monitor width (for fullscreen resolution)
+        pub inline fn getMonitorWidth() i32 {
+            if (@hasDecl(Impl, "getMonitorWidth")) {
+                return Impl.getMonitorWidth();
+            }
+            return getScreenWidth();
+        }
+
+        /// Get the monitor height (for fullscreen resolution)
+        pub inline fn getMonitorHeight() i32 {
+            if (@hasDecl(Impl, "getMonitorHeight")) {
+                return Impl.getMonitorHeight();
+            }
+            return getScreenHeight();
+        }
     };
 }
 
@@ -393,4 +439,5 @@ pub const BackendError = error{
     TextureLoadFailed,
     FileNotFound,
     InvalidFormat,
+    InitializationFailed,
 };

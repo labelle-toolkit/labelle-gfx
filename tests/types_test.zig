@@ -258,3 +258,154 @@ test "resolveContainer with viewport always uses screen dimensions" {
     try testing.expectApproxEqAbs(@as(f32, 800), result.width, 0.001);
     try testing.expectApproxEqAbs(@as(f32, 600), result.height, 0.001);
 }
+
+// ============================================================================
+// Fullscreen Tests
+// ============================================================================
+
+test "MockBackend toggleFullscreen changes state" {
+    MockBackend.reset();
+    try testing.expect(!MockBackend.isWindowFullscreen());
+
+    MockBackend.toggleFullscreen();
+    try testing.expect(MockBackend.isWindowFullscreen());
+
+    MockBackend.toggleFullscreen();
+    try testing.expect(!MockBackend.isWindowFullscreen());
+}
+
+test "MockBackend setFullscreen sets state explicitly" {
+    MockBackend.reset();
+    try testing.expect(!MockBackend.isWindowFullscreen());
+
+    MockBackend.setFullscreen(true);
+    try testing.expect(MockBackend.isWindowFullscreen());
+
+    MockBackend.setFullscreen(true); // Setting same state should not change
+    try testing.expect(MockBackend.isWindowFullscreen());
+
+    MockBackend.setFullscreen(false);
+    try testing.expect(!MockBackend.isWindowFullscreen());
+}
+
+test "MockBackend fullscreen changes screen size to monitor size" {
+    MockBackend.reset();
+    MockBackend.setScreenSize(800, 600);
+    MockBackend.setMonitorSize(1920, 1080);
+
+    try testing.expectEqual(@as(i32, 800), MockBackend.getScreenWidth());
+    try testing.expectEqual(@as(i32, 600), MockBackend.getScreenHeight());
+
+    MockBackend.toggleFullscreen();
+
+    // In fullscreen, screen size should match monitor size
+    try testing.expectEqual(@as(i32, 1920), MockBackend.getScreenWidth());
+    try testing.expectEqual(@as(i32, 1080), MockBackend.getScreenHeight());
+}
+
+test "MockBackend getMonitorWidth and getMonitorHeight" {
+    MockBackend.reset();
+    MockBackend.setMonitorSize(2560, 1440);
+
+    try testing.expectEqual(@as(i32, 2560), MockBackend.getMonitorWidth());
+    try testing.expectEqual(@as(i32, 1440), MockBackend.getMonitorHeight());
+}
+
+// ============================================================================
+// Screen Size Change Tests
+// ============================================================================
+
+const ScreenSizeChange = gfx.ScreenSizeChange;
+
+test "ScreenSizeChange.hasChanged returns true when dimensions differ" {
+    const change = ScreenSizeChange{
+        .old_width = 800,
+        .old_height = 600,
+        .new_width = 1920,
+        .new_height = 1080,
+    };
+    try testing.expect(change.hasChanged());
+}
+
+test "ScreenSizeChange.hasChanged returns false when dimensions are same" {
+    const change = ScreenSizeChange{
+        .old_width = 800,
+        .old_height = 600,
+        .new_width = 800,
+        .new_height = 600,
+    };
+    try testing.expect(!change.hasChanged());
+}
+
+test "ScreenSizeChange.hasChanged detects width-only change" {
+    const change = ScreenSizeChange{
+        .old_width = 800,
+        .old_height = 600,
+        .new_width = 1024,
+        .new_height = 600,
+    };
+    try testing.expect(change.hasChanged());
+}
+
+test "ScreenSizeChange.hasChanged detects height-only change" {
+    const change = ScreenSizeChange{
+        .old_width = 800,
+        .old_height = 600,
+        .new_width = 800,
+        .new_height = 768,
+    };
+    try testing.expect(change.hasChanged());
+}
+
+// ============================================================================
+// Camera Manager Screen Resize Tests
+// ============================================================================
+
+const CameraManager = gfx.camera_manager.CameraManagerWith(gfx.Backend(MockBackend));
+
+test "CameraManager handleScreenSizeChange detects change" {
+    MockBackend.reset();
+    MockBackend.setScreenSize(800, 600);
+
+    var manager = CameraManager.init();
+    try testing.expectEqual(@as(i32, 800), manager.cached_screen_width);
+    try testing.expectEqual(@as(i32, 600), manager.cached_screen_height);
+
+    // Change screen size
+    MockBackend.setScreenSize(1024, 768);
+
+    const change = manager.handleScreenSizeChange();
+    try testing.expect(change != null);
+    try testing.expectEqual(@as(i32, 800), change.?.old_width);
+    try testing.expectEqual(@as(i32, 600), change.?.old_height);
+    try testing.expectEqual(@as(i32, 1024), change.?.new_width);
+    try testing.expectEqual(@as(i32, 768), change.?.new_height);
+}
+
+test "CameraManager handleScreenSizeChange returns null when unchanged" {
+    MockBackend.reset();
+    MockBackend.setScreenSize(800, 600);
+
+    var manager = CameraManager.init();
+
+    // No change
+    const change = manager.handleScreenSizeChange();
+    try testing.expect(change == null);
+}
+
+test "CameraManager recalculateViewports updates cached dimensions" {
+    MockBackend.reset();
+    MockBackend.setScreenSize(800, 600);
+
+    var manager = CameraManager.init();
+    manager.setupSplitScreen(.vertical_split);
+
+    try testing.expectEqual(@as(i32, 800), manager.cached_screen_width);
+
+    // Change screen size and recalculate
+    MockBackend.setScreenSize(1920, 1080);
+    manager.recalculateViewports();
+
+    try testing.expectEqual(@as(i32, 1920), manager.cached_screen_width);
+    try testing.expectEqual(@as(i32, 1080), manager.cached_screen_height);
+}

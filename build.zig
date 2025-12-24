@@ -94,6 +94,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "18_multi_camera", .path = "examples/18_multi_camera.zig", .desc = "Multi-camera support for split-screen and minimap" },
         .{ .name = "19_layers", .path = "examples/19_layers.zig", .desc = "Canvas/Layer system for organized rendering passes" },
         .{ .name = "20_sprite_sizing", .path = "examples/20_sprite_sizing/main.zig", .desc = "Container-based sprite sizing (stretch, cover, contain, repeat)" },
+        .{ .name = "21_fullscreen", .path = "examples/21_fullscreen/main.zig", .desc = "Fullscreen toggle with screen resize handling" },
     };
 
     // Example 12: Comptime animations (needs .zon imports)
@@ -205,6 +206,50 @@ pub fn build(b: *std.Build) void {
 
         const full_run_step = b.step("run-17_sdl_backend", "SDL backend example");
         full_run_step.dependOn(&run_cmd.step);
+    }
+
+    // Example 21 Fullscreen - Sokol backend variant
+    {
+        const sokol_fullscreen = b.addExecutable(.{
+            .name = "21_fullscreen_sokol",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/21_fullscreen/main_sokol.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle", .module = lib_mod },
+                    .{ .name = "sokol", .module = sokol },
+                },
+            }),
+        });
+
+        const run_cmd = b.addRunArtifact(sokol_fullscreen);
+        const run_step = b.step("run-example-21-sokol", "Fullscreen example (Sokol backend)");
+        run_step.dependOn(&run_cmd.step);
+    }
+
+    // Example 21 Fullscreen - SDL backend variant
+    {
+        const sdl_fullscreen_mod = b.createModule(.{
+            .root_source_file = b.path("examples/21_fullscreen/main_sdl.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "labelle", .module = lib_mod },
+                .{ .name = "sdl2", .module = sdl },
+            },
+        });
+
+        const sdl_fullscreen = b.addExecutable(.{
+            .name = "21_fullscreen_sdl",
+            .root_module = sdl_fullscreen_mod,
+        });
+
+        sdl_sdk.link(sdl_fullscreen, .dynamic, .SDL2);
+
+        const run_cmd = b.addRunArtifact(sdl_fullscreen);
+        const run_step = b.step("run-example-21-sdl", "Fullscreen example (SDL backend)");
+        run_step.dependOn(&run_cmd.step);
     }
 
     // Converter tool

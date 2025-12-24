@@ -252,4 +252,61 @@ pub const RaylibBackend = struct {
     pub fn endScissorMode() void {
         rl.endScissorMode();
     }
+
+    // Fullscreen functions
+
+    // Store original window size for restoring when exiting fullscreen
+    threadlocal var windowed_width: i32 = 800;
+    threadlocal var windowed_height: i32 = 600;
+    threadlocal var windowed_size_saved: bool = false;
+
+    /// Toggle between fullscreen and windowed mode.
+    /// When entering fullscreen, resizes to monitor resolution for true fullscreen.
+    /// When exiting fullscreen, restores previous window size.
+    pub fn toggleFullscreen() void {
+        if (!rl.isWindowFullscreen()) {
+            // Entering fullscreen: save window size and resize to monitor
+            windowed_width = rl.getScreenWidth();
+            windowed_height = rl.getScreenHeight();
+            windowed_size_saved = true;
+
+            const monitor = rl.getCurrentMonitor();
+            const monitor_w = rl.getMonitorWidth(monitor);
+            const monitor_h = rl.getMonitorHeight(monitor);
+            rl.setWindowSize(monitor_w, monitor_h);
+            rl.toggleFullscreen();
+        } else {
+            // Exiting fullscreen: toggle first, then restore size
+            rl.toggleFullscreen();
+            if (windowed_size_saved) {
+                rl.setWindowSize(windowed_width, windowed_height);
+            }
+        }
+    }
+
+    /// Set fullscreen mode explicitly.
+    /// When entering fullscreen, resizes to monitor resolution.
+    /// When exiting fullscreen, restores previous window size.
+    pub fn setFullscreen(fullscreen: bool) void {
+        if (fullscreen and !rl.isWindowFullscreen()) {
+            toggleFullscreen();
+        } else if (!fullscreen and rl.isWindowFullscreen()) {
+            toggleFullscreen();
+        }
+    }
+
+    /// Check if window is currently in fullscreen mode
+    pub fn isWindowFullscreen() bool {
+        return rl.isWindowFullscreen();
+    }
+
+    /// Get the current monitor width
+    pub fn getMonitorWidth() i32 {
+        return rl.getMonitorWidth(rl.getCurrentMonitor());
+    }
+
+    /// Get the current monitor height
+    pub fn getMonitorHeight() i32 {
+        return rl.getMonitorHeight(rl.getCurrentMonitor());
+    }
 };
