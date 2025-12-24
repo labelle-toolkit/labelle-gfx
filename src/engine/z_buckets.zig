@@ -1,12 +1,19 @@
 //! Z-Index Bucket Storage
 //!
 //! Provides O(1) insertion and natural depth ordering for render items
-//! using 256 buckets (one per z-index value).
+//! using Z_INDEX_BUCKET_COUNT buckets (one per z-index value).
 
 const std = @import("std");
 const types = @import("types.zig");
 
 const EntityId = types.EntityId;
+
+// ============================================
+// Configuration
+// ============================================
+
+/// Number of z-index buckets. This provides one bucket per possible u8 z-index value.
+pub const Z_INDEX_BUCKET_COUNT: u16 = std.math.maxInt(u8) + 1;
 
 // ============================================
 // Render Item for Z-Index Buckets
@@ -24,17 +31,17 @@ pub const RenderItem = struct {
 };
 
 /// Z-index bucket storage for RetainedEngine.
-/// Uses 256 buckets for O(1) insertion and natural depth ordering.
+/// Uses Z_INDEX_BUCKET_COUNT buckets for O(1) insertion and natural depth ordering.
 pub const ZBuckets = struct {
     const Bucket = std.ArrayListUnmanaged(RenderItem);
 
-    buckets: [256]Bucket,
+    buckets: [Z_INDEX_BUCKET_COUNT]Bucket,
     allocator: std.mem.Allocator,
     total_count: usize,
 
     pub fn init(allocator: std.mem.Allocator) ZBuckets {
         return ZBuckets{
-            .buckets = [_]Bucket{.{}} ** 256,
+            .buckets = [_]Bucket{.{}} ** Z_INDEX_BUCKET_COUNT,
             .allocator = allocator,
             .total_count = 0,
         };
@@ -80,7 +87,7 @@ pub const ZBuckets = struct {
     }
 
     pub const Iterator = struct {
-        buckets: *const [256]Bucket,
+        buckets: *const [Z_INDEX_BUCKET_COUNT]Bucket,
         z: u16,
         idx: usize,
 
@@ -95,7 +102,7 @@ pub const ZBuckets = struct {
         }
 
         pub fn next(self: *Iterator) ?RenderItem {
-            while (self.z < 256) {
+            while (self.z < Z_INDEX_BUCKET_COUNT) {
                 const bucket = &self.buckets[self.z];
                 if (self.idx < bucket.items.len) {
                     const item = bucket.items[self.idx];
@@ -109,7 +116,7 @@ pub const ZBuckets = struct {
         }
 
         fn skipEmptyBuckets(self: *Iterator) void {
-            while (self.z < 256 and self.buckets[self.z].items.len == 0) {
+            while (self.z < Z_INDEX_BUCKET_COUNT and self.buckets[self.z].items.len == 0) {
                 self.z += 1;
             }
         }
