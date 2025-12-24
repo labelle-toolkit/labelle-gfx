@@ -87,6 +87,231 @@ pub fn RenderHelpers(comptime Backend: type) type {
             height: f32,
         };
 
+        /// Common parameters for sized sprite rendering modes.
+        const SizedSpriteParams = struct {
+            texture: Backend.Texture,
+            flipped_src: Backend.Rectangle,
+            cont_w: f32,
+            cont_h: f32,
+            base_x: f32,
+            base_y: f32,
+            pivot: Pivot,
+            pivot_x: f32,
+            pivot_y: f32,
+            rotation: f32,
+            tint: Backend.Color,
+        };
+
+        /// Render sprite in stretch mode - fills container exactly.
+        fn renderStretchMode(p: SizedSpriteParams) void {
+            const dest_rect = Backend.Rectangle{
+                .x = p.base_x,
+                .y = p.base_y,
+                .width = p.cont_w,
+                .height = p.cont_h,
+            };
+            const pivot_origin = p.pivot.getOrigin(p.cont_w, p.cont_h, p.pivot_x, p.pivot_y);
+            const origin = Backend.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
+            Backend.drawTexturePro(p.texture, p.flipped_src, dest_rect, origin, p.rotation, p.tint);
+        }
+
+        /// Render sprite in cover mode - scales to cover container, may crop.
+        fn renderCoverMode(
+            p: SizedSpriteParams,
+            sprite_x: anytype,
+            sprite_y: anytype,
+            sprite_w: f32,
+            sprite_h: f32,
+            flip_x: bool,
+            flip_y: bool,
+        ) void {
+            const crop = CoverCrop.calculate(
+                sprite_w,
+                sprite_h,
+                p.cont_w,
+                p.cont_h,
+                p.pivot_x,
+                p.pivot_y,
+            ) orelse {
+                log.warn("Skipping cover render: non-positive scale", .{});
+                return;
+            };
+
+            const src_x_f: f32 = @floatFromInt(sprite_x);
+            const src_y_f: f32 = @floatFromInt(sprite_y);
+            const cropped_src = Backend.Rectangle{
+                .x = src_x_f + crop.crop_x,
+                .y = src_y_f + crop.crop_y,
+                .width = if (flip_x) -crop.visible_w else crop.visible_w,
+                .height = if (flip_y) -crop.visible_h else crop.visible_h,
+            };
+
+            const dest_rect = Backend.Rectangle{
+                .x = p.base_x,
+                .y = p.base_y,
+                .width = p.cont_w,
+                .height = p.cont_h,
+            };
+
+            const pivot_origin = p.pivot.getOrigin(p.cont_w, p.cont_h, p.pivot_x, p.pivot_y);
+            const origin = Backend.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
+            Backend.drawTexturePro(p.texture, cropped_src, dest_rect, origin, p.rotation, p.tint);
+        }
+
+        /// Render sprite in contain/scale_down mode - fits inside container with letterboxing.
+        fn renderContainMode(
+            p: SizedSpriteParams,
+            sprite_w: f32,
+            sprite_h: f32,
+            size_mode: SizeMode,
+        ) void {
+            const scale_x = p.cont_w / sprite_w;
+            const scale_y = p.cont_h / sprite_h;
+            var s = @min(scale_x, scale_y);
+
+            if (size_mode == .scale_down) {
+                s = @min(s, 1.0);
+            }
+
+            const dest_w = sprite_w * s;
+            const dest_h = sprite_h * s;
+
+            const padding_x = p.cont_w - dest_w;
+            const padding_y = p.cont_h - dest_h;
+            const offset_x = padding_x * (p.pivot_x - 0.5);
+            const offset_y = padding_y * (p.pivot_y - 0.5);
+
+            const dest_rect = Backend.Rectangle{
+                .x = p.base_x + offset_x,
+                .y = p.base_y + offset_y,
+                .width = dest_w,
+                .height = dest_h,
+            };
+            const pivot_origin = p.pivot.getOrigin(dest_w, dest_h, p.pivot_x, p.pivot_y);
+            const origin = Backend.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
+            Backend.drawTexturePro(p.texture, p.flipped_src, dest_rect, origin, p.rotation, p.tint);
+        }
+
+        /// Calculate visible tile range for repeat mode with viewport culling.
+        const TileRange = struct {
+            start_col: u32,
+            start_row: u32,
+            end_col: u32,
+            end_row: u32,
+        };
+
+        fn calculateVisibleTileRange(
+            container_tl_x: f32,
+            container_tl_y: f32,
+            scaled_w: f32,
+            scaled_h: f32,
+            total_cols: u32,
+            total_rows: u32,
+            screen_viewport: ?ScreenViewport,
+        ) TileRange {
+            var range = TileRange{
+                .start_col = 0,
+                .start_row = 0,
+                .end_col = total_cols,
+                .end_row = total_rows,
+            };
+
+            if (screen_viewport) |vp| {
+                if (0 > container_tl_x) {
+                    range.start_col = @min(total_cols, @as(u32, @intFromFloat(@floor(-container_tl_x / scaled_w))));
+                }
+                if (0 > container_tl_y) {
+                    range.start_row = @min(total_rows, @as(u32, @intFromFloat(@floor(-container_tl_y / scaled_h))));
+                }
+
+                const end_col_dist = vp.width - container_tl_x;
+                const end_row_dist = vp.height - container_tl_y;
+                if (end_col_dist > 0) {
+                    range.end_col = @min(total_cols, @as(u32, @intFromFloat(@ceil(end_col_dist / scaled_w))));
+                } else {
+                    range.end_col = 0;
+                }
+                if (end_row_dist > 0) {
+                    range.end_row = @min(total_rows, @as(u32, @intFromFloat(@ceil(end_row_dist / scaled_h))));
+                } else {
+                    range.end_row = 0;
+                }
+            }
+
+            return range;
+        }
+
+        /// Maximum number of tiles allowed in repeat mode to prevent performance issues.
+        const MAX_REPEAT_TILES: u64 = 10000;
+
+        /// Render sprite in repeat mode - tiles to fill container.
+        fn renderRepeatMode(
+            p: SizedSpriteParams,
+            sprite_w: f32,
+            sprite_h: f32,
+            scale: f32,
+            screen_viewport: ?ScreenViewport,
+        ) void {
+            const scaled_w = sprite_w * scale;
+            const scaled_h = sprite_h * scale;
+
+            if (scaled_w <= 0 or scaled_h <= 0) {
+                log.warn("Skipping repeat render: non-positive tile dimensions ({d}x{d})", .{ scaled_w, scaled_h });
+                return;
+            }
+
+            const container_tl_x = p.base_x - p.cont_w * p.pivot_x;
+            const container_tl_y = p.base_y - p.cont_h * p.pivot_y;
+
+            // Calculate total tile counts
+            const cols_float = @ceil(p.cont_w / scaled_w);
+            const rows_float = @ceil(p.cont_h / scaled_h);
+            const max_u32: f32 = @floatFromInt(std.math.maxInt(u32));
+            if (cols_float > max_u32 or rows_float > max_u32) {
+                log.warn("Repeat tile count overflow: {d}x{d} cols/rows exceed u32 max", .{ cols_float, rows_float });
+                return;
+            }
+            const total_cols: u32 = @intFromFloat(cols_float);
+            const total_rows: u32 = @intFromFloat(rows_float);
+
+            // Validate tile count limit
+            const tile_count = @as(u64, total_cols) * @as(u64, total_rows);
+            if (tile_count > MAX_REPEAT_TILES) {
+                log.warn("Repeat tile count ({d}x{d}={d}) exceeds limit ({d}), skipping", .{ total_cols, total_rows, tile_count, MAX_REPEAT_TILES });
+                return;
+            }
+
+            // Calculate visible tile range with optional viewport culling
+            const range = calculateVisibleTileRange(
+                container_tl_x,
+                container_tl_y,
+                scaled_w,
+                scaled_h,
+                total_cols,
+                total_rows,
+                screen_viewport,
+            );
+
+            // Draw visible tiles
+            var row: u32 = range.start_row;
+            while (row < range.end_row) : (row += 1) {
+                var col: u32 = range.start_col;
+                while (col < range.end_col) : (col += 1) {
+                    const tile_x = container_tl_x + @as(f32, @floatFromInt(col)) * scaled_w;
+                    const tile_y = container_tl_y + @as(f32, @floatFromInt(row)) * scaled_h;
+
+                    const dest_rect = Backend.Rectangle{
+                        .x = tile_x,
+                        .y = tile_y,
+                        .width = scaled_w,
+                        .height = scaled_h,
+                    };
+                    const origin = Backend.Vector2{ .x = 0, .y = 0 };
+                    Backend.drawTexturePro(p.texture, p.flipped_src, dest_rect, origin, p.rotation, p.tint);
+                }
+            }
+        }
+
         /// Render a sized sprite with the given size mode.
         /// This handles stretch, cover, contain, scale_down, and repeat modes.
         /// Flipping is handled internally by negating source rect dimensions.
@@ -113,174 +338,37 @@ pub fn RenderHelpers(comptime Backend: type) type {
             tint: Backend.Color,
             screen_viewport: ?ScreenViewport,
         ) void {
-            const cont_w = cont_rect.width;
-            const cont_h = cont_rect.height;
-            const base_x = pos.x + cont_rect.x;
-            const base_y = pos.y + cont_rect.y;
-
             if (sprite_w <= 0 or sprite_h <= 0) {
                 log.warn("Skipping sized sprite render: invalid sprite dimensions ({d}x{d})", .{ sprite_w, sprite_h });
                 return;
             }
 
-            // Apply flipping by negating source rect dimensions
-            const flipped_src = Backend.Rectangle{
-                .x = src_rect.x,
-                .y = src_rect.y,
-                .width = if (flip_x) -src_rect.width else src_rect.width,
-                .height = if (flip_y) -src_rect.height else src_rect.height,
+            // Build common parameters
+            const p = SizedSpriteParams{
+                .texture = texture,
+                .flipped_src = Backend.Rectangle{
+                    .x = src_rect.x,
+                    .y = src_rect.y,
+                    .width = if (flip_x) -src_rect.width else src_rect.width,
+                    .height = if (flip_y) -src_rect.height else src_rect.height,
+                },
+                .cont_w = cont_rect.width,
+                .cont_h = cont_rect.height,
+                .base_x = pos.x + cont_rect.x,
+                .base_y = pos.y + cont_rect.y,
+                .pivot = pivot,
+                .pivot_x = pivot_x,
+                .pivot_y = pivot_y,
+                .rotation = rotation,
+                .tint = tint,
             };
 
             switch (size_mode) {
                 .none => unreachable,
-                .stretch => {
-                    const dest_rect = Backend.Rectangle{
-                        .x = base_x,
-                        .y = base_y,
-                        .width = cont_w,
-                        .height = cont_h,
-                    };
-                    const pivot_origin = pivot.getOrigin(cont_w, cont_h, pivot_x, pivot_y);
-                    const origin = Backend.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
-                    Backend.drawTexturePro(texture, flipped_src, dest_rect, origin, rotation, tint);
-                },
-                .cover => {
-                    const crop = CoverCrop.calculate(
-                        sprite_w,
-                        sprite_h,
-                        cont_w,
-                        cont_h,
-                        pivot_x,
-                        pivot_y,
-                    ) orelse {
-                        log.warn("Skipping cover render: non-positive scale", .{});
-                        return;
-                    };
-
-                    const src_x_f: f32 = @floatFromInt(sprite_x);
-                    const src_y_f: f32 = @floatFromInt(sprite_y);
-                    const cropped_src = Backend.Rectangle{
-                        .x = src_x_f + crop.crop_x,
-                        .y = src_y_f + crop.crop_y,
-                        .width = if (flip_x) -crop.visible_w else crop.visible_w,
-                        .height = if (flip_y) -crop.visible_h else crop.visible_h,
-                    };
-
-                    const dest_rect = Backend.Rectangle{
-                        .x = base_x,
-                        .y = base_y,
-                        .width = cont_w,
-                        .height = cont_h,
-                    };
-
-                    const pivot_origin = pivot.getOrigin(cont_w, cont_h, pivot_x, pivot_y);
-                    const origin = Backend.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
-                    Backend.drawTexturePro(texture, cropped_src, dest_rect, origin, rotation, tint);
-                },
-                .contain, .scale_down => {
-                    const scale_x = cont_w / sprite_w;
-                    const scale_y = cont_h / sprite_h;
-                    var s = @min(scale_x, scale_y);
-
-                    if (size_mode == .scale_down) {
-                        s = @min(s, 1.0);
-                    }
-
-                    const dest_w = sprite_w * s;
-                    const dest_h = sprite_h * s;
-
-                    const padding_x = cont_w - dest_w;
-                    const padding_y = cont_h - dest_h;
-                    const offset_x = padding_x * (pivot_x - 0.5);
-                    const offset_y = padding_y * (pivot_y - 0.5);
-
-                    const dest_rect = Backend.Rectangle{
-                        .x = base_x + offset_x,
-                        .y = base_y + offset_y,
-                        .width = dest_w,
-                        .height = dest_h,
-                    };
-                    const pivot_origin = pivot.getOrigin(dest_w, dest_h, pivot_x, pivot_y);
-                    const origin = Backend.Vector2{ .x = pivot_origin.x, .y = pivot_origin.y };
-                    Backend.drawTexturePro(texture, flipped_src, dest_rect, origin, rotation, tint);
-                },
-                .repeat => {
-                    const scaled_w = sprite_w * scale;
-                    const scaled_h = sprite_h * scale;
-
-                    if (scaled_w <= 0 or scaled_h <= 0) {
-                        log.warn("Skipping repeat render: non-positive tile dimensions ({d}x{d})", .{ scaled_w, scaled_h });
-                        return;
-                    }
-
-                    const container_tl_x = base_x - cont_w * pivot_x;
-                    const container_tl_y = base_y - cont_h * pivot_y;
-
-                    const cols_float = @ceil(cont_w / scaled_w);
-                    const rows_float = @ceil(cont_h / scaled_h);
-                    const max_u32: f32 = @floatFromInt(std.math.maxInt(u32));
-                    if (cols_float > max_u32 or rows_float > max_u32) {
-                        log.warn("Repeat tile count overflow: {d}x{d} cols/rows exceed u32 max", .{ cols_float, rows_float });
-                        return;
-                    }
-                    const total_cols: u32 = @intFromFloat(cols_float);
-                    const total_rows: u32 = @intFromFloat(rows_float);
-
-                    const max_tiles: u64 = 10000;
-                    const tile_count = @as(u64, total_cols) * @as(u64, total_rows);
-                    if (tile_count > max_tiles) {
-                        log.warn("Repeat tile count ({d}x{d}={d}) exceeds limit ({d}), skipping", .{ total_cols, total_rows, tile_count, max_tiles });
-                        return;
-                    }
-
-                    // Calculate visible tile range with optional viewport culling
-                    var start_col: u32 = 0;
-                    var start_row: u32 = 0;
-                    var end_col: u32 = total_cols;
-                    var end_row: u32 = total_rows;
-
-                    if (screen_viewport) |vp| {
-                        // Screen-space culling: only draw visible tiles
-                        if (0 > container_tl_x) {
-                            start_col = @min(total_cols, @as(u32, @intFromFloat(@floor(-container_tl_x / scaled_w))));
-                        }
-                        if (0 > container_tl_y) {
-                            start_row = @min(total_rows, @as(u32, @intFromFloat(@floor(-container_tl_y / scaled_h))));
-                        }
-
-                        const end_col_dist = vp.width - container_tl_x;
-                        const end_row_dist = vp.height - container_tl_y;
-                        if (end_col_dist > 0) {
-                            end_col = @min(total_cols, @as(u32, @intFromFloat(@ceil(end_col_dist / scaled_w))));
-                        } else {
-                            end_col = 0;
-                        }
-                        if (end_row_dist > 0) {
-                            end_row = @min(total_rows, @as(u32, @intFromFloat(@ceil(end_row_dist / scaled_h))));
-                        } else {
-                            end_row = 0;
-                        }
-                    }
-
-                    // Draw visible tiles
-                    var row: u32 = start_row;
-                    while (row < end_row) : (row += 1) {
-                        var col: u32 = start_col;
-                        while (col < end_col) : (col += 1) {
-                            const tile_x = container_tl_x + @as(f32, @floatFromInt(col)) * scaled_w;
-                            const tile_y = container_tl_y + @as(f32, @floatFromInt(row)) * scaled_h;
-
-                            const dest_rect = Backend.Rectangle{
-                                .x = tile_x,
-                                .y = tile_y,
-                                .width = scaled_w,
-                                .height = scaled_h,
-                            };
-                            const origin = Backend.Vector2{ .x = 0, .y = 0 };
-                            Backend.drawTexturePro(texture, flipped_src, dest_rect, origin, rotation, tint);
-                        }
-                    }
-                },
+                .stretch => renderStretchMode(p),
+                .cover => renderCoverMode(p, sprite_x, sprite_y, sprite_w, sprite_h, flip_x, flip_y),
+                .contain, .scale_down => renderContainMode(p, sprite_w, sprite_h, size_mode),
+                .repeat => renderRepeatMode(p, sprite_w, sprite_h, scale, screen_viewport),
             }
         }
 
