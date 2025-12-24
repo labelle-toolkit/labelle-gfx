@@ -248,20 +248,13 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
             BackendType.beginMode2D(rl_camera);
         }
 
-        /// World-space bounding box for culling calculations.
-        const WorldBounds = struct {
-            x: f32,
-            y: f32,
-            w: f32,
-            h: f32,
-        };
-
         /// Calculate world-space bounds for a sprite, accounting for scale and pivot.
         /// Returns null if the sprite cannot be found in resources.
+        /// Note: Reuses Helpers.ShapeBounds which has identical structure (x, y, w, h).
         fn getSpriteWorldBounds(
             entry: Visuals.SpriteEntry,
             resources: *Resources,
-        ) ?WorldBounds {
+        ) ?Helpers.ShapeBounds {
             const visual = entry.visual;
             const pos = entry.position;
 
