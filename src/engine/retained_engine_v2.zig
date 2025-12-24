@@ -51,6 +51,7 @@ pub const visuals = @import("visuals.zig");
 pub const config = @import("config.zig");
 pub const layer_mod = @import("layer.zig");
 pub const visual_types = @import("visual_types.zig");
+const z_buckets = @import("z_buckets.zig");
 
 // Backend imports
 const backend_mod = @import("../backend/backend.zig");
@@ -161,7 +162,7 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
         // These provide a flatter API for common operations
 
         /// Get layer buckets for visual creation (needed by visuals subsystem)
-        pub fn layerBuckets(self: *Self) *[layer_count]z_buckets.ZBuckets {
+        pub fn getLayerBuckets(self: *Self) *[layer_count]z_buckets.ZBuckets {
             return self.renderer.getLayerBuckets();
         }
 
@@ -413,9 +414,6 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
         }
     };
 }
-
-// Import z_buckets for layer bucket type
-const z_buckets = @import("z_buckets.zig");
 
 // ============================================
 // Default Engine V2 Alias

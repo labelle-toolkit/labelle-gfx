@@ -78,7 +78,7 @@ test "V2 visuals subsystem creates sprites" {
     defer engine.deinit();
 
     const id = gfx.EntityId.from(1);
-    engine.visuals.createSprite(id, .{ .sprite_name = "test", .layer = .world }, .{ .x = 100, .y = 200 }, engine.layerBuckets());
+    engine.visuals.createSprite(id, .{ .sprite_name = "test", .layer = .world }, .{ .x = 100, .y = 200 }, engine.getLayerBuckets());
 
     const sprite = engine.visuals.getSprite(id);
     try testing.expect(sprite != null);
@@ -91,8 +91,8 @@ test "V2 visuals subsystem updates sprites" {
     defer engine.deinit();
 
     const id = gfx.EntityId.from(1);
-    engine.visuals.createSprite(id, .{ .sprite_name = "old", .layer = .world }, .{}, engine.layerBuckets());
-    engine.visuals.updateSprite(id, .{ .sprite_name = "new", .layer = .ui }, engine.layerBuckets());
+    engine.visuals.createSprite(id, .{ .sprite_name = "old", .layer = .world }, .{}, engine.getLayerBuckets());
+    engine.visuals.updateSprite(id, .{ .sprite_name = "new", .layer = .ui }, engine.getLayerBuckets());
 
     const sprite = engine.visuals.getSprite(id);
     try testing.expect(sprite != null);
@@ -105,10 +105,10 @@ test "V2 visuals subsystem destroys sprites" {
     defer engine.deinit();
 
     const id = gfx.EntityId.from(1);
-    engine.visuals.createSprite(id, .{ .sprite_name = "test", .layer = .world }, .{}, engine.layerBuckets());
+    engine.visuals.createSprite(id, .{ .sprite_name = "test", .layer = .world }, .{}, engine.getLayerBuckets());
     try testing.expectEqual(@as(usize, 1), engine.visuals.spriteCount());
 
-    engine.visuals.destroySprite(id, engine.layerBuckets());
+    engine.visuals.destroySprite(id, engine.getLayerBuckets());
     try testing.expectEqual(@as(usize, 0), engine.visuals.spriteCount());
     try testing.expect(engine.visuals.getSprite(id) == null);
 }
@@ -118,7 +118,7 @@ test "V2 visuals subsystem creates shapes" {
     defer engine.deinit();
 
     const id = gfx.EntityId.from(1);
-    engine.visuals.createShape(id, MockEngineV2.ShapeVisual.circleOn(50, .effects), .{ .x = 100, .y = 100 }, engine.layerBuckets());
+    engine.visuals.createShape(id, MockEngineV2.ShapeVisual.circleOn(50, .effects), .{ .x = 100, .y = 100 }, engine.getLayerBuckets());
 
     const shape = engine.visuals.getShape(id);
     try testing.expect(shape != null);
@@ -130,7 +130,7 @@ test "V2 visuals subsystem creates text" {
     defer engine.deinit();
 
     const id = gfx.EntityId.from(1);
-    engine.visuals.createText(id, .{ .text = "Hello", .layer = .ui }, .{ .x = 10, .y = 10 }, engine.layerBuckets());
+    engine.visuals.createText(id, .{ .text = "Hello", .layer = .ui }, .{ .x = 10, .y = 10 }, engine.getLayerBuckets());
 
     const text = engine.visuals.getText(id);
     try testing.expect(text != null);
@@ -143,7 +143,7 @@ test "V2 visuals subsystem updates position" {
     defer engine.deinit();
 
     const id = gfx.EntityId.from(1);
-    engine.visuals.createSprite(id, .{ .sprite_name = "test", .layer = .world }, .{ .x = 0, .y = 0 }, engine.layerBuckets());
+    engine.visuals.createSprite(id, .{ .sprite_name = "test", .layer = .world }, .{ .x = 0, .y = 0 }, engine.getLayerBuckets());
 
     engine.visuals.updatePosition(id, .{ .x = 500, .y = 300 });
 
@@ -157,10 +157,10 @@ test "V2 visuals subsystem counts entities" {
     var engine = try MockEngineV2.init(testing.allocator, .{});
     defer engine.deinit();
 
-    engine.visuals.createSprite(gfx.EntityId.from(1), .{ .sprite_name = "a", .layer = .world }, .{}, engine.layerBuckets());
-    engine.visuals.createSprite(gfx.EntityId.from(2), .{ .sprite_name = "b", .layer = .world }, .{}, engine.layerBuckets());
-    engine.visuals.createShape(gfx.EntityId.from(3), MockEngineV2.ShapeVisual.circle(25), .{}, engine.layerBuckets());
-    engine.visuals.createText(gfx.EntityId.from(4), .{ .text = "Hi", .layer = .ui }, .{}, engine.layerBuckets());
+    engine.visuals.createSprite(gfx.EntityId.from(1), .{ .sprite_name = "a", .layer = .world }, .{}, engine.getLayerBuckets());
+    engine.visuals.createSprite(gfx.EntityId.from(2), .{ .sprite_name = "b", .layer = .world }, .{}, engine.getLayerBuckets());
+    engine.visuals.createShape(gfx.EntityId.from(3), MockEngineV2.ShapeVisual.circle(25), .{}, engine.getLayerBuckets());
+    engine.visuals.createText(gfx.EntityId.from(4), .{ .text = "Hi", .layer = .ui }, .{}, engine.getLayerBuckets());
 
     try testing.expectEqual(@as(usize, 2), engine.visuals.spriteCount());
     try testing.expectEqual(@as(usize, 1), engine.visuals.shapeCount());
@@ -370,8 +370,8 @@ test "V2 engine full frame loop" {
     defer engine.deinit();
 
     // Create some entities
-    engine.visuals.createSprite(gfx.EntityId.from(1), .{ .sprite_name = "player", .layer = .world }, .{ .x = 100, .y = 100 }, engine.layerBuckets());
-    engine.visuals.createShape(gfx.EntityId.from(2), MockEngineV2.ShapeVisual.circle(25), .{ .x = 200, .y = 200 }, engine.layerBuckets());
+    engine.visuals.createSprite(gfx.EntityId.from(1), .{ .sprite_name = "player", .layer = .world }, .{ .x = 100, .y = 100 }, engine.getLayerBuckets());
+    engine.visuals.createShape(gfx.EntityId.from(2), MockEngineV2.ShapeVisual.circle(25), .{ .x = 200, .y = 200 }, engine.getLayerBuckets());
 
     // Simulate one frame
     engine.beginFrame();
@@ -388,10 +388,10 @@ test "V2 engine multiple sprites across layers" {
     defer engine.deinit();
 
     // Create sprites on different layers
-    engine.visuals.createSprite(gfx.EntityId.from(1), .{ .sprite_name = "bg", .layer = .background }, .{}, engine.layerBuckets());
-    engine.visuals.createSprite(gfx.EntityId.from(2), .{ .sprite_name = "world1", .layer = .world, .z_index = 10 }, .{}, engine.layerBuckets());
-    engine.visuals.createSprite(gfx.EntityId.from(3), .{ .sprite_name = "world2", .layer = .world, .z_index = 20 }, .{}, engine.layerBuckets());
-    engine.visuals.createSprite(gfx.EntityId.from(4), .{ .sprite_name = "ui", .layer = .ui }, .{}, engine.layerBuckets());
+    engine.visuals.createSprite(gfx.EntityId.from(1), .{ .sprite_name = "bg", .layer = .background }, .{}, engine.getLayerBuckets());
+    engine.visuals.createSprite(gfx.EntityId.from(2), .{ .sprite_name = "world1", .layer = .world, .z_index = 10 }, .{}, engine.getLayerBuckets());
+    engine.visuals.createSprite(gfx.EntityId.from(3), .{ .sprite_name = "world2", .layer = .world, .z_index = 20 }, .{}, engine.getLayerBuckets());
+    engine.visuals.createSprite(gfx.EntityId.from(4), .{ .sprite_name = "ui", .layer = .ui }, .{}, engine.getLayerBuckets());
 
     try testing.expectEqual(@as(usize, 4), engine.visuals.spriteCount());
 
@@ -410,8 +410,8 @@ test "V2 engine camera affects world-space only" {
     engine.cameras.setCameraPosition(500, 500);
 
     // Create sprites
-    engine.visuals.createSprite(gfx.EntityId.from(1), .{ .sprite_name = "world", .layer = .world }, .{ .x = 100, .y = 100 }, engine.layerBuckets());
-    engine.visuals.createSprite(gfx.EntityId.from(2), .{ .sprite_name = "ui", .layer = .ui }, .{ .x = 100, .y = 100 }, engine.layerBuckets());
+    engine.visuals.createSprite(gfx.EntityId.from(1), .{ .sprite_name = "world", .layer = .world }, .{ .x = 100, .y = 100 }, engine.getLayerBuckets());
+    engine.visuals.createSprite(gfx.EntityId.from(2), .{ .sprite_name = "ui", .layer = .ui }, .{ .x = 100, .y = 100 }, engine.getLayerBuckets());
 
     // Both sprites should exist - camera position doesn't affect storage
     try testing.expect(engine.visuals.getSprite(gfx.EntityId.from(1)) != null);
@@ -435,8 +435,8 @@ test "V2 engine multi-camera with layer masks" {
     engine.renderer.setCameraLayers(1, &.{.ui});
 
     // Create sprites
-    engine.visuals.createSprite(gfx.EntityId.from(1), .{ .sprite_name = "world", .layer = .world }, .{}, engine.layerBuckets());
-    engine.visuals.createSprite(gfx.EntityId.from(2), .{ .sprite_name = "ui", .layer = .ui }, .{}, engine.layerBuckets());
+    engine.visuals.createSprite(gfx.EntityId.from(1), .{ .sprite_name = "world", .layer = .world }, .{}, engine.getLayerBuckets());
+    engine.visuals.createSprite(gfx.EntityId.from(2), .{ .sprite_name = "ui", .layer = .ui }, .{}, engine.getLayerBuckets());
 
     // Render (exercises multi-camera path)
     engine.beginFrame();
@@ -452,14 +452,14 @@ test "V2 engine destroy and recreate entity" {
 
     const id = gfx.EntityId.from(42);
 
-    engine.visuals.createSprite(id, .{ .sprite_name = "first", .layer = .world }, .{ .x = 0, .y = 0 }, engine.layerBuckets());
+    engine.visuals.createSprite(id, .{ .sprite_name = "first", .layer = .world }, .{ .x = 0, .y = 0 }, engine.getLayerBuckets());
     try testing.expect(engine.visuals.getSprite(id) != null);
 
-    engine.visuals.destroySprite(id, engine.layerBuckets());
+    engine.visuals.destroySprite(id, engine.getLayerBuckets());
     try testing.expect(engine.visuals.getSprite(id) == null);
 
     // Recreate with same ID
-    engine.visuals.createSprite(id, .{ .sprite_name = "second", .layer = .effects }, .{ .x = 100, .y = 100 }, engine.layerBuckets());
+    engine.visuals.createSprite(id, .{ .sprite_name = "second", .layer = .effects }, .{ .x = 100, .y = 100 }, engine.getLayerBuckets());
     const sprite = engine.visuals.getSprite(id);
     try testing.expect(sprite != null);
     try testing.expect(std.mem.eql(u8, sprite.?.sprite_name, "second"));
@@ -474,9 +474,9 @@ test "V2 engine getPosition works for all entity types" {
     const shape_id = gfx.EntityId.from(2);
     const text_id = gfx.EntityId.from(3);
 
-    engine.visuals.createSprite(sprite_id, .{ .sprite_name = "s", .layer = .world }, .{ .x = 10, .y = 20 }, engine.layerBuckets());
-    engine.visuals.createShape(shape_id, MockEngineV2.ShapeVisual.circle(10), .{ .x = 30, .y = 40 }, engine.layerBuckets());
-    engine.visuals.createText(text_id, .{ .text = "T", .layer = .ui }, .{ .x = 50, .y = 60 }, engine.layerBuckets());
+    engine.visuals.createSprite(sprite_id, .{ .sprite_name = "s", .layer = .world }, .{ .x = 10, .y = 20 }, engine.getLayerBuckets());
+    engine.visuals.createShape(shape_id, MockEngineV2.ShapeVisual.circle(10), .{ .x = 30, .y = 40 }, engine.getLayerBuckets());
+    engine.visuals.createText(text_id, .{ .text = "T", .layer = .ui }, .{ .x = 50, .y = 60 }, engine.getLayerBuckets());
 
     const pos1 = engine.visuals.getPosition(sprite_id);
     const pos2 = engine.visuals.getPosition(shape_id);
@@ -515,7 +515,7 @@ test "V2 layer buckets shared correctly" {
     defer engine.deinit();
 
     // Create sprite via visuals subsystem with renderer's buckets
-    const buckets = engine.layerBuckets();
+    const buckets = engine.getLayerBuckets();
     engine.visuals.createSprite(gfx.EntityId.from(1), .{ .sprite_name = "test", .layer = .world }, .{}, buckets);
 
     // Renderer should see the sprite in its buckets

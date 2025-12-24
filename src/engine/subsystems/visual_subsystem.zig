@@ -34,6 +34,11 @@ pub fn VisualSubsystem(comptime LayerEnum: type) type {
         const ShapeStorage = visual_storage.VisualStorage(ShapeVisual, .shape);
         const TextStorage = visual_storage.VisualStorage(TextVisual, .text);
 
+        // Export Entry types for better subsystem interoperability
+        pub const SpriteEntry = SpriteStorage.Entry;
+        pub const ShapeEntry = ShapeStorage.Entry;
+        pub const TextEntry = TextStorage.Entry;
+
         // Internal storage
         sprites: SpriteStorage,
         shapes: ShapeStorage,
