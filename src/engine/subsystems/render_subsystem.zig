@@ -139,41 +139,7 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
             camera: *Camera,
             resources: *Resources,
         ) void {
-            const cam_vp = camera.getViewport();
-            const cam_viewport_rect: Container.Rect = .{
-                .x = cam_vp.x,
-                .y = cam_vp.y,
-                .width = cam_vp.width,
-                .height = cam_vp.height,
-            };
-
-            for (sorted_layers) |layer| {
-                const layer_idx = @intFromEnum(layer);
-
-                if (!self.layer_visibility[layer_idx]) continue;
-                if (!self.single_camera_layer_mask.has(layer)) continue;
-
-                const cfg = layer.config();
-
-                if (cfg.space == .world) {
-                    beginCameraModeWithParallax(camera, cfg.parallax_x, cfg.parallax_y);
-                }
-
-                var iter = self.layer_buckets[layer_idx].iterator();
-                while (iter.next()) |item| {
-                    if (!isItemVisible(visuals, item)) continue;
-
-                    switch (item.item_type) {
-                        .sprite => renderSprite(visuals, resources, item.entity_id, cam_viewport_rect, camera),
-                        .shape => renderShape(visuals, item.entity_id),
-                        .text => renderText(visuals, item.entity_id),
-                    }
-                }
-
-                if (cfg.space == .world) {
-                    BackendType.endMode2D();
-                }
-            }
+            self.renderLayersForCamera(visuals, camera, resources, self.single_camera_layer_mask);
         }
 
         fn renderMultiCamera(
@@ -191,52 +157,64 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
                     BackendType.beginScissorMode(vp.x, vp.y, vp.width, vp.height);
                 }
 
-                const viewport = cam.getViewport();
-                const cam_viewport_rect: Container.Rect = .{
-                    .x = viewport.x,
-                    .y = viewport.y,
-                    .width = viewport.width,
-                    .height = viewport.height,
-                };
-
-                for (sorted_layers) |layer| {
-                    const layer_idx = @intFromEnum(layer);
-
-                    if (!self.layer_visibility[layer_idx]) continue;
-                    if (!layer_mask.has(layer)) continue;
-
-                    const cfg = layer.config();
-
-                    if (cfg.space == .world) {
-                        beginCameraModeWithCamAndParallax(cam, cfg.parallax_x, cfg.parallax_y);
-                    }
-
-                    var iter = self.layer_buckets[layer_idx].iterator();
-                    while (iter.next()) |item| {
-                        if (!isItemVisible(visuals, item)) continue;
-
-                        switch (item.item_type) {
-                            .sprite => {
-                                if (cfg.space == .screen or shouldRenderSpriteInViewport(visuals, resources, item.entity_id, viewport)) {
-                                    renderSprite(visuals, resources, item.entity_id, cam_viewport_rect, cam);
-                                }
-                            },
-                            .shape => {
-                                if (cfg.space == .screen or shouldRenderShapeInViewport(visuals, item.entity_id, viewport)) {
-                                    renderShape(visuals, item.entity_id);
-                                }
-                            },
-                            .text => renderText(visuals, item.entity_id),
-                        }
-                    }
-
-                    if (cfg.space == .world) {
-                        BackendType.endMode2D();
-                    }
-                }
+                self.renderLayersForCamera(visuals, cam, resources, layer_mask);
 
                 if (cam.screen_viewport != null) {
                     BackendType.endScissorMode();
+                }
+            }
+        }
+
+        /// Renders all visible layers for a single camera with the given layer mask.
+        /// This is the core layer-rendering logic shared by single and multi-camera modes.
+        fn renderLayersForCamera(
+            self: *Self,
+            visuals: *const Visuals,
+            camera: *Camera,
+            resources: *Resources,
+            layer_mask: LMask,
+        ) void {
+            const cam_vp = camera.getViewport();
+            const cam_viewport_rect: Container.Rect = .{
+                .x = cam_vp.x,
+                .y = cam_vp.y,
+                .width = cam_vp.width,
+                .height = cam_vp.height,
+            };
+
+            for (sorted_layers) |layer| {
+                const layer_idx = @intFromEnum(layer);
+
+                if (!self.layer_visibility[layer_idx]) continue;
+                if (!layer_mask.has(layer)) continue;
+
+                const cfg = layer.config();
+
+                if (cfg.space == .world) {
+                    beginCameraModeWithParallax(camera, cfg.parallax_x, cfg.parallax_y);
+                }
+
+                var iter = self.layer_buckets[layer_idx].iterator();
+                while (iter.next()) |item| {
+                    if (!isItemVisible(visuals, item)) continue;
+
+                    switch (item.item_type) {
+                        .sprite => {
+                            if (cfg.space == .screen or shouldRenderSpriteInViewport(visuals, resources, item.entity_id, cam_vp)) {
+                                renderSprite(visuals, resources, item.entity_id, cam_viewport_rect, camera);
+                            }
+                        },
+                        .shape => {
+                            if (cfg.space == .screen or shouldRenderShapeInViewport(visuals, item.entity_id, cam_vp)) {
+                                renderShape(visuals, item.entity_id);
+                            }
+                        },
+                        .text => renderText(visuals, item.entity_id),
+                    }
+                }
+
+                if (cfg.space == .world) {
+                    BackendType.endMode2D();
                 }
             }
         }
@@ -253,7 +231,10 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
 
         fn beginCameraModeWithParallax(camera: *Camera, parallax_x: f32, parallax_y: f32) void {
             const rl_camera = BackendType.Camera2D{
-                .offset = .{
+                .offset = if (camera.screen_viewport) |vp| .{
+                    .x = @as(f32, @floatFromInt(vp.x)) + @as(f32, @floatFromInt(vp.width)) / 2.0,
+                    .y = @as(f32, @floatFromInt(vp.y)) + @as(f32, @floatFromInt(vp.height)) / 2.0,
+                } else .{
                     .x = @as(f32, @floatFromInt(BackendType.getScreenWidth())) / 2.0,
                     .y = @as(f32, @floatFromInt(BackendType.getScreenHeight())) / 2.0,
                 },
@@ -263,25 +244,6 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
                 },
                 .rotation = camera.rotation,
                 .zoom = camera.zoom,
-            };
-            BackendType.beginMode2D(rl_camera);
-        }
-
-        fn beginCameraModeWithCamAndParallax(cam: *const Camera, parallax_x: f32, parallax_y: f32) void {
-            const rl_camera = BackendType.Camera2D{
-                .offset = if (cam.screen_viewport) |vp| .{
-                    .x = @as(f32, @floatFromInt(vp.x)) + @as(f32, @floatFromInt(vp.width)) / 2.0,
-                    .y = @as(f32, @floatFromInt(vp.y)) + @as(f32, @floatFromInt(vp.height)) / 2.0,
-                } else .{
-                    .x = @as(f32, @floatFromInt(BackendType.getScreenWidth())) / 2.0,
-                    .y = @as(f32, @floatFromInt(BackendType.getScreenHeight())) / 2.0,
-                },
-                .target = .{
-                    .x = cam.x * parallax_x,
-                    .y = cam.y * parallax_y,
-                },
-                .rotation = cam.rotation,
-                .zoom = cam.zoom,
             };
             BackendType.beginMode2D(rl_camera);
         }

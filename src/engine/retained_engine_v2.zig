@@ -198,8 +198,9 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
         fn handleScreenResize(self: *Self) void {
             if (self.cameras.multi_camera_enabled) {
                 self.cameras.recalculateViewports();
+            } else {
+                self.cameras.centerOnScreen();
             }
-            self.cameras.centerOnScreen();
         }
 
         // ==================== Fullscreen (delegates to window) ====================

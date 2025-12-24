@@ -122,9 +122,17 @@ pub fn VisualSubsystem(comptime LayerEnum: type) type {
         // ==================== Position Management ====================
 
         pub fn updatePosition(self: *Self, id: EntityId, pos: Position) void {
-            self.sprites.updatePosition(id, pos);
-            self.shapes.updatePosition(id, pos);
-            self.texts.updatePosition(id, pos);
+            if (self.sprites.getEntry(id)) |entry| {
+                entry.position = pos;
+                return;
+            }
+            if (self.shapes.getEntry(id)) |entry| {
+                entry.position = pos;
+                return;
+            }
+            if (self.texts.getEntry(id)) |entry| {
+                entry.position = pos;
+            }
         }
 
         pub fn getPosition(self: *const Self, id: EntityId) ?Position {
