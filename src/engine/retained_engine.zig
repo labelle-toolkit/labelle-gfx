@@ -716,6 +716,8 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             };
         }
 
+        /// Render a shape visual by entity ID.
+        /// Shape rendering logic is delegated to Helpers.renderShape.
         fn renderShape(self: *Self, id: EntityId) void {
             const entry = self.shapes.getEntryConst(id) orelse return;
             Helpers.renderShape(entry.visual.shape, entry.position, entry.visual.color, entry.visual.rotation);
