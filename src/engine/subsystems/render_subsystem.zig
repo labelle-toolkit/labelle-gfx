@@ -287,12 +287,11 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
         }
 
         /// Sprite lookup result containing atlas data and sprite info.
+        /// Note: sprite dimensions are available via src_rect.width and src_rect.height.
         const SpriteLookup = struct {
             texture: BackendType.Texture,
             sprite_x: u32,
             sprite_y: u32,
-            sprite_w: f32,
-            sprite_h: f32,
             src_rect: BackendType.Rectangle,
         };
 
@@ -305,8 +304,6 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
                 .texture = result.atlas.texture,
                 .sprite_x = sprite.x,
                 .sprite_y = sprite.y,
-                .sprite_w = @floatFromInt(sprite.width),
-                .sprite_h = @floatFromInt(sprite.height),
                 .src_rect = Helpers.createSrcRect(sprite.x, sprite.y, sprite.width, sprite.height),
             };
         }
@@ -352,7 +349,7 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
             tint: BackendType.Color,
         ) void {
             const layer_cfg = visual.layer.config();
-            const cont_rect = Helpers.resolveContainer(visual.container, layer_cfg.space, lookup.sprite_w, lookup.sprite_h, cam_viewport);
+            const cont_rect = Helpers.resolveContainer(visual.container, layer_cfg.space, lookup.src_rect.width, lookup.src_rect.height, cam_viewport);
             const screen_vp: ?Helpers.ScreenViewport = if (layer_cfg.space == .screen)
                 .{
                     .width = @floatFromInt(BackendType.getScreenWidth()),
@@ -377,8 +374,8 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
                 lookup.sprite_x,
                 lookup.sprite_y,
                 lookup.src_rect,
-                lookup.sprite_w,
-                lookup.sprite_h,
+                lookup.src_rect.width,
+                lookup.src_rect.height,
                 pos,
                 visual.size_mode,
                 cont_rect,
@@ -417,8 +414,8 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
                 Helpers.renderBasicSprite(
                     lookup.texture,
                     lookup.src_rect,
-                    lookup.sprite_w,
-                    lookup.sprite_h,
+                    lookup.src_rect.width,
+                    lookup.src_rect.height,
                     pos,
                     visual.scale,
                     visual.pivot,
