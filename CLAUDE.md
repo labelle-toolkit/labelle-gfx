@@ -28,7 +28,7 @@ labelle/
 │   ├── backend/                # Backend abstraction (raylib, sokol, mock)
 │   └── tools/                  # CLI tools (converter)
 ├── tests/                      # Test files (zspec)
-├── examples/                   # Example applications (01-16)
+├── examples/                   # Example applications (01-21)
 ├── fixtures/                   # Test assets (sprite atlases, .zon files)
 └── .github/workflows/          # CI configuration
 ```
@@ -625,6 +625,60 @@ engine.setLayerVisible(.ui, false);
 - `.order` - Rendering order (lower = rendered first)
 - `.parallax_x`, `.parallax_y` - Parallax scrolling factor (1.0 = normal)
 
+### Fullscreen Support
+
+Toggle fullscreen mode at runtime with automatic screen resize handling:
+
+```zig
+const gfx = @import("labelle");
+const rl = @import("raylib");
+
+var engine = try gfx.RetainedEngine.init(allocator, .{
+    .window = .{ .width = 800, .height = 600, .title = "Fullscreen Demo" },
+});
+defer engine.deinit();
+
+while (engine.isRunning()) {
+    // Toggle fullscreen with F11 or F key
+    if (rl.isKeyPressed(.f11) or rl.isKeyPressed(.f)) {
+        engine.toggleFullscreen();
+    }
+
+    engine.beginFrame();
+
+    // Check if screen size changed (automatic detection)
+    if (engine.screenSizeChanged()) {
+        if (engine.getScreenSizeChange()) |change| {
+            std.debug.print("Size changed: {}x{} -> {}x{}\n", .{
+                change.old_width, change.old_height,
+                change.new_width, change.new_height,
+            });
+        }
+        // Camera viewports update automatically
+    }
+
+    // Query current state
+    const is_fullscreen = engine.isFullscreen();
+    const window_size = engine.getWindowSize();
+
+    engine.render();
+    engine.endFrame();
+}
+```
+
+**Fullscreen API:**
+- `toggleFullscreen()` - Toggle between fullscreen and windowed mode
+- `setFullscreen(bool)` - Explicitly set fullscreen state
+- `isFullscreen()` - Check if currently in fullscreen mode
+- `screenSizeChanged()` - Check if screen size changed this frame
+- `getScreenSizeChange()` - Get old and new dimensions (if changed)
+- `getWindowSize()` - Get current window dimensions
+
+**Backend support:**
+- **Raylib**: Full support with proper monitor resolution detection
+- **Sokol**: Full support via sokol_app
+- **SDL**: Full support with desktop fullscreen mode
+
 ### Logging
 
 Scoped logging following the labelle-toolkit pattern:
@@ -706,6 +760,7 @@ pub const AnimationTests = struct {
 | 18_multi_camera | Multi-camera support for split-screen and minimap |
 | 19_layers | Canvas/Layer system with custom layer enums |
 | 20_sprite_sizing | Container-based sprite sizing (stretch, cover, contain, repeat) |
+| 21_fullscreen | Fullscreen toggle with screen resize handling |
 
 ## Common Patterns
 

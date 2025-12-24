@@ -32,7 +32,9 @@ A 2D graphics library for Zig games using [raylib](https://www.raylib.com/) for 
 - **Single Sprite Loading** - Load individual images without atlas (SingleSprite API)
 - **Tiled Map Editor Support** - Load and render TMX tilemaps with external tilesets
 - **Shape Primitives** - Draw circles, rectangles, lines, triangles, and polygons
-- **Scene Loading** - Load scenes from .zon files with sprites and shapes
+- **Layer System** - Organize rendering into screen-space and world-space layers
+- **Sprite Sizing Modes** - Container-based sizing (stretch, cover, contain, repeat)
+- **Fullscreen Support** - Toggle fullscreen with automatic screen resize handling
 
 ## Quick Start
 
@@ -205,6 +207,15 @@ zig build run-example-17
 
 # Multi-camera (split-screen)
 zig build run-example-18
+
+# Layer system
+zig build run-example-19
+
+# Sprite sizing modes
+zig build run-example-20
+
+# Fullscreen toggle
+zig build run-example-21
 ```
 
 ## API Overview
@@ -301,6 +312,37 @@ while (engine.isRunning()) {
 
 Available layouts: `.single` (default), `.vertical_split`, `.horizontal_split`, `.quadrant`
 
+### Fullscreen
+
+```zig
+const gfx = @import("labelle");
+
+var engine = try gfx.RetainedEngine.init(allocator, .{
+    .window = .{ .width = 800, .height = 600, .title = "Fullscreen Demo" },
+});
+defer engine.deinit();
+
+// Game loop with fullscreen toggle
+while (engine.isRunning()) {
+    // Toggle fullscreen with F11
+    if (rl.isKeyPressed(.f11)) {
+        engine.toggleFullscreen();
+    }
+
+    engine.beginFrame();
+
+    // Check if screen size changed (e.g., after fullscreen toggle)
+    if (engine.screenSizeChanged()) {
+        // Handle resize - camera viewports update automatically
+        const size = engine.getWindowSize();
+        std.debug.print("New size: {}x{}\n", .{ size.w, size.h });
+    }
+
+    engine.render();
+    engine.endFrame();
+}
+```
+
 ### Logging
 
 ```zig
@@ -329,7 +371,7 @@ labelle/
 │   ├── backend/                # Backend abstraction
 │   └── tools/                  # CLI tools (converter)
 ├── tests/                      # Test files (zspec)
-├── examples/                   # Example applications (01-18)
+├── examples/                   # Example applications (01-21)
 └── fixtures/                   # Test assets
 ```
 
