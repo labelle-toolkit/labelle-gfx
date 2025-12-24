@@ -448,6 +448,15 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
         }
 
         fn renderSingleCamera(self: *Self) void {
+            // Get camera viewport for camera_viewport container support
+            const cam_vp = self.camera.getViewport();
+            const cam_viewport_rect: Container.Rect = .{
+                .x = cam_vp.x,
+                .y = cam_vp.y,
+                .width = cam_vp.width,
+                .height = cam_vp.height,
+            };
+
             for (sorted_layers) |layer| {
                 const layer_idx = @intFromEnum(layer);
 
@@ -465,7 +474,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     if (!self.isVisible(item)) continue;
 
                     switch (item.item_type) {
-                        .sprite => self.renderSprite(item.entity_id),
+                        .sprite => self.renderSprite(item.entity_id, cam_viewport_rect, &self.camera),
                         .shape => self.renderShape(item.entity_id),
                         .text => self.renderText(item.entity_id),
                     }
@@ -490,6 +499,12 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                 }
 
                 const viewport = cam.getViewport();
+                const cam_viewport_rect: Container.Rect = .{
+                    .x = viewport.x,
+                    .y = viewport.y,
+                    .width = viewport.width,
+                    .height = viewport.height,
+                };
 
                 for (sorted_layers) |layer| {
                     const layer_idx = @intFromEnum(layer);
@@ -510,7 +525,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                         switch (item.item_type) {
                             .sprite => {
                                 if (cfg.space == .screen or self.shouldRenderSpriteInViewport(item.entity_id, viewport)) {
-                                    self.renderSprite(item.entity_id);
+                                    self.renderSprite(item.entity_id, cam_viewport_rect, cam);
                                 }
                             },
                             .shape => {
@@ -611,7 +626,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
             BackendType.endMode2D();
         }
 
-        fn renderSprite(self: *Self, id: EntityId) void {
+        fn renderSprite(self: *Self, id: EntityId, cam_viewport: ?Container.Rect, cam: *const Camera) void {
             const entry = self.sprites.getEntryConst(id) orelse return;
             const visual = entry.visual;
             const pos = entry.position;
@@ -648,7 +663,7 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                     } else {
                         // Sized mode: resolve container and render
                         const layer_cfg = visual.layer.config();
-                        const cont_rect = Helpers.resolveContainer(visual.container, layer_cfg.space, sprite_w, sprite_h);
+                        const cont_rect = Helpers.resolveContainer(visual.container, layer_cfg.space, sprite_w, sprite_h, cam_viewport);
                         const screen_vp: ?Helpers.ScreenViewport = if (layer_cfg.space == .screen)
                             .{
                                 .width = @floatFromInt(BackendType.getScreenWidth()),
@@ -656,6 +671,45 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                             }
                         else
                             null;
+
+                        // For repeat mode, use getNormalized to correctly interpret the Pivot enum
+                        // (pivot_x/pivot_y fields default to 0.5, but .top_left should use 0,0)
+                        // Other modes use pivot_x/pivot_y directly for letterbox positioning
+                        const pivot_x, const pivot_y = if (visual.size_mode == .repeat) blk: {
+                            const normalized = visual.pivot.getNormalized(visual.pivot_x, visual.pivot_y);
+                            break :blk .{ normalized.x, normalized.y };
+                        } else .{ visual.pivot_x, visual.pivot_y };
+
+                        // For repeat mode, enable scissor clipping to prevent tiles from overflowing container
+                        // Note: Scissor operates in screen coordinates, so transform world coords if needed
+                        if (visual.size_mode == .repeat) {
+                            const container_tl_x = pos.x + cont_rect.x - cont_rect.width * pivot_x;
+                            const container_tl_y = pos.y + cont_rect.y - cont_rect.height * pivot_y;
+
+                            const scissor_x: i32, const scissor_y: i32, const scissor_w: i32, const scissor_h: i32 = blk: {
+                                if (layer_cfg.space == .world) {
+                                    // Transform world coordinates to screen coordinates
+                                    // Use the passed camera (not self.camera) for correct multi-camera support
+                                    const screen_tl = cam.worldToScreen(container_tl_x, container_tl_y);
+                                    const screen_br = cam.worldToScreen(container_tl_x + cont_rect.width, container_tl_y + cont_rect.height);
+                                    break :blk .{
+                                        @intFromFloat(screen_tl.x),
+                                        @intFromFloat(screen_tl.y),
+                                        @intFromFloat(screen_br.x - screen_tl.x),
+                                        @intFromFloat(screen_br.y - screen_tl.y),
+                                    };
+                                } else {
+                                    // Screen-space: coordinates are already in screen space
+                                    break :blk .{
+                                        @intFromFloat(container_tl_x),
+                                        @intFromFloat(container_tl_y),
+                                        @intFromFloat(cont_rect.width),
+                                        @intFromFloat(cont_rect.height),
+                                    };
+                                }
+                            };
+                            BackendType.beginScissorMode(scissor_x, scissor_y, scissor_w, scissor_h);
+                        }
 
                         Helpers.renderSizedSprite(
                             result.atlas.texture,
@@ -668,8 +722,8 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                             visual.size_mode,
                             cont_rect,
                             visual.pivot,
-                            visual.pivot_x,
-                            visual.pivot_y,
+                            pivot_x,
+                            pivot_y,
                             visual.rotation,
                             visual.flip_x,
                             visual.flip_y,
@@ -677,6 +731,10 @@ pub fn RetainedEngineWith(comptime BackendType: type, comptime LayerEnum: type) 
                             tint,
                             screen_vp,
                         );
+
+                        if (visual.size_mode == .repeat) {
+                            BackendType.endScissorMode();
+                        }
                     }
                 }
             }

@@ -98,6 +98,10 @@ pub const Container = union(enum) {
     /// Use full screen dimensions (width x height at origin 0,0).
     /// Note: This uses screen size, not individual camera viewports.
     viewport,
+    /// Use the camera's world-space visible area.
+    /// The container matches what the camera sees, so sprites fill the view
+    /// regardless of camera position or zoom. Ideal for world-space backgrounds.
+    camera_viewport,
     /// Use explicit rectangle with position and dimensions.
     /// Supports containers not at origin (UI panels, etc.)
     explicit: Rect,

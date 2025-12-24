@@ -239,8 +239,26 @@ pub const MockBackend = struct {
     // Viewport/Scissor functions (for multi-camera support)
     threadlocal var scissor_rect: ?struct { x: i32, y: i32, w: i32, h: i32 } = null;
 
+    /// Record of a scissor mode call for testing
+    pub const ScissorCall = struct {
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    };
+
+    /// Fixed-size history of scissor mode calls for testing (no allocator needed)
+    const MAX_SCISSOR_CALLS: usize = 64;
+    threadlocal var scissor_call_history: [MAX_SCISSOR_CALLS]ScissorCall = undefined;
+    threadlocal var scissor_call_count: usize = 0;
+
     pub fn beginScissorMode(x: i32, y: i32, w: i32, h: i32) void {
         scissor_rect = .{ .x = x, .y = y, .w = w, .h = h };
+        // Track this call for testing (up to MAX_SCISSOR_CALLS)
+        if (scissor_call_count < MAX_SCISSOR_CALLS) {
+            scissor_call_history[scissor_call_count] = .{ .x = x, .y = y, .w = w, .h = h };
+            scissor_call_count += 1;
+        }
     }
 
     pub fn endScissorMode() void {
@@ -255,6 +273,27 @@ pub const MockBackend = struct {
     /// Test helper: get current scissor rect
     pub fn getScissorRect() ?struct { x: i32, y: i32, w: i32, h: i32 } {
         return scissor_rect;
+    }
+
+    /// Test helper: get the number of times beginScissorMode was called
+    pub fn getScissorCallCount() usize {
+        return scissor_call_count;
+    }
+
+    /// Test helper: get all scissor calls made during the test
+    pub fn getScissorCallHistory() []const ScissorCall {
+        return scissor_call_history[0..scissor_call_count];
+    }
+
+    /// Test helper: get the last scissor call (if any)
+    pub fn getLastScissorCall() ?ScissorCall {
+        if (scissor_call_count == 0) return null;
+        return scissor_call_history[scissor_call_count - 1];
+    }
+
+    /// Test helper: reset scissor call tracking
+    pub fn resetScissorTracking() void {
+        scissor_call_count = 0;
     }
 
     // Test helpers
