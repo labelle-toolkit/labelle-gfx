@@ -90,6 +90,9 @@ pub const SokolBackend = struct {
     threadlocal var current_camera: ?Camera2D = null;
     threadlocal var in_camera_mode: bool = false;
 
+    // State tracking for sgl initialization
+    threadlocal var sgl_initialized: bool = false;
+
     /// Create a color from RGBA values
     pub fn color(r: u8, g: u8, b: u8, a: u8) Color {
         return .{ .r = r, .g = g, .b = b, .a = a };
@@ -347,6 +350,15 @@ pub const SokolBackend = struct {
         sapp.quit();
     }
 
+    /// Shutdown the backend and release resources
+    /// Should be called during application cleanup
+    pub fn shutdown() void {
+        if (sgl_initialized) {
+            sgl.shutdown();
+            sgl_initialized = false;
+        }
+    }
+
     /// Check if window should close
     pub fn windowShouldClose() bool {
         // sokol_app uses callbacks, so this isn't directly applicable
@@ -380,7 +392,15 @@ pub const SokolBackend = struct {
 
     /// Begin drawing frame
     pub fn beginDrawing() void {
-        // Typically sokol_gfx pass is begun in the frame callback
+        // Lazy initialization of sokol_gl if not already done
+        // This ensures sgl.setup() is called before sgl.defaults()
+        if (!sgl_initialized) {
+            sgl.setup(.{
+                .logger = .{ .func = sokol.log.func },
+            });
+            sgl_initialized = true;
+        }
+
         // sgl setup for the frame
         sgl.defaults();
         sgl.matrixModeProjection();
