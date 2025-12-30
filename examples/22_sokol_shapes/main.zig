@@ -16,7 +16,6 @@
 const std = @import("std");
 const sokol = @import("sokol");
 const sg = sokol.gfx;
-const sgl = sokol.gl;
 const sapp = sokol.app;
 const gfx = @import("labelle");
 
@@ -49,10 +48,8 @@ export fn init() void {
         .logger = .{ .func = sokol.log.func },
     });
 
-    // Initialize sokol_gl for immediate-mode drawing
-    sgl.setup(.{
-        .logger = .{ .func = sokol.log.func },
-    });
+    // Note: sokol_gl is lazily initialized by SokolBackend.beginDrawing()
+    // No need to call sgl.setup() manually!
 
     // Setup clear color (dark background)
     state.pass_action.colors[0] = .{
@@ -77,17 +74,12 @@ export fn frame() void {
         .swapchain = sokol.glue.swapchain(),
     });
 
-    // Setup sokol_gl for 2D drawing
-    sgl.defaults();
-    sgl.matrixModeProjection();
-    sgl.loadIdentity();
+    // Setup sokol_gl for 2D drawing using the backend
+    // This lazily initializes sgl if not already done
+    SokolBackend.beginDrawing();
 
     const w: f32 = @floatFromInt(sapp.width());
     const h: f32 = @floatFromInt(sapp.height());
-    sgl.ortho(0, w, h, 0, -1, 1);
-
-    sgl.matrixModeModelview();
-    sgl.loadIdentity();
 
     // Layout: 2 rows, 4 columns of shapes
     const col_width = w / 4.0;
@@ -215,8 +207,8 @@ export fn frame() void {
         );
     }
 
-    // Draw sgl commands
-    sgl.draw();
+    // Draw sgl commands using the backend
+    SokolBackend.endDrawing();
 
     // End render pass
     sg.endPass();
@@ -229,7 +221,8 @@ export fn frame() void {
 }
 
 export fn cleanup() void {
-    sgl.shutdown();
+    // Cleanup sokol_gl using the backend
+    SokolBackend.shutdown();
     sg.shutdown();
     std.debug.print("Sokol Shapes Demo cleanup complete.\n", .{});
 }
