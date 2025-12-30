@@ -216,6 +216,9 @@ zig build run-example-20
 
 # Fullscreen toggle
 zig build run-example-21
+
+# Sokol shapes demo
+zig build run-example-22
 ```
 
 ## API Overview

@@ -761,6 +761,7 @@ pub const AnimationTests = struct {
 | 19_layers | Canvas/Layer system with custom layer enums |
 | 20_sprite_sizing | Container-based sprite sizing (stretch, cover, contain, repeat) |
 | 21_fullscreen | Fullscreen toggle with screen resize handling |
+| 22_sokol_shapes | Sokol backend shape rendering demo |
 
 ## Common Patterns
 
