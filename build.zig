@@ -196,8 +196,11 @@ pub fn build(b: *std.Build) void {
             .root_module = sdl_example_mod,
         });
 
-        // Link SDL2 library using the SDK
+        // Link SDL2 libraries using the SDK
         sdl_sdk.link(sdl_example, .dynamic, .SDL2);
+        sdl_sdk.link(sdl_example, .dynamic, .SDL2_ttf);
+        // SDL2_image must be linked manually via system library
+        sdl_example.linkSystemLibrary("SDL2_image");
 
         const run_cmd = b.addRunArtifact(sdl_example);
         const run_step = b.step("run-example-17", "SDL backend example");
@@ -245,6 +248,8 @@ pub fn build(b: *std.Build) void {
         });
 
         sdl_sdk.link(sdl_fullscreen, .dynamic, .SDL2);
+        sdl_sdk.link(sdl_fullscreen, .dynamic, .SDL2_ttf);
+        sdl_fullscreen.linkSystemLibrary("SDL2_image");
 
         const run_cmd = b.addRunArtifact(sdl_fullscreen);
         const run_step = b.step("run-example-21-sdl", "Fullscreen example (SDL backend)");
