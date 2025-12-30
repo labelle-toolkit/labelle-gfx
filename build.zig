@@ -251,6 +251,29 @@ pub fn build(b: *std.Build) void {
         run_step.dependOn(&run_cmd.step);
     }
 
+    // Example 22: Sokol Shapes - demonstrates all shape rendering functions
+    {
+        const sokol_shapes = b.addExecutable(.{
+            .name = "22_sokol_shapes",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/22_sokol_shapes/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle", .module = lib_mod },
+                    .{ .name = "sokol", .module = sokol },
+                },
+            }),
+        });
+
+        const run_cmd_22 = b.addRunArtifact(sokol_shapes);
+        const run_step_22 = b.step("run-example-22", "Sokol shapes example");
+        run_step_22.dependOn(&run_cmd_22.step);
+
+        const full_run_step = b.step("run-22_sokol_shapes", "Sokol shapes example");
+        full_run_step.dependOn(&run_cmd_22.step);
+    }
+
     // Converter tool
     const converter_exe = b.addExecutable(.{
         .name = "labelle-convert",

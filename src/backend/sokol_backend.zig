@@ -508,7 +508,7 @@ pub const SokolBackend = struct {
         sgl.end();
     }
 
-    /// Draw filled circle using triangle fan
+    /// Draw filled circle using triangles
     pub fn drawCircle(center_x: f32, center_y: f32, radius: f32, col: Color) void {
         const r: f32 = @as(f32, @floatFromInt(col.r)) / 255.0;
         const g: f32 = @as(f32, @floatFromInt(col.g)) / 255.0;
@@ -517,14 +517,16 @@ pub const SokolBackend = struct {
 
         const segments: i32 = 36; // Number of segments for circle approximation
 
-        sgl.beginTriangleFan();
+        // Build triangle fan manually using individual triangles
+        sgl.beginTriangles();
         sgl.c4f(r, g, b, a);
-        // Center point
-        sgl.v2f(center_x, center_y);
-        // Outer points
-        for (0..@as(usize, @intCast(segments + 1))) |i| {
-            const angle = @as(f32, @floatFromInt(i)) * 2.0 * std.math.pi / @as(f32, @floatFromInt(segments));
-            sgl.v2f(center_x + @cos(angle) * radius, center_y + @sin(angle) * radius);
+        for (0..@as(usize, @intCast(segments))) |i| {
+            const angle1 = @as(f32, @floatFromInt(i)) * 2.0 * std.math.pi / @as(f32, @floatFromInt(segments));
+            const angle2 = @as(f32, @floatFromInt(i + 1)) * 2.0 * std.math.pi / @as(f32, @floatFromInt(segments));
+            // Triangle: center, point1, point2
+            sgl.v2f(center_x, center_y);
+            sgl.v2f(center_x + @cos(angle1) * radius, center_y + @sin(angle1) * radius);
+            sgl.v2f(center_x + @cos(angle2) * radius, center_y + @sin(angle2) * radius);
         }
         sgl.end();
     }
@@ -631,14 +633,16 @@ pub const SokolBackend = struct {
         const rot_rad = rotation * std.math.pi / 180.0;
         const angle_step = 2.0 * std.math.pi / @as(f32, @floatFromInt(sides));
 
-        sgl.beginTriangleFan();
+        // Build triangle fan manually using individual triangles
+        sgl.beginTriangles();
         sgl.c4f(r, g, b, a);
-        // Center point
-        sgl.v2f(center_x, center_y);
-        // Outer points
-        for (0..@as(usize, @intCast(sides + 1))) |i| {
-            const angle = @as(f32, @floatFromInt(i)) * angle_step + rot_rad;
-            sgl.v2f(center_x + @cos(angle) * radius, center_y + @sin(angle) * radius);
+        for (0..@as(usize, @intCast(sides))) |i| {
+            const angle1 = @as(f32, @floatFromInt(i)) * angle_step + rot_rad;
+            const angle2 = @as(f32, @floatFromInt(i + 1)) * angle_step + rot_rad;
+            // Triangle: center, point1, point2
+            sgl.v2f(center_x, center_y);
+            sgl.v2f(center_x + @cos(angle1) * radius, center_y + @sin(angle1) * radius);
+            sgl.v2f(center_x + @cos(angle2) * radius, center_y + @sin(angle2) * radius);
         }
         sgl.end();
     }
