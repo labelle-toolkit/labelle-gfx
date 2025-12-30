@@ -24,14 +24,14 @@ pub fn WindowSubsystem(comptime BackendType: type) type {
         prev_screen_height: i32,
         screen_size_changed: bool,
 
-        pub fn init(window_config: ?WindowConfig, clear_color_config: Color) Self {
+        pub fn init(window_config: ?WindowConfig, clear_color_config: Color) !Self {
             var owns_window = false;
 
             if (window_config) |wc| {
                 if (wc.hidden) {
                     BackendType.setConfigFlags(.{ .window_hidden = true });
                 }
-                BackendType.initWindow(wc.width, wc.height, wc.title.ptr);
+                try BackendType.initWindow(wc.width, wc.height, wc.title.ptr);
                 BackendType.setTargetFPS(wc.target_fps);
                 owns_window = true;
             }

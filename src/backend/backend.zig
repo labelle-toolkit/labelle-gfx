@@ -189,9 +189,14 @@ pub fn Backend(comptime Impl: type) type {
         // Window management (optional - for Engine integration)
 
         /// Initialize window
-        pub inline fn initWindow(width: i32, height: i32, title: [*:0]const u8) void {
+        pub inline fn initWindow(width: i32, height: i32, title: [*:0]const u8) !void {
             if (@hasDecl(Impl, "initWindow")) {
-                Impl.initWindow(width, height, title);
+                const result = Impl.initWindow(width, height, title);
+                // Handle both error union and void return types
+                switch (@typeInfo(@TypeOf(result))) {
+                    .error_union => try result,
+                    else => {},
+                }
             }
         }
 

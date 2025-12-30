@@ -332,7 +332,7 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
                 if (window_config.hidden) {
                     BackendType.setConfigFlags(.{ .window_hidden = true });
                 }
-                BackendType.initWindow(window_config.width, window_config.height, window_config.title.ptr);
+                try BackendType.initWindow(window_config.width, window_config.height, window_config.title.ptr);
                 BackendType.setTargetFPS(window_config.target_fps);
                 owns_window = true;
             }

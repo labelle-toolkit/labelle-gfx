@@ -147,7 +147,7 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
                 .cameras = Cameras.init(),
                 .resources = Resources.init(allocator),
                 .renderer = Renderer.init(allocator),
-                .window = Window.init(cfg.window, cfg.clear_color),
+                .window = try Window.init(cfg.window, cfg.clear_color),
             };
         }
 
