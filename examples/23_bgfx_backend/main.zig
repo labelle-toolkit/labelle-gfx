@@ -31,8 +31,8 @@ const texture_paths = [_][:0]const u8{
     "fixtures/sprites/items/sword.png",
 };
 
-// Texture indices for named access
-const TextureIndex = enum(usize) { coin = 0, gem = 1, heart = 2, key = 3, potion = 4, sword = 5 };
+// Texture indices for named access (order must match texture_paths)
+const TextureIndex = enum(usize) { coin, gem, heart, key, potion, sword };
 
 /// Helper to check if a key is held (pressed or repeating)
 fn isKeyHeld(window: *zglfw.Window, key: zglfw.Key) bool {
@@ -197,7 +197,8 @@ pub fn main() !void {
     std.log.info("Renderer: {s}", .{bgfx.getRendererName(bgfx.getRendererType())});
 
     // Load sprite textures from fixtures
-    var textures: [texture_paths.len]BgfxBackend.Texture = undefined;
+    // Initialize with invalid textures to avoid undefined behavior if loading fails partway
+    var textures: [texture_paths.len]BgfxBackend.Texture = [_]BgfxBackend.Texture{.{ .handle = .{ .idx = std.math.maxInt(u16) }, .width = 0, .height = 0 }} ** texture_paths.len;
     for (texture_paths, 0..) |path, i| {
         textures[i] = BgfxBackend.loadTexture(path) catch |err| {
             std.log.err("Failed to load texture '{s}': {}", .{ path, err });
