@@ -27,7 +27,7 @@ A 2D graphics library for Zig games using [raylib](https://www.raylib.com/) for 
 - **Visual Effects** - Fade, temporal fade, flash effects
 - **Z-Index Bucket Optimization** - O(n) rendering via pre-sorted buckets (no per-frame sorting)
 - **Multi-Camera Support** - Split-screen, minimap, and picture-in-picture rendering
-- **Backend Abstraction** - Support for raylib (default), sokol, and SDL2 backends
+- **Backend Abstraction** - Support for raylib (default), sokol, SDL2, and bgfx backends
 - **Scoped Logging** - Configurable logging following labelle-toolkit pattern
 - **Single Sprite Loading** - Load individual images without atlas (SingleSprite API)
 - **Tiled Map Editor Support** - Load and render TMX tilemaps with external tilesets
@@ -219,6 +219,9 @@ zig build run-example-21
 
 # Sokol shapes demo
 zig build run-example-22
+
+# bgfx backend
+zig build run-example-23
 ```
 
 ## API Overview
@@ -374,7 +377,7 @@ labelle/
 │   ├── backend/                # Backend abstraction
 │   └── tools/                  # CLI tools (converter)
 ├── tests/                      # Test files (zspec)
-├── examples/                   # Example applications (01-21)
+├── examples/                   # Example applications (01-23)
 └── fixtures/                   # Test assets
 ```
 
@@ -399,9 +402,10 @@ zig build -Dconvert-atlases=true
 
 ## Dependencies
 
-- [raylib-zig](https://github.com/raysan5/raylib) - Graphics and windowing
+- [raylib-zig](https://github.com/raysan5/raylib) - Graphics and windowing (default backend)
 - [sokol](https://github.com/floooh/sokol) - Optional alternative backend
 - [SDL.zig](https://github.com/ikskuh/SDL.zig) - Optional SDL2 backend
+- [zbgfx](https://github.com/zig-gamedev/zbgfx) - Optional bgfx backend (cross-platform, multi-threaded)
 - [zig-utils](https://github.com/labelle-toolkit/zig-utils) - Common utilities
 - [zspec](https://github.com/labelle-toolkit/zspec) - BDD-style testing
 
