@@ -145,6 +145,10 @@ pub const BgfxBackend = struct {
     // Clear color for background
     threadlocal var clear_color: u32 = 0x303030ff; // Dark gray
 
+    // Frame timing
+    threadlocal var last_frame_time: i64 = 0;
+    threadlocal var frame_delta: f32 = 1.0 / 60.0;
+
     // View ID for 2D rendering
     const VIEW_ID: bgfx.ViewId = 0;
 
@@ -521,8 +525,7 @@ pub const BgfxBackend = struct {
 
     /// Get frame time (delta time)
     pub fn getFrameTime() f32 {
-        // TODO: Track frame time manually or get from windowing library
-        return 1.0 / 60.0;
+        return frame_delta;
     }
 
     /// Set config flags (before window init)
@@ -542,6 +545,16 @@ pub const BgfxBackend = struct {
 
     /// Begin drawing frame
     pub fn beginDrawing() void {
+        // Track frame time
+        const current_time = std.time.nanoTimestamp();
+        if (last_frame_time != 0) {
+            const elapsed_ns = current_time - last_frame_time;
+            frame_delta = @as(f32, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
+            // Clamp to reasonable range
+            frame_delta = @max(0.0001, @min(frame_delta, 0.25));
+        }
+        last_frame_time = current_time;
+
         // Touch the view to ensure it's submitted even if empty
         bgfx.touch(VIEW_ID);
 
