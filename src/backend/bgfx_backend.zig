@@ -6,16 +6,16 @@
 //! Note: This backend requires GLFW or another windowing library for window management.
 //! bgfx itself does not handle window creation - it only manages graphics rendering.
 //!
-//! STATUS: Work in Progress - Investigation phase for issue #150
+//! STATUS: Work in Progress - Shape rendering implemented via debugdraw
 //!
 //! Current limitations:
-//! - Shape drawing functions are not yet implemented (require custom shaders)
 //! - Sprite rendering requires shader compilation infrastructure
 //! - Text rendering not supported (would need font atlas)
 
 const std = @import("std");
 const zbgfx = @import("zbgfx");
 const bgfx = zbgfx.bgfx;
+const debugdraw = zbgfx.debugdraw;
 
 const backend_mod = @import("backend.zig");
 
@@ -133,6 +133,10 @@ pub const BgfxBackend = struct {
 
     // State tracking for bgfx initialization
     threadlocal var bgfx_initialized: bool = false;
+    threadlocal var debugdraw_initialized: bool = false;
+
+    // Debug draw encoder for shape rendering
+    threadlocal var dd_encoder: ?*debugdraw.Encoder = null;
 
     // Screen dimensions (must be set by windowing library)
     threadlocal var screen_width: i32 = 800;
@@ -423,6 +427,13 @@ pub const BgfxBackend = struct {
         // Initialize vertex layouts
         initLayouts();
 
+        // Initialize debug draw for shape rendering
+        debugdraw.init();
+        debugdraw_initialized = true;
+
+        // Create debug draw encoder
+        dd_encoder = debugdraw.Encoder.create();
+
         // Set up default view
         bgfx.setViewClear(VIEW_ID, bgfx.ClearFlags_Color | bgfx.ClearFlags_Depth, clear_color, 1.0, 0);
         bgfx.setViewRect(VIEW_ID, 0, 0, @intCast(screen_width), @intCast(screen_height));
@@ -433,6 +444,17 @@ pub const BgfxBackend = struct {
 
     /// Close window
     pub fn closeWindow() void {
+        // Clean up debug draw
+        if (dd_encoder) |encoder| {
+            encoder.destroy();
+            dd_encoder = null;
+        }
+
+        if (debugdraw_initialized) {
+            debugdraw.deinit();
+            debugdraw_initialized = false;
+        }
+
         if (bgfx_initialized) {
             bgfx.shutdown();
             bgfx_initialized = false;
@@ -478,10 +500,23 @@ pub const BgfxBackend = struct {
     pub fn beginDrawing() void {
         // Touch the view to ensure it's submitted even if empty
         bgfx.touch(VIEW_ID);
+
+        // Begin debug draw session for shapes
+        if (dd_encoder) |encoder| {
+            // Begin with depthTestLess=false for 2D rendering (no depth sorting)
+            encoder.begin(VIEW_ID, false, null);
+            // Disable depth test/write for 2D
+            encoder.setState(false, false, false);
+        }
     }
 
     /// End drawing frame
     pub fn endDrawing() void {
+        // End debug draw session
+        if (dd_encoder) |encoder| {
+            encoder.end();
+        }
+
         // Advance to next frame
         _ = bgfx.frame(false);
     }
@@ -515,98 +550,223 @@ pub const BgfxBackend = struct {
     }
 
     pub fn drawRectangleV(x: f32, y: f32, w: f32, h: f32, col: Color) void {
-        // TODO: Implement with custom shader and transient vertex buffer
-        _ = x;
-        _ = y;
-        _ = w;
-        _ = h;
-        _ = col;
+        const encoder = dd_encoder orelse return;
+
+        // Set color (ABGR format)
+        encoder.setColor(colorToAbgr(col));
+
+        // Create 4 vertices for rectangle (z=0 for 2D)
+        const vertices = [4]debugdraw.Vertex{
+            .{ .x = x, .y = y, .z = 0 }, // top-left
+            .{ .x = x + w, .y = y, .z = 0 }, // top-right
+            .{ .x = x + w, .y = y + h, .z = 0 }, // bottom-right
+            .{ .x = x, .y = y + h, .z = 0 }, // bottom-left
+        };
+
+        // Two triangles: 0-1-2 and 0-2-3
+        const indices = [6]u16{ 0, 1, 2, 0, 2, 3 };
+
+        encoder.drawTriList(4, &vertices, 6, &indices);
     }
 
     pub fn drawRectangleLinesV(x: f32, y: f32, w: f32, h: f32, col: Color) void {
-        // TODO: Implement with line primitive
-        _ = x;
-        _ = y;
-        _ = w;
-        _ = h;
-        _ = col;
+        const encoder = dd_encoder orelse return;
+
+        // Set color (ABGR format)
+        encoder.setColor(colorToAbgr(col));
+
+        // Create 4 vertices for rectangle outline (z=0 for 2D)
+        const vertices = [4]debugdraw.Vertex{
+            .{ .x = x, .y = y, .z = 0 }, // top-left
+            .{ .x = x + w, .y = y, .z = 0 }, // top-right
+            .{ .x = x + w, .y = y + h, .z = 0 }, // bottom-right
+            .{ .x = x, .y = y + h, .z = 0 }, // bottom-left
+        };
+
+        // Four lines: 0-1, 1-2, 2-3, 3-0
+        const indices = [8]u16{ 0, 1, 1, 2, 2, 3, 3, 0 };
+
+        encoder.drawLineList(4, &vertices, 8, &indices);
     }
 
     pub fn drawCircle(center_x: f32, center_y: f32, radius: f32, col: Color) void {
-        // TODO: Implement with triangle fan
-        _ = center_x;
-        _ = center_y;
-        _ = radius;
-        _ = col;
+        const encoder = dd_encoder orelse return;
+
+        // Set color (ABGR format)
+        encoder.setColor(colorToAbgr(col));
+
+        // Draw filled disk - normal points toward camera (0, 0, -1) for 2D
+        const center = [3]f32{ center_x, center_y, 0 };
+        const normal = [3]f32{ 0, 0, -1 };
+        encoder.drawDisk(center, normal, radius);
     }
 
     pub fn drawCircleLines(center_x: f32, center_y: f32, radius: f32, col: Color) void {
-        // TODO: Implement with line strip
-        _ = center_x;
-        _ = center_y;
-        _ = radius;
-        _ = col;
+        const encoder = dd_encoder orelse return;
+
+        // Set color (ABGR format)
+        encoder.setColor(colorToAbgr(col));
+
+        // Draw circle outline - normal points toward camera (0, 0, -1) for 2D
+        const center = [3]f32{ center_x, center_y, 0 };
+        const normal = [3]f32{ 0, 0, -1 };
+        encoder.drawCircle(normal, center, radius, 1.0); // weight=1.0 for line thickness
     }
 
     pub fn drawLine(start_x: f32, start_y: f32, end_x: f32, end_y: f32, col: Color) void {
-        // TODO: Implement with line primitive
-        _ = start_x;
-        _ = start_y;
-        _ = end_x;
-        _ = end_y;
-        _ = col;
+        const encoder = dd_encoder orelse return;
+
+        // Set color (ABGR format)
+        encoder.setColor(colorToAbgr(col));
+
+        // Use moveTo/lineTo for single line
+        encoder.moveTo(.{ start_x, start_y, 0 });
+        encoder.lineTo(.{ end_x, end_y, 0 });
     }
 
     pub fn drawLineEx(start_x: f32, start_y: f32, end_x: f32, end_y: f32, thickness: f32, col: Color) void {
-        // TODO: Implement with quad for thick lines
-        _ = start_x;
-        _ = start_y;
-        _ = end_x;
-        _ = end_y;
-        _ = thickness;
-        _ = col;
+        const encoder = dd_encoder orelse return;
+
+        // Set color (ABGR format)
+        encoder.setColor(colorToAbgr(col));
+
+        // For thick lines, draw as a quad perpendicular to the line direction
+        const dx = end_x - start_x;
+        const dy = end_y - start_y;
+        const len = @sqrt(dx * dx + dy * dy);
+
+        if (len < 0.0001) return;
+
+        // Perpendicular vector normalized, scaled by half thickness
+        const half_thick = thickness * 0.5;
+        const px = -dy / len * half_thick;
+        const py = dx / len * half_thick;
+
+        // Four corners of the thick line quad
+        const vertices = [4]debugdraw.Vertex{
+            .{ .x = start_x + px, .y = start_y + py, .z = 0 },
+            .{ .x = start_x - px, .y = start_y - py, .z = 0 },
+            .{ .x = end_x - px, .y = end_y - py, .z = 0 },
+            .{ .x = end_x + px, .y = end_y + py, .z = 0 },
+        };
+
+        // Two triangles: 0-1-2 and 0-2-3
+        const indices = [6]u16{ 0, 1, 2, 0, 2, 3 };
+
+        encoder.drawTriList(4, &vertices, 6, &indices);
     }
 
     pub fn drawTriangle(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: Color) void {
-        // TODO: Implement with triangle primitive
-        _ = x1;
-        _ = y1;
-        _ = x2;
-        _ = y2;
-        _ = x3;
-        _ = y3;
-        _ = col;
+        const encoder = dd_encoder orelse return;
+
+        // Set color (ABGR format)
+        encoder.setColor(colorToAbgr(col));
+
+        // Use drawTriangle with 3D vertices (z=0 for 2D)
+        encoder.drawTriangle(
+            .{ x1, y1, 0 },
+            .{ x2, y2, 0 },
+            .{ x3, y3, 0 },
+        );
     }
 
     pub fn drawTriangleLines(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: Color) void {
-        // TODO: Implement with line strip
-        _ = x1;
-        _ = y1;
-        _ = x2;
-        _ = y2;
-        _ = x3;
-        _ = y3;
-        _ = col;
+        const encoder = dd_encoder orelse return;
+
+        // Set color (ABGR format)
+        encoder.setColor(colorToAbgr(col));
+
+        // Draw triangle outline using line list
+        const vertices = [3]debugdraw.Vertex{
+            .{ .x = x1, .y = y1, .z = 0 },
+            .{ .x = x2, .y = y2, .z = 0 },
+            .{ .x = x3, .y = y3, .z = 0 },
+        };
+
+        // Three lines: 0-1, 1-2, 2-0
+        const indices = [6]u16{ 0, 1, 1, 2, 2, 0 };
+
+        encoder.drawLineList(3, &vertices, 6, &indices);
     }
 
     pub fn drawPoly(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
-        // TODO: Implement with triangle fan
-        _ = center_x;
-        _ = center_y;
-        _ = sides;
-        _ = radius;
-        _ = rotation;
-        _ = col;
+        const encoder = dd_encoder orelse return;
+        if (sides < 3) return;
+
+        // Set color (ABGR format)
+        encoder.setColor(colorToAbgr(col));
+
+        // Convert rotation from degrees to radians
+        const rot_rad = rotation * std.math.pi / 180.0;
+        const angle_step = 2.0 * std.math.pi / @as(f32, @floatFromInt(sides));
+
+        // Generate vertices for triangle fan
+        // We need sides+1 vertices (center + perimeter) and sides*3 indices
+        const max_sides = 32; // Reasonable limit
+        const n: usize = @min(@as(usize, @intCast(sides)), max_sides);
+
+        var vertices: [max_sides + 1]debugdraw.Vertex = undefined;
+        var indices: [max_sides * 3]u16 = undefined;
+
+        // Center vertex
+        vertices[0] = .{ .x = center_x, .y = center_y, .z = 0 };
+
+        // Perimeter vertices
+        for (0..n) |i| {
+            const angle = rot_rad + @as(f32, @floatFromInt(i)) * angle_step;
+            vertices[i + 1] = .{
+                .x = center_x + radius * @cos(angle),
+                .y = center_y + radius * @sin(angle),
+                .z = 0,
+            };
+        }
+
+        // Triangle fan indices
+        for (0..n) |i| {
+            const ii = i * 3;
+            indices[ii] = 0; // center
+            indices[ii + 1] = @intCast(i + 1);
+            indices[ii + 2] = @intCast(if (i + 2 > n) 1 else i + 2);
+        }
+
+        encoder.drawTriList(@intCast(n + 1), vertices[0 .. n + 1], @intCast(n * 3), &indices);
     }
 
     pub fn drawPolyLines(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
-        // TODO: Implement with line strip
-        _ = center_x;
-        _ = center_y;
-        _ = sides;
-        _ = radius;
-        _ = rotation;
-        _ = col;
+        const encoder = dd_encoder orelse return;
+        if (sides < 3) return;
+
+        // Set color (ABGR format)
+        encoder.setColor(colorToAbgr(col));
+
+        // Convert rotation from degrees to radians
+        const rot_rad = rotation * std.math.pi / 180.0;
+        const angle_step = 2.0 * std.math.pi / @as(f32, @floatFromInt(sides));
+
+        const max_sides = 32;
+        const n: usize = @min(@as(usize, @intCast(sides)), max_sides);
+
+        var vertices: [max_sides]debugdraw.Vertex = undefined;
+        var indices: [max_sides * 2]u16 = undefined;
+
+        // Perimeter vertices
+        for (0..n) |i| {
+            const angle = rot_rad + @as(f32, @floatFromInt(i)) * angle_step;
+            vertices[i] = .{
+                .x = center_x + radius * @cos(angle),
+                .y = center_y + radius * @sin(angle),
+                .z = 0,
+            };
+        }
+
+        // Line indices connecting consecutive vertices
+        for (0..n) |i| {
+            const ii = i * 2;
+            indices[ii] = @intCast(i);
+            indices[ii + 1] = @intCast(if (i + 1 >= n) 0 else i + 1);
+        }
+
+        encoder.drawLineList(@intCast(n), vertices[0..n], @intCast(n * 2), &indices);
     }
 
     // ============================================

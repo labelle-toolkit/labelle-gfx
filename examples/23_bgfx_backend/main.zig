@@ -12,11 +12,101 @@ const builtin = @import("builtin");
 const zglfw = @import("zglfw");
 const zbgfx = @import("zbgfx");
 const bgfx = zbgfx.bgfx;
+const gfx = @import("labelle");
+const BgfxBackend = gfx.BgfxBackend;
 
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
 
+// macOS Cocoa bindings for app activation
+const macos = if (builtin.os.tag == .macos) struct {
+    const c = @cImport({
+        @cInclude("objc/runtime.h");
+        @cInclude("objc/message.h");
+    });
+
+    // objc_msgSend function pointer types
+    const MsgSendFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
+    const MsgSendBoolFn = *const fn (?*anyopaque, ?*anyopaque, bool) callconv(.c) void;
+    const MsgSendVoidFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void;
+
+    fn activateApp() void {
+        // Get NSApplication class
+        const NSApplication = c.objc_getClass("NSApplication");
+        if (NSApplication == null) return;
+
+        // Get shared application instance
+        const sel_sharedApplication = c.sel_registerName("sharedApplication");
+        const msgSend: MsgSendFn = @ptrCast(&c.objc_msgSend);
+        const app = msgSend(@ptrCast(NSApplication), sel_sharedApplication);
+        if (app == null) return;
+
+        // Activate ignoring other apps
+        const sel_activate = c.sel_registerName("activateIgnoringOtherApps:");
+        const msgSendBool: MsgSendBoolFn = @ptrCast(&c.objc_msgSend);
+        msgSendBool(app, sel_activate, true);
+    }
+
+    fn makeWindowKeyAndFront(nswindow: ?*anyopaque) void {
+        if (nswindow == null) return;
+
+        const msgSendVoid: MsgSendVoidFn = @ptrCast(&c.objc_msgSend);
+
+        // Make window key and order front
+        const sel_makeKeyAndOrderFront = c.sel_registerName("makeKeyAndOrderFront:");
+        msgSendVoid(nswindow, sel_makeKeyAndOrderFront);
+
+        // Also try orderFrontRegardless for good measure
+        const sel_orderFrontRegardless = c.sel_registerName("orderFrontRegardless");
+        msgSendVoid(nswindow, sel_orderFrontRegardless);
+    }
+
+    fn setupMetalLayer(nswindow: ?*anyopaque) ?*anyopaque {
+        if (nswindow == null) return null;
+
+        const msgSend: MsgSendFn = @ptrCast(&c.objc_msgSend);
+        const msgSendBool: MsgSendBoolFn = @ptrCast(&c.objc_msgSend);
+        const msgSendId = @as(*const fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) void, @ptrCast(&c.objc_msgSend));
+
+        // Get content view from NSWindow
+        const sel_contentView = c.sel_registerName("contentView");
+        const content_view = msgSend(nswindow, sel_contentView);
+        if (content_view == null) return null;
+
+        // Set wantsLayer = YES on content view (required for Metal)
+        const sel_setWantsLayer = c.sel_registerName("setWantsLayer:");
+        msgSendBool(content_view, sel_setWantsLayer, true);
+
+        // Create CAMetalLayer
+        const CAMetalLayer = c.objc_getClass("CAMetalLayer");
+        if (CAMetalLayer == null) return null;
+
+        const sel_alloc = c.sel_registerName("alloc");
+        const sel_init = c.sel_registerName("init");
+        const metal_layer_alloc = msgSend(@ptrCast(CAMetalLayer), sel_alloc);
+        const metal_layer = msgSend(metal_layer_alloc, sel_init);
+        if (metal_layer == null) return null;
+
+        // Set layer on content view
+        const sel_setLayer = c.sel_registerName("setLayer:");
+        msgSendId(content_view, sel_setLayer, metal_layer);
+
+        return metal_layer;
+    }
+} else struct {
+    fn activateApp() void {}
+    fn makeWindowKeyAndFront(_: ?*anyopaque) void {}
+    fn setupMetalLayer(_: ?*anyopaque) ?*anyopaque {
+        return null;
+    }
+};
+
 pub fn main() !void {
+    // On macOS, enable menubar for proper app behavior (must be set before init)
+    if (builtin.os.tag == .macos) {
+        zglfw.InitHint.set(.cocoa_menubar, true) catch {};
+    }
+
     // Initialize GLFW
     zglfw.init() catch |err| {
         std.log.err("Failed to initialize GLFW: {}", .{err});
@@ -24,8 +114,10 @@ pub fn main() !void {
     };
     defer zglfw.terminate();
 
-    // Disable OpenGL context creation - bgfx will create its own
+    // Use NO_API for Metal/bgfx - don't create OpenGL context
     zglfw.windowHint(.client_api, .no_api);
+    zglfw.windowHint(.decorated, true);
+    zglfw.windowHint(.resizable, true);
 
     // Create window
     const window = zglfw.Window.create(
@@ -43,28 +135,40 @@ pub fn main() !void {
     const native_window_handle = getNativeWindowHandle(window);
     const native_display_handle = getNativeDisplayHandle();
 
-    // Initialize bgfx
-    var bgfx_init: bgfx.Init = undefined;
-    bgfx.initCtor(&bgfx_init);
+    std.log.info("Native window handle: {?}", .{native_window_handle});
+    std.log.info("Window size: {}x{}", .{window.getSize()[0], window.getSize()[1]});
 
-    bgfx_init.platformData.nwh = native_window_handle;
-    bgfx_init.platformData.ndt = native_display_handle;
-    bgfx_init.resolution.width = WIDTH;
-    bgfx_init.resolution.height = HEIGHT;
-    bgfx_init.resolution.reset = bgfx.ResetFlags_Vsync;
-
-    if (!bgfx.init(&bgfx_init)) {
-        std.log.err("Failed to initialize bgfx", .{});
-        return error.BgfxInitFailed;
+    if (native_window_handle == null) {
+        std.log.err("Failed to get native window handle for platform: {}", .{builtin.os.tag});
+        return error.NativeWindowHandleFailed;
     }
-    defer bgfx.shutdown();
 
-    // Set up view 0 clear state - cycle through colors
-    bgfx.setViewClear(0, bgfx.ClearFlags_Color | bgfx.ClearFlags_Depth, 0x303030ff, 1.0, 0);
-    bgfx.setViewRect(0, 0, 0, @intCast(WIDTH), @intCast(HEIGHT));
+    // On macOS, create CAMetalLayer and pass it to bgfx (instead of NSWindow)
+    const bgfx_nwh = if (builtin.os.tag == .macos)
+        macos.setupMetalLayer(native_window_handle) orelse native_window_handle
+    else
+        native_window_handle;
+
+    // Set screen size before init
+    BgfxBackend.setScreenSize(@intCast(WIDTH), @intCast(HEIGHT));
+
+    // Initialize bgfx using BgfxBackend (includes debugdraw)
+    BgfxBackend.initBgfx(bgfx_nwh, native_display_handle) catch |err| {
+        std.log.err("Failed to initialize bgfx backend: {}", .{err});
+        return error.BgfxInitFailed;
+    };
+    defer BgfxBackend.closeWindow();
 
     std.log.info("bgfx initialized successfully!", .{});
     std.log.info("Renderer: {s}", .{bgfx.getRendererName(bgfx.getRendererType())});
+
+    // Activate app and bring window to front on macOS
+    if (builtin.os.tag == .macos) {
+        macos.activateApp();
+        macos.makeWindowKeyAndFront(native_window_handle);
+    }
+
+    std.log.info("Window should now be visible. Press ESC to close.", .{});
 
     // Main loop
     var frame_count: u32 = 0;
@@ -73,29 +177,57 @@ pub fn main() !void {
         // Handle input
         zglfw.pollEvents();
 
-        // Check for escape key
-        if (window.getKey(.escape) == .press) {
+        // Check for escape key (check both press states)
+        const escape_state = window.getKey(.escape);
+        if (escape_state == .press or escape_state == .repeat) {
+            std.log.info("Escape pressed, closing window", .{});
             window.setShouldClose(true);
+            break;
         }
 
-        // Touch view 0 to ensure it's submitted
-        bgfx.touch(0);
+        // Begin frame with debugdraw encoder
+        BgfxBackend.beginDrawing();
 
-        // Cycle background color over time
-        const t: f32 = @as(f32, @floatFromInt(frame_count)) / 300.0;
-        const r: u8 = @intFromFloat(48 + 20 * @sin(t));
-        const g: u8 = @intFromFloat(48 + 20 * @sin(t + 2.1));
-        const b: u8 = @intFromFloat(48 + 20 * @sin(t + 4.2));
-        const clear_color: u32 = (@as(u32, r) << 24) | (@as(u32, g) << 16) | (@as(u32, b) << 8) | 0xff;
-        bgfx.setViewClear(0, bgfx.ClearFlags_Color | bgfx.ClearFlags_Depth, clear_color, 1.0, 0);
+        // Set background color (cycling)
+        const t: f32 = @as(f32, @floatFromInt(frame_count)) / 60.0;
+        const bg_r: u8 = @intFromFloat(40 + 20 * @sin(t));
+        const bg_g: u8 = @intFromFloat(40 + 20 * @sin(t + 2.1));
+        const bg_b: u8 = @intFromFloat(50 + 20 * @sin(t + 4.2));
+        BgfxBackend.clearBackground(BgfxBackend.color(bg_r, bg_g, bg_b, 255));
 
-        // Advance to next frame
-        _ = bgfx.frame(false);
+        // Draw shapes using BgfxBackend
+        // Filled rectangle
+        BgfxBackend.drawRectangleV(50, 50, 150, 100, BgfxBackend.red);
+
+        // Rectangle outline
+        BgfxBackend.drawRectangleLinesV(250, 50, 150, 100, BgfxBackend.green);
+
+        // Filled circle
+        BgfxBackend.drawCircle(125, 300, 60, BgfxBackend.blue);
+
+        // Circle outline
+        BgfxBackend.drawCircleLines(325, 300, 60, BgfxBackend.yellow);
+
+        // Triangle
+        BgfxBackend.drawTriangle(500, 150, 550, 50, 600, 150, BgfxBackend.purple);
+
+        // Triangle outline
+        BgfxBackend.drawTriangleLines(650, 150, 700, 50, 750, 150, BgfxBackend.orange);
+
+        // Lines
+        BgfxBackend.drawLine(450, 250, 550, 350, BgfxBackend.white);
+        BgfxBackend.drawLineEx(600, 250, 700, 350, 5.0, BgfxBackend.pink);
+
+        // Polygon (hexagon)
+        BgfxBackend.drawPoly(550, 480, 6, 50, 0, BgfxBackend.magenta);
+
+        // Polygon outline (pentagon)
+        BgfxBackend.drawPolyLines(700, 480, 5, 50, 0, BgfxBackend.light_gray);
+
+        // End frame
+        BgfxBackend.endDrawing();
 
         frame_count += 1;
-        if (frame_count % 300 == 0) {
-            std.log.info("Frame: {}", .{frame_count});
-        }
     }
 
     std.log.info("Example completed. Total frames: {}", .{frame_count});

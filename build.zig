@@ -306,6 +306,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "zglfw", .module = zglfw },
                 .{ .name = "zbgfx", .module = zbgfx },
+                .{ .name = "labelle", .module = lib_mod },
             },
         });
 
