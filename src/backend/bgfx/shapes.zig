@@ -10,7 +10,8 @@ const types = @import("types.zig");
 pub const Color = types.Color;
 
 /// Debug draw encoder reference (set by backend initialization)
-pub var encoder: ?*debugdraw.Encoder = null;
+/// Threadlocal to ensure thread safety in multi-threaded contexts
+pub threadlocal var encoder: ?*debugdraw.Encoder = null;
 
 /// Set the encoder reference
 pub fn setEncoder(enc: ?*debugdraw.Encoder) void {

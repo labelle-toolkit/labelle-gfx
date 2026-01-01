@@ -107,7 +107,9 @@ const macos = if (builtin.os.tag == .macos) struct {
 pub fn main() !void {
     // On macOS, enable menubar for proper app behavior (must be set before init)
     if (builtin.os.tag == .macos) {
-        zglfw.InitHint.set(.cocoa_menubar, true) catch {};
+        zglfw.InitHint.set(.cocoa_menubar, true) catch |err| {
+            std.log.warn("Failed to set cocoa_menubar hint: {}", .{err});
+        };
     }
 
     // Initialize GLFW

@@ -313,8 +313,7 @@ pub fn build(b: *std.Build) void {
             },
         });
 
-        // Add stb_image include path from zbgfx's bimg dependency
-        bgfx_example_mod.addIncludePath(zbgfx_dep.path("libs/bimg/3rdparty/stb"));
+        // Note: stb_image include path is provided via lib_mod (labelle module)
 
         const bgfx_example = b.addExecutable(.{
             .name = "23_bgfx_backend",

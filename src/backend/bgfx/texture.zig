@@ -72,9 +72,17 @@ pub fn isTextureValid(texture: Texture) bool {
 }
 
 /// Create a solid color test texture (for debugging)
+/// Maximum supported size is 64x64 pixels
 pub fn createSolidTexture(width: u16, height: u16, col: Color) !Texture {
+    const max_size: usize = 64 * 64 * 4;
     const pixel_count = @as(usize, width) * @as(usize, height) * 4;
-    var pixels: [64 * 64 * 4]u8 = undefined;
+
+    // Validate size to prevent buffer overflow
+    if (pixel_count > max_size) {
+        return backend_mod.BackendError.TextureLoadFailed;
+    }
+
+    var pixels: [max_size]u8 = undefined;
 
     // Fill with solid color (RGBA order)
     var i: usize = 0;
