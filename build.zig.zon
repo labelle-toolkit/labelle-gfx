@@ -29,6 +29,10 @@
             .url = "git+https://github.com/cyberegoorg/zbgfx#ca9e66986af558db0abd2bdaac8135d028bf0ccb",
             .hash = "zbgfx-0.7.0-Sm4IxHlk1gL_wSKLBaKzsexkiyZTJ85huunX2hbWhM79",
         },
+        .zglfw = .{
+            .url = "git+https://github.com/zig-gamedev/zglfw#15bf6ec59a4e1399d0c753455f69b28f09e41791",
+            .hash = "zglfw-0.10.0-dev-zgVDNHO2IQDy_fSdwY5U4z42rHUuKgt7T9f-qmQ3FnuL",
+        },
     },
 
     .paths = .{

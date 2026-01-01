@@ -7,12 +7,46 @@
 //! bgfx itself does not handle window creation - it only manages graphics rendering.
 //!
 //! STATUS: Work in Progress - Investigation phase for issue #150
+//!
+//! Current limitations:
+//! - Shape drawing functions are not yet implemented (require custom shaders)
+//! - Sprite rendering requires shader compilation infrastructure
+//! - Text rendering not supported (would need font atlas)
 
 const std = @import("std");
 const zbgfx = @import("zbgfx");
 const bgfx = zbgfx.bgfx;
 
 const backend_mod = @import("backend.zig");
+
+// ============================================
+// Sprite Vertex Layout
+// ============================================
+
+/// Sprite vertex for 2D rendering with position, UV, and color
+pub const SpriteVertex = extern struct {
+    x: f32,
+    y: f32,
+    u: f32,
+    v: f32,
+    color: u32, // ABGR packed color
+
+    pub fn init(x: f32, y: f32, u: f32, v: f32, color: u32) SpriteVertex {
+        return .{ .x = x, .y = y, .u = u, .v = v, .color = color };
+    }
+};
+
+/// Color-only vertex for shape rendering
+pub const ColorVertex = extern struct {
+    x: f32,
+    y: f32,
+    z: f32,
+    color: u32, // ABGR packed color
+
+    pub fn init(x: f32, y: f32, color: u32) ColorVertex {
+        return .{ .x = x, .y = y, .z = 0, .color = color };
+    }
+};
 
 /// bgfx backend implementation
 pub const BgfxBackend = struct {
@@ -110,6 +144,24 @@ pub const BgfxBackend = struct {
     // View ID for 2D rendering
     const VIEW_ID: bgfx.ViewId = 0;
 
+    // Vertex layouts for sprite and shape rendering
+    threadlocal var sprite_layout: bgfx.VertexLayout = undefined;
+    threadlocal var layouts_initialized: bool = false;
+
+    /// Initialize vertex layouts for 2D rendering
+    fn initLayouts() void {
+        if (layouts_initialized) return;
+
+        // Sprite vertex layout: position (2D), texcoord, color
+        _ = sprite_layout.begin(.Noop)
+            .add(.Position, 2, .Float, false, false)
+            .add(.TexCoord0, 2, .Float, false, false)
+            .add(.Color0, 4, .Uint8, true, false)
+            .end();
+
+        layouts_initialized = true;
+    }
+
     // ============================================
     // Helper Functions
     // ============================================
@@ -127,6 +179,30 @@ pub const BgfxBackend = struct {
     /// Create a vector2
     pub fn vector2(x: f32, y: f32) Vector2 {
         return .{ .x = x, .y = y };
+    }
+
+    /// Convert Color to ABGR u32 format for bgfx
+    fn colorToAbgr(col: Color) u32 {
+        return (@as(u32, col.a) << 24) |
+            (@as(u32, col.b) << 16) |
+            (@as(u32, col.g) << 8) |
+            @as(u32, col.r);
+    }
+
+    /// Set up orthographic 2D projection matrix for the view
+    fn setup2DProjection() void {
+        const w: f32 = @floatFromInt(screen_width);
+        const h: f32 = @floatFromInt(screen_height);
+
+        // Orthographic projection: left=0, right=w, top=0, bottom=h, near=-1, far=1
+        // This matches screen coordinates where (0,0) is top-left
+        const mtx = [16]f32{
+            2.0 / w, 0,        0,  0,
+            0,       -2.0 / h, 0,  0,
+            0,       0,        1,  0,
+            -1,      1,        0,  1,
+        };
+        bgfx.setViewTransform(VIEW_ID, null, &mtx);
     }
 
     // ============================================
@@ -344,9 +420,15 @@ pub const BgfxBackend = struct {
 
         bgfx_initialized = true;
 
+        // Initialize vertex layouts
+        initLayouts();
+
         // Set up default view
         bgfx.setViewClear(VIEW_ID, bgfx.ClearFlags_Color | bgfx.ClearFlags_Depth, clear_color, 1.0, 0);
         bgfx.setViewRect(VIEW_ID, 0, 0, @intCast(screen_width), @intCast(screen_height));
+
+        // Set up 2D orthographic projection
+        setup2DProjection();
     }
 
     /// Close window
@@ -355,6 +437,8 @@ pub const BgfxBackend = struct {
             bgfx.shutdown();
             bgfx_initialized = false;
         }
+
+        layouts_initialized = false;
     }
 
     /// Check if window should close
@@ -409,11 +493,12 @@ pub const BgfxBackend = struct {
     }
 
     // ============================================
-    // Shape Drawing (Stubs)
+    // Shape Drawing (Stubs - require shader infrastructure)
     // ============================================
 
     pub fn drawText(text: [*:0]const u8, x: i32, y: i32, font_size: i32, col: Color) void {
-        // TODO: Implement text rendering (requires font atlas)
+        // Note: bgfx doesn't have built-in text rendering
+        // Would need a font atlas system
         _ = text;
         _ = x;
         _ = y;
@@ -430,7 +515,7 @@ pub const BgfxBackend = struct {
     }
 
     pub fn drawRectangleV(x: f32, y: f32, w: f32, h: f32, col: Color) void {
-        // TODO: Implement using vertex buffer and simple color shader
+        // TODO: Implement with custom shader and transient vertex buffer
         _ = x;
         _ = y;
         _ = w;
@@ -439,7 +524,7 @@ pub const BgfxBackend = struct {
     }
 
     pub fn drawRectangleLinesV(x: f32, y: f32, w: f32, h: f32, col: Color) void {
-        // TODO: Implement using line primitives
+        // TODO: Implement with line primitive
         _ = x;
         _ = y;
         _ = w;
@@ -448,7 +533,7 @@ pub const BgfxBackend = struct {
     }
 
     pub fn drawCircle(center_x: f32, center_y: f32, radius: f32, col: Color) void {
-        // TODO: Implement using triangle fan
+        // TODO: Implement with triangle fan
         _ = center_x;
         _ = center_y;
         _ = radius;
@@ -456,7 +541,7 @@ pub const BgfxBackend = struct {
     }
 
     pub fn drawCircleLines(center_x: f32, center_y: f32, radius: f32, col: Color) void {
-        // TODO: Implement using line strip
+        // TODO: Implement with line strip
         _ = center_x;
         _ = center_y;
         _ = radius;
@@ -464,7 +549,7 @@ pub const BgfxBackend = struct {
     }
 
     pub fn drawLine(start_x: f32, start_y: f32, end_x: f32, end_y: f32, col: Color) void {
-        // TODO: Implement using line primitive
+        // TODO: Implement with line primitive
         _ = start_x;
         _ = start_y;
         _ = end_x;
@@ -473,7 +558,7 @@ pub const BgfxBackend = struct {
     }
 
     pub fn drawLineEx(start_x: f32, start_y: f32, end_x: f32, end_y: f32, thickness: f32, col: Color) void {
-        // TODO: Implement using quad for thick lines
+        // TODO: Implement with quad for thick lines
         _ = start_x;
         _ = start_y;
         _ = end_x;
@@ -483,7 +568,7 @@ pub const BgfxBackend = struct {
     }
 
     pub fn drawTriangle(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: Color) void {
-        // TODO: Implement using triangle primitive
+        // TODO: Implement with triangle primitive
         _ = x1;
         _ = y1;
         _ = x2;
@@ -494,7 +579,7 @@ pub const BgfxBackend = struct {
     }
 
     pub fn drawTriangleLines(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: Color) void {
-        // TODO: Implement using line strip
+        // TODO: Implement with line strip
         _ = x1;
         _ = y1;
         _ = x2;
@@ -505,7 +590,7 @@ pub const BgfxBackend = struct {
     }
 
     pub fn drawPoly(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
-        // TODO: Implement using triangle fan
+        // TODO: Implement with triangle fan
         _ = center_x;
         _ = center_y;
         _ = sides;
@@ -515,7 +600,7 @@ pub const BgfxBackend = struct {
     }
 
     pub fn drawPolyLines(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
-        // TODO: Implement using line strip
+        // TODO: Implement with line strip
         _ = center_x;
         _ = center_y;
         _ = sides;

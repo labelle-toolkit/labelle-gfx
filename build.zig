@@ -43,6 +43,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const zbgfx = zbgfx_dep.module("zbgfx");
+    const bgfx_lib = zbgfx_dep.artifact("bgfx");
+
+    // GLFW dependency (for bgfx window management)
+    const zglfw_dep = b.dependency("zglfw", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zglfw = zglfw_dep.module("root");
+    const glfw_lib = zglfw_dep.artifact("glfw");
 
     // Main library module
     const lib_mod = b.addModule("labelle", .{
@@ -286,6 +295,35 @@ pub fn build(b: *std.Build) void {
 
         const full_run_step = b.step("run-22_sokol_shapes", "Sokol shapes example");
         full_run_step.dependOn(&run_cmd_22.step);
+    }
+
+    // Example 23: bgfx backend with GLFW
+    {
+        const bgfx_example_mod = b.createModule(.{
+            .root_source_file = b.path("examples/23_bgfx_backend/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zglfw", .module = zglfw },
+                .{ .name = "zbgfx", .module = zbgfx },
+            },
+        });
+
+        const bgfx_example = b.addExecutable(.{
+            .name = "23_bgfx_backend",
+            .root_module = bgfx_example_mod,
+        });
+
+        // Link bgfx and glfw libraries
+        bgfx_example.linkLibrary(bgfx_lib);
+        bgfx_example.linkLibrary(glfw_lib);
+
+        const run_cmd_23 = b.addRunArtifact(bgfx_example);
+        const run_step_23 = b.step("run-example-23", "bgfx backend example with GLFW");
+        run_step_23.dependOn(&run_cmd_23.step);
+
+        const full_run_step_23 = b.step("run-23_bgfx_backend", "bgfx backend example with GLFW");
+        full_run_step_23.dependOn(&run_cmd_23.step);
     }
 
     // Converter tool
