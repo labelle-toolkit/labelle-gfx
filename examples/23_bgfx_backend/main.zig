@@ -21,6 +21,25 @@ const BgfxBackend = gfx.BgfxBackend;
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
 
+// Texture paths for sprite loading
+const texture_paths = [_][:0]const u8{
+    "fixtures/sprites/items/coin.png",
+    "fixtures/sprites/items/gem.png",
+    "fixtures/sprites/items/heart.png",
+    "fixtures/sprites/items/key.png",
+    "fixtures/sprites/items/potion.png",
+    "fixtures/sprites/items/sword.png",
+};
+
+// Texture indices for named access (order must match texture_paths)
+const TextureIndex = enum(usize) { coin, gem, heart, key, potion, sword };
+
+/// Helper to check if a key is held (pressed or repeating)
+fn isKeyHeld(window: *zglfw.Window, key: zglfw.Key) bool {
+    const state = window.getKey(key);
+    return state == .press or state == .repeat;
+}
+
 // macOS Cocoa bindings for app activation
 const macos = if (builtin.os.tag == .macos) struct {
     const c = @cImport({
@@ -178,44 +197,27 @@ pub fn main() !void {
     std.log.info("Renderer: {s}", .{bgfx.getRendererName(bgfx.getRendererType())});
 
     // Load sprite textures from fixtures
-    const coin_texture = BgfxBackend.loadTexture("fixtures/sprites/items/coin.png") catch |err| {
-        std.log.err("Failed to load coin texture: {}", .{err});
-        return error.TextureLoadFailed;
+    // Initialize with invalid textures to avoid undefined behavior if loading fails partway
+    var textures: [texture_paths.len]BgfxBackend.Texture = [_]BgfxBackend.Texture{.{ .handle = .{ .idx = std.math.maxInt(u16) }, .width = 0, .height = 0 }} ** texture_paths.len;
+    for (texture_paths, 0..) |path, i| {
+        textures[i] = BgfxBackend.loadTexture(path) catch |err| {
+            std.log.err("Failed to load texture '{s}': {}", .{ path, err });
+            return error.TextureLoadFailed;
+        };
+    }
+    defer for (&textures) |tex| {
+        BgfxBackend.unloadTexture(tex);
     };
-    defer BgfxBackend.unloadTexture(coin_texture);
 
-    const gem_texture = BgfxBackend.loadTexture("fixtures/sprites/items/gem.png") catch |err| {
-        std.log.err("Failed to load gem texture: {}", .{err});
-        return error.TextureLoadFailed;
-    };
-    defer BgfxBackend.unloadTexture(gem_texture);
+    // Named access to textures for readability
+    const coin_texture = textures[@intFromEnum(TextureIndex.coin)];
+    const gem_texture = textures[@intFromEnum(TextureIndex.gem)];
+    const heart_texture = textures[@intFromEnum(TextureIndex.heart)];
+    const key_texture = textures[@intFromEnum(TextureIndex.key)];
+    const potion_texture = textures[@intFromEnum(TextureIndex.potion)];
+    const sword_texture = textures[@intFromEnum(TextureIndex.sword)];
 
-    const heart_texture = BgfxBackend.loadTexture("fixtures/sprites/items/heart.png") catch |err| {
-        std.log.err("Failed to load heart texture: {}", .{err});
-        return error.TextureLoadFailed;
-    };
-    defer BgfxBackend.unloadTexture(heart_texture);
-
-    const key_texture = BgfxBackend.loadTexture("fixtures/sprites/items/key.png") catch |err| {
-        std.log.err("Failed to load key texture: {}", .{err});
-        return error.TextureLoadFailed;
-    };
-    defer BgfxBackend.unloadTexture(key_texture);
-
-    const potion_texture = BgfxBackend.loadTexture("fixtures/sprites/items/potion.png") catch |err| {
-        std.log.err("Failed to load potion texture: {}", .{err});
-        return error.TextureLoadFailed;
-    };
-    defer BgfxBackend.unloadTexture(potion_texture);
-
-    const sword_texture = BgfxBackend.loadTexture("fixtures/sprites/items/sword.png") catch |err| {
-        std.log.err("Failed to load sword texture: {}", .{err});
-        return error.TextureLoadFailed;
-    };
-    defer BgfxBackend.unloadTexture(sword_texture);
-
-    const texture_count = 6; // coin, gem, heart, key, potion, sword
-    std.log.info("Loaded {} sprite textures from fixtures", .{texture_count});
+    std.log.info("Loaded {} sprite textures from fixtures", .{texture_paths.len});
 
     // Create a solid test texture to verify rendering pipeline
     const test_texture = BgfxBackend.createSolidTexture(24, 24, BgfxBackend.color(255, 128, 0, 255)) catch |err| {
@@ -265,30 +267,16 @@ pub fn main() !void {
             break;
         }
 
-        // Camera controls
-        if (window.getKey(.left) == .press or window.getKey(.left) == .repeat) {
-            camera.target.x -= camera_speed / camera.zoom;
-        }
-        if (window.getKey(.right) == .press or window.getKey(.right) == .repeat) {
-            camera.target.x += camera_speed / camera.zoom;
-        }
-        if (window.getKey(.up) == .press or window.getKey(.up) == .repeat) {
-            camera.target.y -= camera_speed / camera.zoom;
-        }
-        if (window.getKey(.down) == .press or window.getKey(.down) == .repeat) {
-            camera.target.y += camera_speed / camera.zoom;
-        }
-        if (window.getKey(.equal) == .press or window.getKey(.equal) == .repeat) {
-            camera.zoom = @min(camera.zoom * 1.02, 10.0);
-        }
-        if (window.getKey(.minus) == .press or window.getKey(.minus) == .repeat) {
-            camera.zoom = @max(camera.zoom / 1.02, 0.1);
-        }
-        if (window.getKey(.r) == .press or window.getKey(.r) == .repeat) {
-            camera.rotation += 1.0;
-        }
+        // Camera controls (using isKeyHeld helper for cleaner code)
+        if (isKeyHeld(window, .left)) camera.target.x -= camera_speed / camera.zoom;
+        if (isKeyHeld(window, .right)) camera.target.x += camera_speed / camera.zoom;
+        if (isKeyHeld(window, .up)) camera.target.y -= camera_speed / camera.zoom;
+        if (isKeyHeld(window, .down)) camera.target.y += camera_speed / camera.zoom;
+        if (isKeyHeld(window, .equal)) camera.zoom = @min(camera.zoom * 1.02, 10.0);
+        if (isKeyHeld(window, .minus)) camera.zoom = @max(camera.zoom / 1.02, 0.1);
+        if (isKeyHeld(window, .r)) camera.rotation += 1.0;
         if (window.getKey(.space) == .press) {
-            // Reset camera
+            // Reset camera (single press, not held)
             camera.target = .{ .x = @as(f32, WIDTH) / 2.0, .y = @as(f32, HEIGHT) / 2.0 };
             camera.zoom = 1.0;
             camera.rotation = 0;

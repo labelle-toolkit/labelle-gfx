@@ -579,6 +579,9 @@ pub const BgfxBackend = struct {
         // Clean up vertex layouts
         vertex.deinitLayouts();
 
+        // Clean up texture allocator
+        texture_mod.deinitAllocator();
+
         if (bgfx_initialized) {
             bgfx.shutdown();
             bgfx_initialized = false;

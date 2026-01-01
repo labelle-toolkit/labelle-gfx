@@ -13,12 +13,29 @@ const backend_mod = @import("../backend.zig");
 pub const Texture = types.Texture;
 pub const Color = types.Color;
 
+/// Shared allocator for texture loading operations.
+/// Using threadlocal to avoid contention in multi-threaded scenarios.
+/// This avoids creating/destroying a GeneralPurposeAllocator on every texture load.
+threadlocal var shared_gpa: ?std.heap.GeneralPurposeAllocator(.{}) = null;
+
+fn getSharedAllocator() std.mem.Allocator {
+    if (shared_gpa == null) {
+        shared_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    }
+    return shared_gpa.?.allocator();
+}
+
+/// Cleanup the shared allocator (call during backend shutdown)
+pub fn deinitAllocator() void {
+    if (shared_gpa) |*gpa| {
+        _ = gpa.deinit();
+        shared_gpa = null;
+    }
+}
+
 /// Load texture from file using stb_image
 pub fn loadTexture(path: [:0]const u8) !Texture {
-    // Use a simple page allocator for image loading
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = getSharedAllocator();
 
     // Load image using stb_image
     var img = image_loader.loadImage(allocator, path) catch |err| {
@@ -33,9 +50,12 @@ pub fn loadTexture(path: [:0]const u8) !Texture {
 
 /// Load texture from raw pixel data (RGBA8 format)
 pub fn loadTextureFromMemory(pixels: []const u8, width: u16, height: u16) !Texture {
-    // Use copy() instead of makeRef() - bgfx will copy the data into its own memory
-    // This is essential because the source pixel data may be freed before bgfx
-    // uploads the texture to GPU (texture creation is asynchronous)
+    // Use copy() instead of makeRef() - bgfx allocates its own memory and copies
+    // the pixel data. This memory is managed internally by bgfx and freed after
+    // the texture is uploaded to the GPU. This is essential because:
+    // 1. Texture creation in bgfx is asynchronous (queued for GPU upload)
+    // 2. The source pixel data may be freed before bgfx processes the upload
+    // 3. Using makeRef() would cause use-after-free if source is deallocated
     const mem = bgfx.copy(pixels.ptr, @intCast(pixels.len));
 
     const handle = bgfx.createTexture2D(
