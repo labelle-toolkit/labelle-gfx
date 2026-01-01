@@ -31,10 +31,12 @@ pub const ColorVertex = extern struct {
 };
 
 /// Vertex layout for sprite rendering
-pub var sprite_layout: bgfx.VertexLayout = undefined;
+/// Threadlocal to ensure thread safety in multi-threaded contexts
+pub threadlocal var sprite_layout: bgfx.VertexLayout = undefined;
 
 /// Track if layouts have been initialized
-var layouts_initialized: bool = false;
+/// Threadlocal to match sprite_layout
+threadlocal var layouts_initialized: bool = false;
 
 /// Initialize vertex layouts for 2D rendering
 pub fn initLayouts() void {

@@ -7,8 +7,15 @@ const std = @import("std");
 
 const c = @cImport({
     @cDefine("STBI_NO_STDIO", "1");
-    @cDefine("STBI_ONLY_PNG", "1");
-    @cDefine("STBI_ONLY_JPEG", "1");
+    // Disable formats we don't need to reduce code size
+    // (keeping PNG and JPEG enabled by default)
+    @cDefine("STBI_NO_BMP", "1");
+    @cDefine("STBI_NO_PSD", "1");
+    @cDefine("STBI_NO_TGA", "1");
+    @cDefine("STBI_NO_GIF", "1");
+    @cDefine("STBI_NO_HDR", "1");
+    @cDefine("STBI_NO_PIC", "1");
+    @cDefine("STBI_NO_PNM", "1");
     @cInclude("stb_image.h");
 });
 

@@ -18,6 +18,21 @@
 //!
 //! Not yet implemented:
 //! - Text rendering (requires font atlas system)
+//! - Screenshot capture (takeScreenshot is a stub)
+//! - FPS limiting (setTargetFPS is a stub - use windowing library)
+//! - Config flags (setConfigFlags is a stub)
+//! - Actual fullscreen toggling (fullscreen functions track state only)
+//!
+//! Threading Model:
+//! This backend uses threadlocal variables for state management (camera, encoder, etc.)
+//! Each thread will have its own instance of these variables. This is intentional to
+//! avoid race conditions, but means that multi-threaded rendering requires careful
+//! coordination. For single-threaded applications (the common case), this is transparent.
+//!
+//! Window Management:
+//! windowShouldClose() always returns false because bgfx doesn't manage the window.
+//! Applications must check window close state through their windowing library (e.g., GLFW).
+//! getMonitorWidth/Height return the configured screen dimensions, not actual monitor size.
 
 const std = @import("std");
 const zbgfx = @import("zbgfx");
@@ -570,10 +585,14 @@ pub const BgfxBackend = struct {
         }
     }
 
+    /// Always returns false - bgfx doesn't manage window lifecycle.
+    /// Check window close state through your windowing library (e.g., GLFW).
     pub fn windowShouldClose() bool {
         return false;
     }
 
+    /// Stub: FPS limiting not implemented. Use your windowing library's vsync
+    /// or implement frame pacing externally.
     pub fn setTargetFPS(fps: i32) void {
         _ = fps;
     }
@@ -582,10 +601,13 @@ pub const BgfxBackend = struct {
         return frame_delta;
     }
 
+    /// Stub: Config flags not implemented for bgfx backend.
     pub fn setConfigFlags(flags: backend_mod.ConfigFlags) void {
         _ = flags;
     }
 
+    /// Stub: Screenshot capture not yet implemented.
+    /// Would require reading back framebuffer via bgfx's texture read capabilities.
     pub fn takeScreenshot(filename: [*:0]const u8) void {
         _ = filename;
     }
@@ -643,12 +665,18 @@ pub const BgfxBackend = struct {
     // Fullscreen Functions
     // ============================================
 
+    /// Fullscreen state tracking (state only - actual fullscreen must be
+    /// managed through your windowing library like GLFW)
     threadlocal var is_fullscreen: bool = false;
 
+    /// Toggles fullscreen state flag. Note: This only tracks state internally.
+    /// Actual fullscreen toggling must be done through your windowing library.
     pub fn toggleFullscreen() void {
         is_fullscreen = !is_fullscreen;
     }
 
+    /// Sets fullscreen state flag. Note: This only tracks state internally.
+    /// Actual fullscreen must be set through your windowing library.
     pub fn setFullscreen(fullscreen: bool) void {
         is_fullscreen = fullscreen;
     }
@@ -657,10 +685,14 @@ pub const BgfxBackend = struct {
         return is_fullscreen;
     }
 
+    /// Returns the configured screen width (set via setScreenSize).
+    /// Note: This is the rendering resolution, not the actual monitor width.
     pub fn getMonitorWidth() i32 {
         return screen_width;
     }
 
+    /// Returns the configured screen height (set via setScreenSize).
+    /// Note: This is the rendering resolution, not the actual monitor height.
     pub fn getMonitorHeight() i32 {
         return screen_height;
     }

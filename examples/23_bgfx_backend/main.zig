@@ -149,10 +149,13 @@ pub fn main() !void {
     }
 
     // On macOS, create CAMetalLayer and pass it to bgfx (instead of NSWindow)
-    const bgfx_nwh = if (builtin.os.tag == .macos)
-        macos.setupMetalLayer(native_window_handle) orelse native_window_handle
-    else
-        native_window_handle;
+    const bgfx_nwh = if (builtin.os.tag == .macos) blk: {
+        const metal_layer = macos.setupMetalLayer(native_window_handle);
+        if (metal_layer == null) {
+            std.log.warn("Failed to create CAMetalLayer, falling back to NSWindow handle", .{});
+        }
+        break :blk metal_layer orelse native_window_handle;
+    } else native_window_handle;
 
     // Set screen size before init
     BgfxBackend.setScreenSize(@intCast(WIDTH), @intCast(HEIGHT));
@@ -204,7 +207,8 @@ pub fn main() !void {
     };
     defer BgfxBackend.unloadTexture(sword_texture);
 
-    std.log.info("Loaded {} sprite textures from fixtures", .{@as(u32, 6)});
+    const texture_count = 6; // coin, gem, heart, key, potion, sword
+    std.log.info("Loaded {} sprite textures from fixtures", .{texture_count});
 
     // Create a solid test texture to verify rendering pipeline
     const test_texture = BgfxBackend.createSolidTexture(24, 24, BgfxBackend.color(255, 128, 0, 255)) catch |err| {
@@ -225,8 +229,8 @@ pub fn main() !void {
 
     // Camera state
     var camera = BgfxBackend.Camera2D{
-        .offset = .{ .x = @as(f32, WIDTH) / 2.0, .y = @as(f32, HEIGHT) / 2.0 },
-        .target = .{ .x = @as(f32, WIDTH) / 2.0, .y = @as(f32, HEIGHT) / 2.0 },
+        .offset = .{ .x = @floatFromInt(WIDTH) / 2.0, .y = @floatFromInt(HEIGHT) / 2.0 },
+        .target = .{ .x = @floatFromInt(WIDTH) / 2.0, .y = @floatFromInt(HEIGHT) / 2.0 },
         .rotation = 0,
         .zoom = 1.0,
     };
@@ -417,12 +421,12 @@ pub fn main() !void {
 
         // Grid lines (to see camera movement)
         var x: f32 = 0;
-        while (x <= 800) : (x += 100) {
-            BgfxBackend.drawLine(x, 0, x, 600, BgfxBackend.dark_gray);
+        while (x <= @as(f32, WIDTH)) : (x += 100) {
+            BgfxBackend.drawLine(x, 0, x, @floatFromInt(HEIGHT), BgfxBackend.dark_gray);
         }
         var y: f32 = 0;
-        while (y <= 600) : (y += 100) {
-            BgfxBackend.drawLine(0, y, 800, y, BgfxBackend.dark_gray);
+        while (y <= @as(f32, HEIGHT)) : (y += 100) {
+            BgfxBackend.drawLine(0, y, @floatFromInt(WIDTH), y, BgfxBackend.dark_gray);
         }
 
         // End camera mode
