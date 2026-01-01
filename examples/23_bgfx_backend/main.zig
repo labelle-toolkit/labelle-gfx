@@ -105,6 +105,9 @@ const macos = if (builtin.os.tag == .macos) struct {
 };
 
 pub fn main() !void {
+    // CI test mode - run headless and auto-exit after a few frames
+    const ci_test = std.posix.getenv("CI_TEST") != null;
+
     // On macOS, enable menubar for proper app behavior (must be set before init)
     if (builtin.os.tag == .macos) {
         zglfw.InitHint.set(.cocoa_menubar, true) catch |err| {
@@ -123,6 +126,10 @@ pub fn main() !void {
     zglfw.windowHint(.client_api, .no_api);
     zglfw.windowHint(.decorated, true);
     zglfw.windowHint(.resizable, true);
+    // Hide window in CI test mode
+    if (ci_test) {
+        zglfw.windowHint(.visible, false);
+    }
 
     // Create window
     const window = zglfw.Window.create(
@@ -229,8 +236,8 @@ pub fn main() !void {
 
     // Camera state
     var camera = BgfxBackend.Camera2D{
-        .offset = .{ .x = @floatFromInt(WIDTH) / 2.0, .y = @floatFromInt(HEIGHT) / 2.0 },
-        .target = .{ .x = @floatFromInt(WIDTH) / 2.0, .y = @floatFromInt(HEIGHT) / 2.0 },
+        .offset = .{ .x = @as(f32, WIDTH) / 2.0, .y = @as(f32, HEIGHT) / 2.0 },
+        .target = .{ .x = @as(f32, WIDTH) / 2.0, .y = @as(f32, HEIGHT) / 2.0 },
         .rotation = 0,
         .zoom = 1.0,
     };
@@ -249,6 +256,12 @@ pub fn main() !void {
         if (escape_state == .press or escape_state == .repeat) {
             std.log.info("Escape pressed, closing window", .{});
             window.setShouldClose(true);
+            break;
+        }
+
+        // CI test mode: auto-exit after running for a few frames
+        if (ci_test and frame_count >= 60) {
+            std.log.info("CI test mode: completed {} frames successfully", .{frame_count});
             break;
         }
 
@@ -422,11 +435,11 @@ pub fn main() !void {
         // Grid lines (to see camera movement)
         var x: f32 = 0;
         while (x <= @as(f32, WIDTH)) : (x += 100) {
-            BgfxBackend.drawLine(x, 0, x, @floatFromInt(HEIGHT), BgfxBackend.dark_gray);
+            BgfxBackend.drawLine(x, 0, x, @as(f32, HEIGHT), BgfxBackend.dark_gray);
         }
         var y: f32 = 0;
         while (y <= @as(f32, HEIGHT)) : (y += 100) {
-            BgfxBackend.drawLine(0, y, @floatFromInt(WIDTH), y, BgfxBackend.dark_gray);
+            BgfxBackend.drawLine(0, y, @as(f32, WIDTH), y, BgfxBackend.dark_gray);
         }
 
         // End camera mode

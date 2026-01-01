@@ -1,0 +1,79 @@
+name: CI - SDL Backend Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  sdl-backend-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Install dependencies for SDL2
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libsdl2-dev \
+            libsdl2-image-dev \
+            libsdl2-ttf-dev \
+            libgl1-mesa-dev \
+            xvfb
+
+      - name: Build SDL example
+        run: |
+          echo "::group::Building SDL backend example"
+          zig build 2>&1
+          echo "::endgroup::"
+          echo "Build completed successfully!"
+
+      - name: Run SDL example
+        run: |
+          # Start virtual framebuffer for headless rendering
+          Xvfb :99 -screen 0 1024x768x24 &
+          export DISPLAY=:99
+          sleep 2
+
+          echo "::group::Running SDL backend example"
+          # The SDL example auto-exits after 120 frames
+          if timeout 60 zig build run-17_sdl_backend 2>&1; then
+            echo "✅ SDL example completed successfully!"
+          else
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -eq 124 ]; then
+              echo "::error::SDL example timed out after 60 seconds"
+              exit 1
+            else
+              echo "::error::SDL example failed with exit code $EXIT_CODE"
+              exit $EXIT_CODE
+            fi
+          fi
+          echo "::endgroup::"
+
+      - name: Create summary
+        if: always()
+        run: |
+          echo "## 🎮 SDL Backend Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ **SDL backend example ran successfully!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The example:" >> $GITHUB_STEP_SUMMARY
+            echo "- Initialized SDL2 window" >> $GITHUB_STEP_SUMMARY
+            echo "- Rendered shapes (rectangles, circles, triangles, polygons)" >> $GITHUB_STEP_SUMMARY
+            echo "- Ran animation system" >> $GITHUB_STEP_SUMMARY
+            echo "- Auto-exited after 120 frames" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **SDL backend example failed**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check the workflow logs for details." >> $GITHUB_STEP_SUMMARY
+          fi
