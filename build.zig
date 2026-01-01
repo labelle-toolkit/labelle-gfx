@@ -67,6 +67,9 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Add stb_image include path for bgfx backend image loading
+    lib_mod.addIncludePath(zbgfx_dep.path("libs/bimg/3rdparty/stb"));
+
     // Re-export dependency modules so downstream packages can reuse them
     // This prevents Zig 0.15's "file exists in multiple modules" error
     // by allowing downstream packages to use our module references
@@ -309,6 +312,9 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "labelle", .module = lib_mod },
             },
         });
+
+        // Add stb_image include path from zbgfx's bimg dependency
+        bgfx_example_mod.addIncludePath(zbgfx_dep.path("libs/bimg/3rdparty/stb"));
 
         const bgfx_example = b.addExecutable(.{
             .name = "23_bgfx_backend",

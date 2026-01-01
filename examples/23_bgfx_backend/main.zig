@@ -1,7 +1,10 @@
 //! bgfx Backend Example
 //!
 //! Demonstrates the bgfx backend with GLFW window management.
-//! This example shows basic bgfx rendering with debug text.
+//! This example shows basic bgfx rendering including:
+//! - Shape primitives (rectangle, circle, triangle, line, polygon)
+//! - Sprite/texture rendering with procedural textures
+//! - Camera controls (pan, zoom, rotation)
 //!
 //! Prerequisites:
 //! - GLFW for window creation
@@ -162,6 +165,53 @@ pub fn main() !void {
     std.log.info("bgfx initialized successfully!", .{});
     std.log.info("Renderer: {s}", .{bgfx.getRendererName(bgfx.getRendererType())});
 
+    // Load sprite textures from fixtures
+    const coin_texture = BgfxBackend.loadTexture("fixtures/sprites/items/coin.png") catch |err| {
+        std.log.err("Failed to load coin texture: {}", .{err});
+        return error.TextureLoadFailed;
+    };
+    defer BgfxBackend.unloadTexture(coin_texture);
+
+    const gem_texture = BgfxBackend.loadTexture("fixtures/sprites/items/gem.png") catch |err| {
+        std.log.err("Failed to load gem texture: {}", .{err});
+        return error.TextureLoadFailed;
+    };
+    defer BgfxBackend.unloadTexture(gem_texture);
+
+    const heart_texture = BgfxBackend.loadTexture("fixtures/sprites/items/heart.png") catch |err| {
+        std.log.err("Failed to load heart texture: {}", .{err});
+        return error.TextureLoadFailed;
+    };
+    defer BgfxBackend.unloadTexture(heart_texture);
+
+    const key_texture = BgfxBackend.loadTexture("fixtures/sprites/items/key.png") catch |err| {
+        std.log.err("Failed to load key texture: {}", .{err});
+        return error.TextureLoadFailed;
+    };
+    defer BgfxBackend.unloadTexture(key_texture);
+
+    const potion_texture = BgfxBackend.loadTexture("fixtures/sprites/items/potion.png") catch |err| {
+        std.log.err("Failed to load potion texture: {}", .{err});
+        return error.TextureLoadFailed;
+    };
+    defer BgfxBackend.unloadTexture(potion_texture);
+
+    const sword_texture = BgfxBackend.loadTexture("fixtures/sprites/items/sword.png") catch |err| {
+        std.log.err("Failed to load sword texture: {}", .{err});
+        return error.TextureLoadFailed;
+    };
+    defer BgfxBackend.unloadTexture(sword_texture);
+
+    std.log.info("Loaded {} sprite textures from fixtures", .{@as(u32, 6)});
+
+    // Create a solid test texture to verify rendering pipeline
+    const test_texture = BgfxBackend.createSolidTexture(24, 24, BgfxBackend.color(255, 128, 0, 255)) catch |err| {
+        std.log.err("Failed to create test texture: {}", .{err});
+        return error.TextureLoadFailed;
+    };
+    defer BgfxBackend.unloadTexture(test_texture);
+    std.log.info("Created solid test texture for comparison", .{});
+
     // Activate app and bring window to front on macOS
     if (builtin.os.tag == .macos) {
         macos.activateApp();
@@ -182,6 +232,7 @@ pub fn main() !void {
     // Main loop
     var frame_count: u32 = 0;
     const camera_speed: f32 = 5.0;
+    var sprite_rotation: f32 = 0.0;
 
     while (!window.shouldClose()) {
         // Handle input
@@ -232,6 +283,106 @@ pub fn main() !void {
 
         // Begin camera mode
         BgfxBackend.beginMode2D(camera);
+
+        // Update sprite rotation
+        sprite_rotation += 0.5;
+
+        // ============================================
+        // SPRITE RENDERING DEMO
+        // ============================================
+
+        // Helper to get texture dimensions as floats
+        const coin_w: f32 = @floatFromInt(coin_texture.width);
+        const coin_h: f32 = @floatFromInt(coin_texture.height);
+        const gem_w: f32 = @floatFromInt(gem_texture.width);
+        const gem_h: f32 = @floatFromInt(gem_texture.height);
+        const heart_w: f32 = @floatFromInt(heart_texture.width);
+        const heart_h: f32 = @floatFromInt(heart_texture.height);
+        const key_w: f32 = @floatFromInt(key_texture.width);
+        const key_h: f32 = @floatFromInt(key_texture.height);
+        const potion_w: f32 = @floatFromInt(potion_texture.width);
+        const potion_h: f32 = @floatFromInt(potion_texture.height);
+        const sword_w: f32 = @floatFromInt(sword_texture.width);
+        const sword_h: f32 = @floatFromInt(sword_texture.height);
+
+        const sprite_scale: f32 = 3.0;
+
+        // Draw coin - static sprite
+        BgfxBackend.drawTexturePro(
+            coin_texture,
+            .{ .x = 0, .y = 0, .width = coin_w, .height = coin_h },
+            .{ .x = 50, .y = 420, .width = coin_w * sprite_scale, .height = coin_h * sprite_scale },
+            .{ .x = 0, .y = 0 },
+            0,
+            BgfxBackend.white,
+        );
+
+        // Draw gem - rotating sprite
+        BgfxBackend.drawTexturePro(
+            gem_texture,
+            .{ .x = 0, .y = 0, .width = gem_w, .height = gem_h },
+            .{ .x = 150, .y = 450, .width = gem_w * sprite_scale, .height = gem_h * sprite_scale },
+            .{ .x = gem_w * sprite_scale / 2, .y = gem_h * sprite_scale / 2 },
+            sprite_rotation,
+            BgfxBackend.white,
+        );
+
+        // Draw heart - pulsing (using scale from rotation)
+        const pulse_scale = 2.5 + @sin(sprite_rotation * 0.1) * 0.5;
+        BgfxBackend.drawTexturePro(
+            heart_texture,
+            .{ .x = 0, .y = 0, .width = heart_w, .height = heart_h },
+            .{ .x = 280, .y = 450, .width = heart_w * pulse_scale, .height = heart_h * pulse_scale },
+            .{ .x = heart_w * pulse_scale / 2, .y = heart_h * pulse_scale / 2 },
+            0,
+            BgfxBackend.color(255, 100, 100, 255), // red tint
+        );
+
+        // Draw key - rotating opposite direction
+        BgfxBackend.drawTexturePro(
+            key_texture,
+            .{ .x = 0, .y = 0, .width = key_w, .height = key_h },
+            .{ .x = 400, .y = 450, .width = key_w * sprite_scale, .height = key_h * sprite_scale },
+            .{ .x = key_w * sprite_scale / 2, .y = key_h * sprite_scale / 2 },
+            -sprite_rotation * 0.5,
+            BgfxBackend.yellow,
+        );
+
+        // Draw potion - with green tint
+        BgfxBackend.drawTexturePro(
+            potion_texture,
+            .{ .x = 0, .y = 0, .width = potion_w, .height = potion_h },
+            .{ .x = 520, .y = 420, .width = potion_w * sprite_scale, .height = potion_h * sprite_scale },
+            .{ .x = 0, .y = 0 },
+            0,
+            BgfxBackend.color(100, 255, 100, 255),
+        );
+
+        // Draw sword - rotating around handle
+        BgfxBackend.drawTexturePro(
+            sword_texture,
+            .{ .x = 0, .y = 0, .width = sword_w, .height = sword_h },
+            .{ .x = 680, .y = 500, .width = sword_w * sprite_scale, .height = sword_h * sprite_scale },
+            .{ .x = sword_w * sprite_scale * 0.2, .y = sword_h * sprite_scale * 0.8 }, // pivot near handle
+            sprite_rotation * 0.3,
+            BgfxBackend.white,
+        );
+
+        // Draw test texture (solid orange square) - to verify rendering pipeline
+        const test_w: f32 = @floatFromInt(test_texture.width);
+        const test_h: f32 = @floatFromInt(test_texture.height);
+        BgfxBackend.drawTexturePro(
+            test_texture,
+            .{ .x = 0, .y = 0, .width = test_w, .height = test_h },
+            .{ .x = 750, .y = 420, .width = test_w * sprite_scale, .height = test_h * sprite_scale },
+            .{ .x = 0, .y = 0 },
+            0,
+            BgfxBackend.white,
+        );
+
+        // ============================================
+        // SHAPE RENDERING DEMO
+        // ============================================
 
         // Draw shapes using BgfxBackend (in world space)
         // Filled rectangle
