@@ -37,6 +37,13 @@ pub fn build(b: *std.Build) void {
     const sdl_sdk = SdlSdk.init(b, .{ .dep_name = "sdl" });
     const sdl = sdl_sdk.getWrapperModule();
 
+    // bgfx dependency (optional backend)
+    const zbgfx_dep = b.dependency("zbgfx", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zbgfx = zbgfx_dep.module("zbgfx");
+
     // Main library module
     const lib_mod = b.addModule("labelle", .{
         .root_source_file = b.path("src/lib.zig"),
@@ -47,6 +54,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "raylib", .module = raylib },
             .{ .name = "sokol", .module = sokol },
             .{ .name = "sdl2", .module = sdl },
+            .{ .name = "zbgfx", .module = zbgfx },
         },
     });
 
@@ -69,6 +77,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "raylib", .module = raylib },
                 .{ .name = "sokol", .module = sokol },
                 .{ .name = "sdl2", .module = sdl },
+                .{ .name = "zbgfx", .module = zbgfx },
             },
         }),
     });

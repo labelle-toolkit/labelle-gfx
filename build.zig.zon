@@ -25,6 +25,10 @@
             .url = "git+https://github.com/ikskuh/SDL.zig#a7e95b5fcc5b0d68921c148778609d2fe248c3d8",
             .hash = "SDL2-0.0.0-yMCQivWqBABTfB8opAADsLCGxxu20vijLBW2hHdpTR-L",
         },
+        .zbgfx = .{
+            .url = "git+https://github.com/cyberegoorg/zbgfx#ca9e66986af558db0abd2bdaac8135d028bf0ccb",
+            .hash = "zbgfx-0.7.0-Sm4IxHlk1gL_wSKLBaKzsexkiyZTJ85huunX2hbWhM79",
+        },
     },
 
     .paths = .{
