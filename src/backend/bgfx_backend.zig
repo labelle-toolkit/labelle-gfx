@@ -14,9 +14,9 @@
 //! - Frame time tracking
 //! - Scissor/viewport clipping
 //! - Screen/world coordinate conversion
+//! - Sprite/texture rendering with batching
 //!
 //! Not yet implemented:
-//! - Sprite/texture rendering (requires shader infrastructure)
 //! - Text rendering (requires font atlas system)
 
 const std = @import("std");
@@ -25,6 +25,17 @@ const bgfx = zbgfx.bgfx;
 const debugdraw = zbgfx.debugdraw;
 
 const backend_mod = @import("backend.zig");
+const shaders = @import("bgfx/shaders.zig");
+
+// ============================================
+// Embedded Shader Data (imported from bgfx/shaders.zig)
+// ============================================
+const vs_sprite_glsl = shaders.vs_sprite_glsl;
+const vs_sprite_mtl = shaders.vs_sprite_mtl;
+const vs_sprite_spv = shaders.vs_sprite_spv;
+const fs_sprite_glsl = shaders.fs_sprite_glsl;
+const fs_sprite_mtl = shaders.fs_sprite_mtl;
+const fs_sprite_spv = shaders.fs_sprite_spv;
 
 // ============================================
 // Sprite Vertex Layout
@@ -163,6 +174,14 @@ pub const BgfxBackend = struct {
     threadlocal var sprite_layout: bgfx.VertexLayout = undefined;
     threadlocal var layouts_initialized: bool = false;
 
+    // Sprite shader program and uniforms
+    threadlocal var sprite_program: bgfx.ProgramHandle = .{ .idx = std.math.maxInt(u16) };
+    threadlocal var texture_uniform: bgfx.UniformHandle = .{ .idx = std.math.maxInt(u16) };
+    threadlocal var shaders_initialized: bool = false;
+
+    // Sprite rendering view (separate from debugdraw view)
+    const SPRITE_VIEW_ID: bgfx.ViewId = 1;
+
     /// Initialize vertex layouts for 2D rendering
     fn initLayouts() void {
         if (layouts_initialized) return;
@@ -175,6 +194,75 @@ pub const BgfxBackend = struct {
             .end();
 
         layouts_initialized = true;
+    }
+
+    /// Get shader binary for the current renderer type
+    fn getVertexShaderData() []const u8 {
+        return switch (bgfx.getRendererType()) {
+            .Metal => &vs_sprite_mtl,
+            .Vulkan => &vs_sprite_spv,
+            else => &vs_sprite_glsl, // OpenGL, OpenGLES
+        };
+    }
+
+    fn getFragmentShaderData() []const u8 {
+        return switch (bgfx.getRendererType()) {
+            .Metal => &fs_sprite_mtl,
+            .Vulkan => &fs_sprite_spv,
+            else => &fs_sprite_glsl, // OpenGL, OpenGLES
+        };
+    }
+
+    /// Initialize sprite shader program
+    fn initShaders() void {
+        if (shaders_initialized) return;
+
+        // Get shader data for current renderer
+        const vs_data = getVertexShaderData();
+        const fs_data = getFragmentShaderData();
+
+        // Create shaders from embedded binary data
+        const vs_handle = bgfx.createShader(bgfx.makeRef(vs_data.ptr, @intCast(vs_data.len)));
+        const fs_handle = bgfx.createShader(bgfx.makeRef(fs_data.ptr, @intCast(fs_data.len)));
+
+        if (vs_handle.idx == std.math.maxInt(u16) or fs_handle.idx == std.math.maxInt(u16)) {
+            std.log.err("Failed to create sprite shaders", .{});
+            return;
+        }
+
+        // Create program from shaders
+        sprite_program = bgfx.createProgram(vs_handle, fs_handle, true);
+        if (sprite_program.idx == std.math.maxInt(u16)) {
+            std.log.err("Failed to create sprite shader program", .{});
+            return;
+        }
+
+        // Create texture sampler uniform
+        texture_uniform = bgfx.createUniform("s_tex", .Sampler, 1);
+        if (texture_uniform.idx == std.math.maxInt(u16)) {
+            std.log.err("Failed to create texture uniform", .{});
+            return;
+        }
+
+        shaders_initialized = true;
+        std.log.info("Sprite shaders initialized successfully", .{});
+    }
+
+    /// Cleanup sprite shaders
+    fn deinitShaders() void {
+        if (!shaders_initialized) return;
+
+        if (sprite_program.idx != std.math.maxInt(u16)) {
+            bgfx.destroyProgram(sprite_program);
+            sprite_program.idx = std.math.maxInt(u16);
+        }
+
+        if (texture_uniform.idx != std.math.maxInt(u16)) {
+            bgfx.destroyUniform(texture_uniform);
+            texture_uniform.idx = std.math.maxInt(u16);
+        }
+
+        shaders_initialized = false;
     }
 
     // ============================================
@@ -263,6 +351,7 @@ pub const BgfxBackend = struct {
         }
 
         bgfx.setViewTransform(VIEW_ID, null, &proj);
+        bgfx.setViewTransform(SPRITE_VIEW_ID, null, &proj);
     }
 
     // ============================================
@@ -270,7 +359,6 @@ pub const BgfxBackend = struct {
     // ============================================
 
     /// Draw texture with full control
-    /// TODO: Implement sprite batching for efficient rendering
     pub fn drawTexturePro(
         texture: Texture,
         source: Rectangle,
@@ -279,20 +367,96 @@ pub const BgfxBackend = struct {
         rotation: f32,
         tint: Color,
     ) void {
-        // TODO: Implement sprite batching
-        // This requires:
-        // 1. Accumulating sprite data into transient vertex buffer
-        // 2. Creating/using a sprite shader program
-        // 3. Submitting batched draw calls
-        _ = texture;
-        _ = source;
-        _ = dest;
-        _ = origin;
-        _ = rotation;
-        _ = tint;
+        if (!shaders_initialized or sprite_program.idx == std.math.maxInt(u16)) {
+            return;
+        }
 
-        // Placeholder - actual implementation pending
-        @panic("bgfx drawTexturePro not yet implemented - see issue #150");
+        if (!texture.isValid()) {
+            return;
+        }
+
+        // Calculate UV coordinates from source rectangle
+        const tex_w: f32 = @floatFromInt(texture.width);
+        const tex_h: f32 = @floatFromInt(texture.height);
+        const uv_left = source.x / tex_w;
+        const uv_top = source.y / tex_h;
+        const uv_right = (source.x + source.width) / tex_w;
+        const uv_bottom = (source.y + source.height) / tex_h;
+
+        // Convert color to ABGR packed format
+        const packed_color = colorToAbgr(tint);
+
+        // Calculate rotated quad vertices
+        const cos_r = @cos(rotation * std.math.pi / 180.0);
+        const sin_r = @sin(rotation * std.math.pi / 180.0);
+
+        // Quad corners relative to origin (before rotation)
+        const corners = [4][2]f32{
+            .{ -origin.x, -origin.y }, // top-left
+            .{ dest.width - origin.x, -origin.y }, // top-right
+            .{ dest.width - origin.x, dest.height - origin.y }, // bottom-right
+            .{ -origin.x, dest.height - origin.y }, // bottom-left
+        };
+
+        // Rotate and translate vertices
+        var positions: [4][2]f32 = undefined;
+        for (0..4) |i| {
+            const x = corners[i][0];
+            const y = corners[i][1];
+            positions[i][0] = dest.x + origin.x + (x * cos_r - y * sin_r);
+            positions[i][1] = dest.y + origin.y + (x * sin_r + y * cos_r);
+        }
+
+        // Allocate transient vertex buffer for 4 vertices
+        var tvb: bgfx.TransientVertexBuffer = undefined;
+        if (bgfx.allocTransientVertexBuffer(&tvb, 4, &sprite_layout) == 0) {
+            return; // Not enough space in transient buffer
+        }
+
+        // Fill vertex buffer
+        const vertices: [*]SpriteVertex = @ptrCast(@alignCast(tvb.data));
+        vertices[0] = SpriteVertex.init(positions[0][0], positions[0][1], uv_left, uv_top, packed_color);
+        vertices[1] = SpriteVertex.init(positions[1][0], positions[1][1], uv_right, uv_top, packed_color);
+        vertices[2] = SpriteVertex.init(positions[2][0], positions[2][1], uv_right, uv_bottom, packed_color);
+        vertices[3] = SpriteVertex.init(positions[3][0], positions[3][1], uv_left, uv_bottom, packed_color);
+
+        // Allocate transient index buffer for 6 indices (2 triangles)
+        var tib: bgfx.TransientIndexBuffer = undefined;
+        if (bgfx.allocTransientIndexBuffer(&tib, 6, false) == 0) {
+            return;
+        }
+
+        // Fill index buffer (two triangles)
+        const indices: [*]u16 = @ptrCast(@alignCast(tib.data));
+        indices[0] = 0;
+        indices[1] = 1;
+        indices[2] = 2;
+        indices[3] = 0;
+        indices[4] = 2;
+        indices[5] = 3;
+
+        // Set render state with alpha blending
+        bgfx.setState(
+            bgfx.StateFlags_WriteRgb |
+                bgfx.StateFlags_WriteA |
+                bgfx.StateBlendFuncSeparate(
+                .SrcAlpha,
+                .InvSrcAlpha,
+                .One,
+                .InvSrcAlpha,
+            ),
+            0,
+        );
+
+        // Set texture and uniform
+        bgfx.setTexture(0, texture_uniform, texture.handle, std.math.maxInt(u32));
+
+        // Set vertex and index buffers
+        bgfx.setTransientVertexBuffer(0, &tvb, 0, 4);
+        bgfx.setTransientIndexBuffer(&tib, 0, 6);
+
+        // Submit draw call
+        bgfx.submit(SPRITE_VIEW_ID, sprite_program, 0, .Default);
     }
 
     // ============================================
@@ -341,7 +505,7 @@ pub const BgfxBackend = struct {
     /// Unload texture
     pub fn unloadTexture(texture: Texture) void {
         if (texture.isValid()) {
-            bgfx.destroy(texture.handle);
+            bgfx.destroyTexture(texture.handle);
         }
     }
 
@@ -482,6 +646,9 @@ pub const BgfxBackend = struct {
         // Initialize vertex layouts
         initLayouts();
 
+        // Initialize sprite shaders
+        initShaders();
+
         // Initialize debug draw for shape rendering
         debugdraw.init();
         debugdraw_initialized = true;
@@ -489,9 +656,13 @@ pub const BgfxBackend = struct {
         // Create debug draw encoder
         dd_encoder = debugdraw.Encoder.create();
 
-        // Set up default view
+        // Set up default view for debugdraw
         bgfx.setViewClear(VIEW_ID, bgfx.ClearFlags_Color | bgfx.ClearFlags_Depth, clear_color, 1.0, 0);
         bgfx.setViewRect(VIEW_ID, 0, 0, @intCast(screen_width), @intCast(screen_height));
+
+        // Set up sprite view (rendered after debugdraw)
+        bgfx.setViewClear(SPRITE_VIEW_ID, bgfx.ClearFlags_None, 0, 1.0, 0);
+        bgfx.setViewRect(SPRITE_VIEW_ID, 0, 0, @intCast(screen_width), @intCast(screen_height));
 
         // Set up 2D orthographic projection
         setup2DProjection();
@@ -509,6 +680,9 @@ pub const BgfxBackend = struct {
             debugdraw.deinit();
             debugdraw_initialized = false;
         }
+
+        // Clean up sprite shaders
+        deinitShaders();
 
         if (bgfx_initialized) {
             bgfx.shutdown();
@@ -553,7 +727,7 @@ pub const BgfxBackend = struct {
     /// Begin drawing frame
     pub fn beginDrawing() void {
         // Track frame time
-        const current_time = std.time.nanoTimestamp();
+        const current_time: i64 = @truncate(std.time.nanoTimestamp());
         if (last_frame_time != 0) {
             const elapsed_ns = current_time - last_frame_time;
             frame_delta = @as(f32, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
