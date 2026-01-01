@@ -6,11 +6,18 @@
 //! Note: This backend requires GLFW or another windowing library for window management.
 //! bgfx itself does not handle window creation - it only manages graphics rendering.
 //!
-//! STATUS: Work in Progress - Shape rendering implemented via debugdraw
+//! STATUS: Work in Progress
 //!
-//! Current limitations:
-//! - Sprite rendering requires shader compilation infrastructure
-//! - Text rendering not supported (would need font atlas)
+//! Implemented features:
+//! - Shape rendering (rectangle, circle, triangle, line, polygon) via debugdraw
+//! - Camera transformations (pan, zoom, rotation)
+//! - Frame time tracking
+//! - Scissor/viewport clipping
+//! - Screen/world coordinate conversion
+//!
+//! Not yet implemented:
+//! - Sprite/texture rendering (requires shader infrastructure)
+//! - Text rendering (requires font atlas system)
 
 const std = @import("std");
 const zbgfx = @import("zbgfx");
