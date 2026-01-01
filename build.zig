@@ -37,6 +37,22 @@ pub fn build(b: *std.Build) void {
     const sdl_sdk = SdlSdk.init(b, .{ .dep_name = "sdl" });
     const sdl = sdl_sdk.getWrapperModule();
 
+    // bgfx dependency (optional backend)
+    const zbgfx_dep = b.dependency("zbgfx", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zbgfx = zbgfx_dep.module("zbgfx");
+    const bgfx_lib = zbgfx_dep.artifact("bgfx");
+
+    // GLFW dependency (for bgfx window management)
+    const zglfw_dep = b.dependency("zglfw", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zglfw = zglfw_dep.module("root");
+    const glfw_lib = zglfw_dep.artifact("glfw");
+
     // Main library module
     const lib_mod = b.addModule("labelle", .{
         .root_source_file = b.path("src/lib.zig"),
@@ -47,8 +63,12 @@ pub fn build(b: *std.Build) void {
             .{ .name = "raylib", .module = raylib },
             .{ .name = "sokol", .module = sokol },
             .{ .name = "sdl2", .module = sdl },
+            .{ .name = "zbgfx", .module = zbgfx },
         },
     });
+
+    // Add stb_image include path for bgfx backend image loading
+    lib_mod.addIncludePath(zbgfx_dep.path("libs/bimg/3rdparty/stb"));
 
     // Re-export dependency modules so downstream packages can reuse them
     // This prevents Zig 0.15's "file exists in multiple modules" error
@@ -69,6 +89,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "raylib", .module = raylib },
                 .{ .name = "sokol", .module = sokol },
                 .{ .name = "sdl2", .module = sdl },
+                .{ .name = "zbgfx", .module = zbgfx },
             },
         }),
     });
@@ -277,6 +298,38 @@ pub fn build(b: *std.Build) void {
 
         const full_run_step = b.step("run-22_sokol_shapes", "Sokol shapes example");
         full_run_step.dependOn(&run_cmd_22.step);
+    }
+
+    // Example 23: bgfx backend with GLFW
+    {
+        const bgfx_example_mod = b.createModule(.{
+            .root_source_file = b.path("examples/23_bgfx_backend/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zglfw", .module = zglfw },
+                .{ .name = "zbgfx", .module = zbgfx },
+                .{ .name = "labelle", .module = lib_mod },
+            },
+        });
+
+        // Note: stb_image include path is provided via lib_mod (labelle module)
+
+        const bgfx_example = b.addExecutable(.{
+            .name = "23_bgfx_backend",
+            .root_module = bgfx_example_mod,
+        });
+
+        // Link bgfx and glfw libraries
+        bgfx_example.linkLibrary(bgfx_lib);
+        bgfx_example.linkLibrary(glfw_lib);
+
+        const run_cmd_23 = b.addRunArtifact(bgfx_example);
+        const run_step_23 = b.step("run-example-23", "bgfx backend example with GLFW");
+        run_step_23.dependOn(&run_cmd_23.step);
+
+        const full_run_step_23 = b.step("run-23_bgfx_backend", "bgfx backend example with GLFW");
+        full_run_step_23.dependOn(&run_cmd_23.step);
     }
 
     // Converter tool
