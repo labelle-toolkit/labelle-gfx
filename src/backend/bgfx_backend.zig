@@ -195,18 +195,63 @@ pub const BgfxBackend = struct {
 
     /// Set up orthographic 2D projection matrix for the view
     fn setup2DProjection() void {
+        setupProjectionWithCamera(null);
+    }
+
+    /// Set up projection with optional camera transformation
+    fn setupProjectionWithCamera(camera: ?Camera2D) void {
         const w: f32 = @floatFromInt(screen_width);
         const h: f32 = @floatFromInt(screen_height);
 
         // Orthographic projection: left=0, right=w, top=0, bottom=h, near=-1, far=1
         // This matches screen coordinates where (0,0) is top-left
-        const mtx = [16]f32{
+        var proj = [16]f32{
             2.0 / w, 0,        0,  0,
             0,       -2.0 / h, 0,  0,
             0,       0,        1,  0,
             -1,      1,        0,  1,
         };
-        bgfx.setViewTransform(VIEW_ID, null, &mtx);
+
+        if (camera) |cam| {
+            // Build view matrix for 2D camera
+            // Transform order: translate(-target) -> rotate(-rotation) -> scale(zoom) -> translate(offset)
+            const cos_r = @cos(-cam.rotation * std.math.pi / 180.0);
+            const sin_r = @sin(-cam.rotation * std.math.pi / 180.0);
+            const zoom = cam.zoom;
+
+            // Combined view matrix (column-major for bgfx)
+            // This combines: T(offset) * S(zoom) * R(-rotation) * T(-target)
+            const tx = -cam.target.x;
+            const ty = -cam.target.y;
+            const ox = cam.offset.x;
+            const oy = cam.offset.y;
+
+            // Apply rotation and zoom to translation
+            const rtx = (tx * cos_r - ty * sin_r) * zoom + ox;
+            const rty = (tx * sin_r + ty * cos_r) * zoom + oy;
+
+            const view = [16]f32{
+                cos_r * zoom, sin_r * zoom, 0, 0,
+                -sin_r * zoom, cos_r * zoom, 0, 0,
+                0,            0,             1, 0,
+                rtx,          rty,           0, 1,
+            };
+
+            // Multiply projection * view (column-major)
+            var result: [16]f32 = undefined;
+            for (0..4) |col| {
+                for (0..4) |row| {
+                    var sum: f32 = 0;
+                    for (0..4) |k| {
+                        sum += proj[k * 4 + row] * view[col * 4 + k];
+                    }
+                    result[col * 4 + row] = sum;
+                }
+            }
+            proj = result;
+        }
+
+        bgfx.setViewTransform(VIEW_ID, null, &proj);
     }
 
     // ============================================
@@ -303,18 +348,17 @@ pub const BgfxBackend = struct {
         current_camera = camera;
         in_camera_mode = true;
 
-        // TODO: Apply camera transformation matrix
-        // This involves setting up a view matrix that includes:
-        // - Translation by -target
-        // - Rotation by -rotation
-        // - Scale by zoom
-        // - Translation by offset
+        // Apply camera transformation to the view
+        setupProjectionWithCamera(camera);
     }
 
     /// End 2D camera mode
     pub fn endMode2D() void {
         current_camera = null;
         in_camera_mode = false;
+
+        // Restore default projection (no camera)
+        setup2DProjection();
     }
 
     /// Get screen width

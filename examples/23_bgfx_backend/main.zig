@@ -169,15 +169,25 @@ pub fn main() !void {
     }
 
     std.log.info("Window should now be visible. Press ESC to close.", .{});
+    std.log.info("Controls: Arrow keys = pan, +/- = zoom, R = rotate, Space = reset", .{});
+
+    // Camera state
+    var camera = BgfxBackend.Camera2D{
+        .offset = .{ .x = @as(f32, WIDTH) / 2.0, .y = @as(f32, HEIGHT) / 2.0 },
+        .target = .{ .x = @as(f32, WIDTH) / 2.0, .y = @as(f32, HEIGHT) / 2.0 },
+        .rotation = 0,
+        .zoom = 1.0,
+    };
 
     // Main loop
     var frame_count: u32 = 0;
+    const camera_speed: f32 = 5.0;
 
     while (!window.shouldClose()) {
         // Handle input
         zglfw.pollEvents();
 
-        // Check for escape key (check both press states)
+        // Check for escape key
         const escape_state = window.getKey(.escape);
         if (escape_state == .press or escape_state == .repeat) {
             std.log.info("Escape pressed, closing window", .{});
@@ -185,17 +195,45 @@ pub fn main() !void {
             break;
         }
 
+        // Camera controls
+        if (window.getKey(.left) == .press or window.getKey(.left) == .repeat) {
+            camera.target.x -= camera_speed / camera.zoom;
+        }
+        if (window.getKey(.right) == .press or window.getKey(.right) == .repeat) {
+            camera.target.x += camera_speed / camera.zoom;
+        }
+        if (window.getKey(.up) == .press or window.getKey(.up) == .repeat) {
+            camera.target.y -= camera_speed / camera.zoom;
+        }
+        if (window.getKey(.down) == .press or window.getKey(.down) == .repeat) {
+            camera.target.y += camera_speed / camera.zoom;
+        }
+        if (window.getKey(.equal) == .press or window.getKey(.equal) == .repeat) {
+            camera.zoom = @min(camera.zoom * 1.02, 10.0);
+        }
+        if (window.getKey(.minus) == .press or window.getKey(.minus) == .repeat) {
+            camera.zoom = @max(camera.zoom / 1.02, 0.1);
+        }
+        if (window.getKey(.r) == .press or window.getKey(.r) == .repeat) {
+            camera.rotation += 1.0;
+        }
+        if (window.getKey(.space) == .press) {
+            // Reset camera
+            camera.target = .{ .x = @as(f32, WIDTH) / 2.0, .y = @as(f32, HEIGHT) / 2.0 };
+            camera.zoom = 1.0;
+            camera.rotation = 0;
+        }
+
         // Begin frame with debugdraw encoder
         BgfxBackend.beginDrawing();
 
-        // Set background color (cycling)
-        const t: f32 = @as(f32, @floatFromInt(frame_count)) / 60.0;
-        const bg_r: u8 = @intFromFloat(40 + 20 * @sin(t));
-        const bg_g: u8 = @intFromFloat(40 + 20 * @sin(t + 2.1));
-        const bg_b: u8 = @intFromFloat(50 + 20 * @sin(t + 4.2));
-        BgfxBackend.clearBackground(BgfxBackend.color(bg_r, bg_g, bg_b, 255));
+        // Set background color (dark gray)
+        BgfxBackend.clearBackground(BgfxBackend.color(40, 40, 50, 255));
 
-        // Draw shapes using BgfxBackend
+        // Begin camera mode
+        BgfxBackend.beginMode2D(camera);
+
+        // Draw shapes using BgfxBackend (in world space)
         // Filled rectangle
         BgfxBackend.drawRectangleV(50, 50, 150, 100, BgfxBackend.red);
 
@@ -223,6 +261,19 @@ pub fn main() !void {
 
         // Polygon outline (pentagon)
         BgfxBackend.drawPolyLines(700, 480, 5, 50, 0, BgfxBackend.light_gray);
+
+        // Grid lines (to see camera movement)
+        var x: f32 = 0;
+        while (x <= 800) : (x += 100) {
+            BgfxBackend.drawLine(x, 0, x, 600, BgfxBackend.dark_gray);
+        }
+        var y: f32 = 0;
+        while (y <= 600) : (y += 100) {
+            BgfxBackend.drawLine(0, y, 800, y, BgfxBackend.dark_gray);
+        }
+
+        // End camera mode
+        BgfxBackend.endMode2D();
 
         // End frame
         BgfxBackend.endDrawing();
