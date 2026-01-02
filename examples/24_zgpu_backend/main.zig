@@ -19,7 +19,17 @@ const HEIGHT: u32 = 600;
 
 pub fn main() !void {
     // CI test mode - run headless and auto-exit after a few frames
-    const ci_test = std.posix.getenv("CI_TEST") != null;
+    // Use std.process.getEnvVarOwned for cross-platform compatibility
+    var gpa_env = std.heap.GeneralPurposeAllocator(.{}){};
+    const ci_test = blk: {
+        const result = std.process.getEnvVarOwned(gpa_env.allocator(), "CI_TEST") catch |err| switch (err) {
+            error.EnvironmentVariableNotFound => break :blk false,
+            else => break :blk false,
+        };
+        gpa_env.allocator().free(result);
+        break :blk true;
+    };
+    _ = gpa_env.deinit();
     const max_frames: u32 = if (ci_test) 60 else std.math.maxInt(u32);
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

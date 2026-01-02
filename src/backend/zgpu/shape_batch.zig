@@ -213,23 +213,18 @@ pub const ShapeBatch = struct {
         const thickness: f32 = 1.0;
         const rot_rad = rotation * std.math.pi / 180.0;
 
-        var prev_x: f32 = undefined;
-        var prev_y: f32 = undefined;
-        var first_x: f32 = undefined;
-        var first_y: f32 = undefined;
+        // Calculate first point outside loop to avoid undefined initialization
+        const first_angle = rot_rad;
+        const first_x = cx + @cos(first_angle) * radius;
+        const first_y = cy + @sin(first_angle) * radius;
+        var prev_x = first_x;
+        var prev_y = first_y;
 
-        for (0..actual_sides) |i| {
+        for (1..actual_sides) |i| {
             const angle = @as(f32, @floatFromInt(i)) * 2.0 * std.math.pi / @as(f32, @floatFromInt(actual_sides)) + rot_rad;
             const px = cx + @cos(angle) * radius;
             const py = cy + @sin(angle) * radius;
-
-            if (i == 0) {
-                first_x = px;
-                first_y = py;
-            } else {
-                try self.addLine(prev_x, prev_y, px, py, thickness, col);
-            }
-
+            try self.addLine(prev_x, prev_y, px, py, thickness, col);
             prev_x = px;
             prev_y = py;
         }

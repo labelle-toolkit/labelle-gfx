@@ -157,7 +157,9 @@ pub const ZgpuBackend = struct {
         tint: Color,
     ) void {
         if (sprite_batch) |*batch| {
-            batch.addSprite(tex, source, dest, origin, rotation, tint) catch {};
+            batch.addSprite(tex, source, dest, origin, rotation, tint) catch |err| {
+                std.log.debug("zgpu: failed to add sprite to batch: {}", .{err});
+            };
         }
     }
 
@@ -182,7 +184,9 @@ pub const ZgpuBackend = struct {
                 @floatFromInt(width),
                 @floatFromInt(height),
                 col.toAbgr(),
-            ) catch {};
+            ) catch |err| {
+                std.log.debug("zgpu: failed to add rectangle to batch: {}", .{err});
+            };
         }
     }
 
@@ -194,67 +198,89 @@ pub const ZgpuBackend = struct {
                 @floatFromInt(width),
                 @floatFromInt(height),
                 col.toAbgr(),
-            ) catch {};
+            ) catch |err| {
+                std.log.debug("zgpu: failed to add rectangle lines to batch: {}", .{err});
+            };
         }
     }
 
     pub fn drawRectangleV(x: f32, y: f32, w: f32, h: f32, col: Color) void {
         if (shape_batch) |*batch| {
-            batch.addRectangle(x, y, w, h, col.toAbgr()) catch {};
+            batch.addRectangle(x, y, w, h, col.toAbgr()) catch |err| {
+                std.log.debug("zgpu: failed to add rectangle to batch: {}", .{err});
+            };
         }
     }
 
     pub fn drawRectangleLinesV(x: f32, y: f32, w: f32, h: f32, col: Color) void {
         if (shape_batch) |*batch| {
-            batch.addRectangleLines(x, y, w, h, col.toAbgr()) catch {};
+            batch.addRectangleLines(x, y, w, h, col.toAbgr()) catch |err| {
+                std.log.debug("zgpu: failed to add rectangle lines to batch: {}", .{err});
+            };
         }
     }
 
     pub fn drawCircle(center_x: f32, center_y: f32, radius: f32, col: Color) void {
         if (shape_batch) |*batch| {
-            batch.addCircle(center_x, center_y, radius, col.toAbgr()) catch {};
+            batch.addCircle(center_x, center_y, radius, col.toAbgr()) catch |err| {
+                std.log.debug("zgpu: failed to add circle to batch: {}", .{err});
+            };
         }
     }
 
     pub fn drawCircleLines(center_x: f32, center_y: f32, radius: f32, col: Color) void {
         if (shape_batch) |*batch| {
-            batch.addCircleLines(center_x, center_y, radius, col.toAbgr()) catch {};
+            batch.addCircleLines(center_x, center_y, radius, col.toAbgr()) catch |err| {
+                std.log.debug("zgpu: failed to add circle lines to batch: {}", .{err});
+            };
         }
     }
 
     pub fn drawLine(start_x: f32, start_y: f32, end_x: f32, end_y: f32, col: Color) void {
         if (shape_batch) |*batch| {
-            batch.addLine(start_x, start_y, end_x, end_y, 1.0, col.toAbgr()) catch {};
+            batch.addLine(start_x, start_y, end_x, end_y, 1.0, col.toAbgr()) catch |err| {
+                std.log.debug("zgpu: failed to add line to batch: {}", .{err});
+            };
         }
     }
 
     pub fn drawLineEx(start_x: f32, start_y: f32, end_x: f32, end_y: f32, thickness: f32, col: Color) void {
         if (shape_batch) |*batch| {
-            batch.addLine(start_x, start_y, end_x, end_y, thickness, col.toAbgr()) catch {};
+            batch.addLine(start_x, start_y, end_x, end_y, thickness, col.toAbgr()) catch |err| {
+                std.log.debug("zgpu: failed to add line to batch: {}", .{err});
+            };
         }
     }
 
     pub fn drawTriangle(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: Color) void {
         if (shape_batch) |*batch| {
-            batch.addTriangle(x1, y1, x2, y2, x3, y3, col.toAbgr()) catch {};
+            batch.addTriangle(x1, y1, x2, y2, x3, y3, col.toAbgr()) catch |err| {
+                std.log.debug("zgpu: failed to add triangle to batch: {}", .{err});
+            };
         }
     }
 
     pub fn drawTriangleLines(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: Color) void {
         if (shape_batch) |*batch| {
-            batch.addTriangleLines(x1, y1, x2, y2, x3, y3, col.toAbgr()) catch {};
+            batch.addTriangleLines(x1, y1, x2, y2, x3, y3, col.toAbgr()) catch |err| {
+                std.log.debug("zgpu: failed to add triangle lines to batch: {}", .{err});
+            };
         }
     }
 
     pub fn drawPoly(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
         if (shape_batch) |*batch| {
-            batch.addPolygon(center_x, center_y, @intCast(@max(3, sides)), radius, rotation, col.toAbgr()) catch {};
+            batch.addPolygon(center_x, center_y, @intCast(@max(3, sides)), radius, rotation, col.toAbgr()) catch |err| {
+                std.log.debug("zgpu: failed to add polygon to batch: {}", .{err});
+            };
         }
     }
 
     pub fn drawPolyLines(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
         if (shape_batch) |*batch| {
-            batch.addPolygonLines(center_x, center_y, @intCast(@max(3, sides)), radius, rotation, col.toAbgr()) catch {};
+            batch.addPolygonLines(center_x, center_y, @intCast(@max(3, sides)), radius, rotation, col.toAbgr()) catch |err| {
+                std.log.debug("zgpu: failed to add polygon lines to batch: {}", .{err});
+            };
         }
     }
 

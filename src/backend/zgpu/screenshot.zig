@@ -180,13 +180,13 @@ pub fn captureAndSave(
     for (0..height) |y| {
         const src_row = mapped_data[y * padded_row_size ..][0..unpadded_row_size];
 
-        // Convert BGRA to RGB
+        // Convert BGRA to RGB (BGRA layout: B=0, G=1, R=2, A=3)
         var out_idx: usize = 0;
         var x: usize = 0;
         while (x < unpadded_row_size and out_idx + 2 < row_buf.len) : (x += 4) {
-            row_buf[out_idx + 0] = src_row[x + 2]; // R <- B
-            row_buf[out_idx + 1] = src_row[x + 1]; // G <- G
-            row_buf[out_idx + 2] = src_row[x + 0]; // B <- R
+            row_buf[out_idx + 0] = src_row[x + 2]; // R (from BGRA offset 2)
+            row_buf[out_idx + 1] = src_row[x + 1]; // G (from BGRA offset 1)
+            row_buf[out_idx + 2] = src_row[x + 0]; // B (from BGRA offset 0)
             out_idx += 3;
         }
 
