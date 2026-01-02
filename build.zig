@@ -455,21 +455,4 @@ pub fn build(b: *std.Build) void {
     const run_culling_benchmark = b.addRunArtifact(culling_benchmark);
     const bench_culling_step = b.step("bench-culling", "Run viewport culling benchmark");
     bench_culling_step.dependOn(&run_culling_benchmark.step);
-
-    // Sparse Set benchmark
-    const sparse_set_benchmark = b.addExecutable(.{
-        .name = "sparse_set_benchmark",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("benchmarks/sparse_set_benchmark.zig"),
-            .target = target,
-            .optimize = .ReleaseFast,
-            .imports = &.{
-                .{ .name = "labelle", .module = lib_mod },
-            },
-        }),
-    });
-
-    const run_sparse_set_benchmark = b.addRunArtifact(sparse_set_benchmark);
-    const bench_sparse_set_step = b.step("bench-sparse-set", "Run SparseSet vs HashMap benchmark");
-    bench_sparse_set_step.dependOn(&run_sparse_set_benchmark.step);
 }
