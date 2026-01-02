@@ -521,33 +521,26 @@ pub const ZgpuBackend = struct {
             .depth_stencil_attachment = null,
         });
 
-        // Render shapes if any
+        // Render shapes if any (using reusable GPU buffers)
         if (!shapes.isEmpty()) {
             const vertices = shapes.vertices.items;
             const indices = shapes.indices.items;
 
             if (vertices.len > 0 and indices.len > 0) {
-                // Create vertex buffer
-                const vertex_buffer = ctx.device.createBuffer(.{
-                    .usage = .{ .vertex = true, .copy_dst = true },
-                    .size = @intCast(vertices.len * @sizeOf(vertex.ColorVertex)),
-                    .mapped_at_creation = .false,
-                });
-                defer vertex_buffer.release();
+                // Prepare reusable GPU buffers (creates or resizes as needed)
+                shapes.prepareForRender(ctx.device, ctx.queue);
 
-                // Create index buffer
-                const index_buffer = ctx.device.createBuffer(.{
-                    .usage = .{ .index = true, .copy_dst = true },
-                    .size = @intCast(indices.len * @sizeOf(u32)),
-                    .mapped_at_creation = .false,
-                });
-                defer index_buffer.release();
+                // Get the reusable buffers
+                const vertex_buffer = shapes.getVertexBuffer() orelse {
+                    shapes.clear();
+                    return;
+                };
+                const index_buffer = shapes.getIndexBuffer() orelse {
+                    shapes.clear();
+                    return;
+                };
 
-                // Upload data
-                ctx.queue.writeBuffer(vertex_buffer, 0, vertex.ColorVertex, vertices);
-                ctx.queue.writeBuffer(index_buffer, 0, u32, indices);
-
-                // Draw
+                // Draw using the reusable buffers
                 render_pass.setPipeline(rend.shape_pipeline);
                 render_pass.setBindGroup(0, rend.shape_bind_group, null);
                 render_pass.setVertexBuffer(0, vertex_buffer, 0, @intCast(vertices.len * @sizeOf(vertex.ColorVertex)));

@@ -1,16 +1,107 @@
 //! zgpu Shape Batch
 //!
 //! Collects shape draw calls and generates geometry for batch rendering.
+//! Uses resizable GPU buffers that persist across frames to avoid per-frame
+//! allocations.
 
 const std = @import("std");
+const zgpu = @import("zgpu");
+const wgpu = zgpu.wgpu;
 const vertex = @import("vertex.zig");
 const ColorVertex = vertex.ColorVertex;
+
+/// Manages reusable GPU buffers for shape rendering
+pub const GpuBufferManager = struct {
+    vertex_buffer: ?wgpu.Buffer = null,
+    index_buffer: ?wgpu.Buffer = null,
+    vertex_capacity: usize = 0,
+    index_capacity: usize = 0,
+
+    // Minimum buffer sizes (in number of elements)
+    const MIN_VERTEX_CAPACITY: usize = 1024;
+    const MIN_INDEX_CAPACITY: usize = 4096;
+    // Growth factor when resizing
+    const GROWTH_FACTOR: usize = 2;
+
+    pub fn deinit(self: *GpuBufferManager) void {
+        if (self.vertex_buffer) |buf| {
+            buf.release();
+            self.vertex_buffer = null;
+        }
+        if (self.index_buffer) |buf| {
+            buf.release();
+            self.index_buffer = null;
+        }
+        self.vertex_capacity = 0;
+        self.index_capacity = 0;
+    }
+
+    /// Ensure buffers have sufficient capacity, creating or resizing as needed
+    pub fn ensureCapacity(
+        self: *GpuBufferManager,
+        device: wgpu.Device,
+        required_vertices: usize,
+        required_indices: usize,
+    ) void {
+        // Check if vertex buffer needs to be created or resized
+        if (self.vertex_buffer == null or required_vertices > self.vertex_capacity) {
+            if (self.vertex_buffer) |buf| {
+                buf.release();
+            }
+            const new_capacity = @max(
+                MIN_VERTEX_CAPACITY,
+                if (self.vertex_capacity == 0) required_vertices else self.vertex_capacity * GROWTH_FACTOR,
+            );
+            const final_capacity = @max(new_capacity, required_vertices);
+            self.vertex_buffer = device.createBuffer(.{
+                .usage = .{ .vertex = true, .copy_dst = true },
+                .size = @intCast(final_capacity * @sizeOf(ColorVertex)),
+                .mapped_at_creation = .false,
+            });
+            self.vertex_capacity = final_capacity;
+        }
+
+        // Check if index buffer needs to be created or resized
+        if (self.index_buffer == null or required_indices > self.index_capacity) {
+            if (self.index_buffer) |buf| {
+                buf.release();
+            }
+            const new_capacity = @max(
+                MIN_INDEX_CAPACITY,
+                if (self.index_capacity == 0) required_indices else self.index_capacity * GROWTH_FACTOR,
+            );
+            const final_capacity = @max(new_capacity, required_indices);
+            self.index_buffer = device.createBuffer(.{
+                .usage = .{ .index = true, .copy_dst = true },
+                .size = @intCast(final_capacity * @sizeOf(u32)),
+                .mapped_at_creation = .false,
+            });
+            self.index_capacity = final_capacity;
+        }
+    }
+
+    /// Upload vertex and index data to GPU buffers
+    pub fn upload(
+        self: *GpuBufferManager,
+        queue: wgpu.Queue,
+        vertices: []const ColorVertex,
+        indices: []const u32,
+    ) void {
+        if (self.vertex_buffer) |buf| {
+            queue.writeBuffer(buf, 0, ColorVertex, vertices);
+        }
+        if (self.index_buffer) |buf| {
+            queue.writeBuffer(buf, 0, u32, indices);
+        }
+    }
+};
 
 /// Shape batch for collecting and rendering shapes
 pub const ShapeBatch = struct {
     vertices: std.ArrayList(ColorVertex) = .{},
     indices: std.ArrayList(u32) = .{},
     allocator: std.mem.Allocator,
+    gpu_buffers: GpuBufferManager = .{},
 
     pub fn init(allocator: std.mem.Allocator) ShapeBatch {
         return .{
@@ -21,6 +112,7 @@ pub const ShapeBatch = struct {
     pub fn deinit(self: *ShapeBatch) void {
         self.vertices.deinit(self.allocator);
         self.indices.deinit(self.allocator);
+        self.gpu_buffers.deinit();
     }
 
     pub fn clear(self: *ShapeBatch) void {
@@ -30,6 +122,24 @@ pub const ShapeBatch = struct {
 
     pub fn isEmpty(self: *const ShapeBatch) bool {
         return self.vertices.items.len == 0;
+    }
+
+    /// Prepare GPU buffers and upload data for rendering
+    pub fn prepareForRender(self: *ShapeBatch, device: wgpu.Device, queue: wgpu.Queue) void {
+        if (self.isEmpty()) return;
+
+        self.gpu_buffers.ensureCapacity(device, self.vertices.items.len, self.indices.items.len);
+        self.gpu_buffers.upload(queue, self.vertices.items, self.indices.items);
+    }
+
+    /// Get the vertex buffer for rendering (must call prepareForRender first)
+    pub fn getVertexBuffer(self: *const ShapeBatch) ?wgpu.Buffer {
+        return self.gpu_buffers.vertex_buffer;
+    }
+
+    /// Get the index buffer for rendering (must call prepareForRender first)
+    pub fn getIndexBuffer(self: *const ShapeBatch) ?wgpu.Buffer {
+        return self.gpu_buffers.index_buffer;
     }
 
     /// Add a filled rectangle
