@@ -8,7 +8,7 @@ on:
 
 jobs:
   zgpu-backend-test:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
 
     steps:
       - name: Checkout repository
@@ -19,44 +19,16 @@ jobs:
         with:
           version: 0.15.2
 
-      - name: Install dependencies for Dawn/WebGPU and GLFW
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libgl1-mesa-dev \
-            libx11-dev \
-            libxcursor-dev \
-            libxrandr-dev \
-            libxinerama-dev \
-            libxi-dev \
-            libxext-dev \
-            libxfixes-dev \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libasound2-dev \
-            xvfb \
-            libvulkan-dev \
-            mesa-vulkan-drivers
-
-      - name: Clean build cache
-        run: |
-          # Remove any stale build artifacts to avoid cross-platform cache issues
-          rm -rf .zig-cache
-          echo "Build cache cleaned - starting fresh"
-
       - name: Build zgpu example
         run: |
           echo "::group::System info"
           uname -a
+          sw_vers
           echo "Zig version: $(zig version)"
           echo "::endgroup::"
 
           echo "::group::Building zgpu backend example"
-          # Build with fresh cache - retry once if first attempt fails
-          if ! zig build run-24_zgpu_backend 2>&1; then
-            echo "First build attempt failed, retrying with verbose output..."
-            zig build run-24_zgpu_backend --verbose 2>&1 | head -200 || true
-          fi
+          zig build run-24_zgpu_backend 2>&1 | head -100 || true
           echo "::endgroup::"
 
           # Just verify it compiles
@@ -65,11 +37,6 @@ jobs:
 
       - name: Run zgpu example in CI mode
         run: |
-          # Start virtual framebuffer for headless rendering
-          Xvfb :99 -screen 0 1024x768x24 &
-          export DISPLAY=:99
-          sleep 2
-
           echo "::group::Running zgpu backend example"
           # Run with CI_TEST=1 to auto-exit after a few frames
           if CI_TEST=1 timeout 60 zig build run-24_zgpu_backend 2>&1; then
