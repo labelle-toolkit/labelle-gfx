@@ -39,11 +39,12 @@ jobs:
         run: |
           echo "::group::Running zgpu backend example"
           # Run with CI_TEST=1 to auto-exit after a few frames
-          if CI_TEST=1 timeout 60 zig build run-24_zgpu_backend 2>&1; then
+          # Use perl for timeout on macOS (no timeout command available)
+          if CI_TEST=1 perl -e 'alarm 60; exec @ARGV' zig build run-24_zgpu_backend 2>&1; then
             echo "zgpu example completed successfully!"
           else
             EXIT_CODE=$?
-            if [ $EXIT_CODE -eq 124 ]; then
+            if [ $EXIT_CODE -eq 142 ]; then
               echo "::error::zgpu example timed out after 60 seconds"
               exit 1
             else
