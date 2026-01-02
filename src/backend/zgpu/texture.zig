@@ -16,69 +16,13 @@ const image_loader = @import("image_loader.zig");
 pub const Texture = types.Texture;
 pub const Color = types.Color;
 
-// ============================================================================
-// Legacy API (deprecated - maintains backward compatibility)
-// ============================================================================
-
-/// Shared allocator for texture loading operations (deprecated)
-threadlocal var shared_gpa: ?std.heap.GeneralPurposeAllocator(.{}) = null;
-
-fn getSharedAllocator() std.mem.Allocator {
-    if (shared_gpa == null) {
-        shared_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    }
-    return shared_gpa.?.allocator();
-}
-
-/// Cleanup the shared allocator (call during backend shutdown)
-pub fn deinitAllocator() void {
-    if (shared_gpa) |*gpa| {
-        _ = gpa.deinit();
-        shared_gpa = null;
-    }
-}
-
-/// Graphics context reference (deprecated - use explicit parameter versions)
-var gctx_ref: ?*zgpu.GraphicsContext = null;
-
-/// Set the graphics context for texture operations (deprecated)
-/// Prefer using the explicit parameter versions of functions instead.
-pub fn setGraphicsContext(gctx: ?*zgpu.GraphicsContext) void {
-    gctx_ref = gctx;
-}
-
-/// Load texture from file using stb_image (legacy API)
-/// Deprecated: Use loadTextureEx with explicit parameters instead.
-pub fn loadTexture(path: [:0]const u8) !Texture {
-    const gctx = gctx_ref orelse return error.NotInitialized;
-    return loadTextureEx(gctx, getSharedAllocator(), path);
-}
-
-/// Load texture from raw pixel data (legacy API)
-/// Deprecated: Use loadTextureFromMemoryEx with explicit parameters instead.
-pub fn loadTextureFromMemory(pixels: []const u8, width: u16, height: u16) !Texture {
-    const gctx = gctx_ref orelse return error.NotInitialized;
-    return loadTextureFromMemoryEx(gctx, pixels, width, height);
-}
-
-/// Create a solid color texture (legacy API)
-/// Deprecated: Use createSolidTextureEx with explicit parameters instead.
-pub fn createSolidTexture(width: u16, height: u16, col: Color) !Texture {
-    const gctx = gctx_ref orelse return error.NotInitialized;
-    return createSolidTextureEx(gctx, getSharedAllocator(), width, height, col);
-}
-
-// ============================================================================
-// New API with Explicit Dependency Injection
-// ============================================================================
-
 /// Load texture from file using stb_image
 ///
 /// Parameters:
 /// - gctx: Graphics context for GPU operations
 /// - allocator: Allocator for temporary image loading
 /// - path: Path to the image file (null-terminated)
-pub fn loadTextureEx(
+pub fn loadTexture(
     gctx: *zgpu.GraphicsContext,
     allocator: std.mem.Allocator,
     path: [:0]const u8,
@@ -89,7 +33,7 @@ pub fn loadTextureEx(
     };
     defer img.deinit();
 
-    return loadTextureFromMemoryEx(gctx, img.pixels, @intCast(img.width), @intCast(img.height));
+    return loadTextureFromMemory(gctx, img.pixels, @intCast(img.width), @intCast(img.height));
 }
 
 /// Load texture from raw pixel data (RGBA8 format)
@@ -99,7 +43,7 @@ pub fn loadTextureEx(
 /// - pixels: Raw RGBA8 pixel data
 /// - width: Texture width in pixels
 /// - height: Texture height in pixels
-pub fn loadTextureFromMemoryEx(
+pub fn loadTextureFromMemory(
     gctx: *zgpu.GraphicsContext,
     pixels: []const u8,
     width: u16,
@@ -158,7 +102,7 @@ pub fn loadTextureFromMemoryEx(
 /// - width: Texture width in pixels
 /// - height: Texture height in pixels
 /// - col: Fill color
-pub fn createSolidTextureEx(
+pub fn createSolidTexture(
     gctx: *zgpu.GraphicsContext,
     allocator: std.mem.Allocator,
     width: u16,
@@ -179,7 +123,7 @@ pub fn createSolidTextureEx(
         pixels[i + 3] = col.a;
     }
 
-    return loadTextureFromMemoryEx(gctx, pixels, width, height);
+    return loadTextureFromMemory(gctx, pixels, width, height);
 }
 
 // ============================================================================
