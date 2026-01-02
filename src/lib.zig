@@ -189,6 +189,13 @@ pub const subsystems = struct {
     pub const render = @import("engine/subsystems/render_subsystem.zig");
     pub const window = @import("engine/subsystems/window_subsystem.zig");
 };
+/// Internal engine modules. API is unstable and may change without notice.
+/// These are exposed for advanced use cases (custom ECS integration, benchmarking)
+/// but should not be relied upon for stable behavior.
+pub const engine = struct {
+    pub const sparse_set = @import("engine/sparse_set.zig");
+    pub const visual_storage = @import("engine/visual_storage.zig");
+};
 pub const sprite_storage = @import("engine/sprite_storage.zig");
 pub const shape_storage = @import("engine/shape_storage.zig");
 pub const z_index_buckets = @import("engine/z_index_buckets.zig");
