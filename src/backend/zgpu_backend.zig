@@ -559,46 +559,52 @@ pub const ZgpuBackend = struct {
             shapes.clear();
         }
 
-        // Render sprites if any
+        // Render sprites if any (batched by texture)
         if (!sprites.isEmpty()) {
-            const commands = sprites.commands.items;
+            // Build batched geometry grouped by texture
+            sprites.buildBatches() catch |err| {
+                std.log.err("zgpu: failed to build sprite batches: {}", .{err});
+            };
 
-            // Process each sprite command (each sprite may have a different texture)
-            for (commands) |cmd| {
+            // Render each texture batch with a single draw call
+            var batch_it = sprites.getBatches();
+            while (batch_it.next()) |entry| {
+                const batch = entry.value_ptr;
+                const batch_vertices = batch.vertices.items;
+                const batch_indices = batch.indices.items;
+
+                if (batch_vertices.len == 0 or batch_indices.len == 0) continue;
+
                 // Create bind group for this texture
-                const bind_group = rend.createSpriteBindGroup(ctx, cmd.texture.view);
+                const bind_group = rend.createSpriteBindGroup(ctx, batch.texture.view);
                 defer bind_group.release();
 
-                // Build vertices and indices for this sprite (quad = 4 vertices, 6 indices)
-                var sprite_vertices: [4]vertex.SpriteVertex = cmd.vertices;
-                const sprite_indices = [6]u32{ 0, 1, 2, 0, 2, 3 };
-
-                // Create vertex buffer
+                // Create vertex buffer for this batch
                 const vb = ctx.device.createBuffer(.{
                     .usage = .{ .vertex = true, .copy_dst = true },
-                    .size = @sizeOf(@TypeOf(sprite_vertices)),
+                    .size = @intCast(batch_vertices.len * @sizeOf(vertex.SpriteVertex)),
                     .mapped_at_creation = .false,
                 });
                 defer vb.release();
 
-                // Create index buffer
+                // Create index buffer for this batch
                 const ib = ctx.device.createBuffer(.{
                     .usage = .{ .index = true, .copy_dst = true },
-                    .size = @sizeOf(@TypeOf(sprite_indices)),
+                    .size = @intCast(batch_indices.len * @sizeOf(u32)),
                     .mapped_at_creation = .false,
                 });
                 defer ib.release();
 
                 // Upload data
-                ctx.queue.writeBuffer(vb, 0, vertex.SpriteVertex, &sprite_vertices);
-                ctx.queue.writeBuffer(ib, 0, u32, &sprite_indices);
+                ctx.queue.writeBuffer(vb, 0, vertex.SpriteVertex, batch_vertices);
+                ctx.queue.writeBuffer(ib, 0, u32, batch_indices);
 
-                // Draw
+                // Draw all sprites with this texture in a single call
                 render_pass.setPipeline(rend.sprite_pipeline);
                 render_pass.setBindGroup(0, bind_group, null);
-                render_pass.setVertexBuffer(0, vb, 0, @sizeOf(@TypeOf(sprite_vertices)));
-                render_pass.setIndexBuffer(ib, .uint32, 0, @sizeOf(@TypeOf(sprite_indices)));
-                render_pass.drawIndexed(6, 1, 0, 0, 0);
+                render_pass.setVertexBuffer(0, vb, 0, @intCast(batch_vertices.len * @sizeOf(vertex.SpriteVertex)));
+                render_pass.setIndexBuffer(ib, .uint32, 0, @intCast(batch_indices.len * @sizeOf(u32)));
+                render_pass.drawIndexed(@intCast(batch_indices.len), 1, 0, 0, 0);
             }
 
             // Clear batch for next frame
