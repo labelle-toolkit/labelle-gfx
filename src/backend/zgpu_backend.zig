@@ -124,6 +124,8 @@ pub const ZgpuBackend = struct {
     // Texture Management (delegated to texture module)
     // ============================================
 
+    // Legacy API (uses module-level state - deprecated)
+
     pub fn loadTexture(path: [:0]const u8) !Texture {
         return texture_mod.loadTexture(path);
     }
@@ -142,6 +144,34 @@ pub const ZgpuBackend = struct {
 
     pub fn createSolidTexture(width: u16, height: u16, col: Color) !Texture {
         return texture_mod.createSolidTexture(width, height, col);
+    }
+
+    // New API with explicit dependency injection
+
+    /// Load texture from file with explicit graphics context and allocator.
+    /// Preferred over loadTexture() for better testability and multi-context support.
+    pub fn loadTextureEx(allocator: std.mem.Allocator, path: [:0]const u8) !Texture {
+        const ctx = gctx orelse return error.NotInitialized;
+        return texture_mod.loadTextureEx(ctx, allocator, path);
+    }
+
+    /// Load texture from memory with explicit graphics context.
+    /// Preferred over loadTextureFromMemory() for better testability.
+    pub fn loadTextureFromMemoryEx(pixels: []const u8, width: u16, height: u16) !Texture {
+        const ctx = gctx orelse return error.NotInitialized;
+        return texture_mod.loadTextureFromMemoryEx(ctx, pixels, width, height);
+    }
+
+    /// Create a solid color texture with explicit graphics context and allocator.
+    /// Preferred over createSolidTexture() for better testability.
+    pub fn createSolidTextureEx(allocator: std.mem.Allocator, width: u16, height: u16, col: Color) !Texture {
+        const ctx = gctx orelse return error.NotInitialized;
+        return texture_mod.createSolidTextureEx(ctx, allocator, width, height, col);
+    }
+
+    /// Get the graphics context (for direct texture module calls)
+    pub fn getGraphicsContext() ?*zgpu.GraphicsContext {
+        return gctx;
     }
 
     // ============================================
