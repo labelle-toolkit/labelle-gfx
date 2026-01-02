@@ -16,7 +16,7 @@ pub const Mat4 = [16]f32;
 pub const Renderer = struct {
     // Pipelines
     shape_pipeline: wgpu.RenderPipeline,
-    // sprite_pipeline: wgpu.RenderPipeline, // TODO: Add when implementing sprites
+    sprite_pipeline: wgpu.RenderPipeline,
 
     // Uniform buffer for projection matrix
     uniform_buffer: wgpu.Buffer,
@@ -111,11 +111,13 @@ pub const Renderer = struct {
             .address_mode_w = .clamp_to_edge,
         });
 
-        // Create shape pipeline
+        // Create pipelines
         const shape_pipeline = createShapePipeline(gctx, shape_bind_group_layout);
+        const sprite_pipeline = createSpritePipeline(gctx, sprite_bind_group_layout);
 
         return .{
             .shape_pipeline = shape_pipeline,
+            .sprite_pipeline = sprite_pipeline,
             .uniform_buffer = uniform_buffer,
             .shape_bind_group_layout = shape_bind_group_layout,
             .shape_bind_group = shape_bind_group,
@@ -126,11 +128,38 @@ pub const Renderer = struct {
 
     pub fn deinit(self: *Renderer) void {
         self.shape_pipeline.release();
+        self.sprite_pipeline.release();
         self.uniform_buffer.release();
         self.shape_bind_group.release();
         self.shape_bind_group_layout.release();
         self.sampler.release();
         self.sprite_bind_group_layout.release();
+    }
+
+    /// Create a bind group for a specific texture (for sprite rendering)
+    pub fn createSpriteBindGroup(self: *Renderer, gctx: *zgpu.GraphicsContext, texture_view: wgpu.TextureView) wgpu.BindGroup {
+        return gctx.device.createBindGroup(.{
+            .layout = self.sprite_bind_group_layout,
+            .entry_count = 3,
+            .entries = &[_]wgpu.BindGroupEntry{
+                .{
+                    .binding = 0,
+                    .buffer = self.uniform_buffer,
+                    .offset = 0,
+                    .size = @sizeOf(Mat4),
+                },
+                .{
+                    .binding = 1,
+                    .texture_view = texture_view,
+                    .size = 0, // Not used for texture bindings
+                },
+                .{
+                    .binding = 2,
+                    .sampler = self.sampler,
+                    .size = 0, // Not used for sampler bindings
+                },
+            },
+        });
     }
 
     /// Update the projection matrix uniform
@@ -156,6 +185,68 @@ fn createShapePipeline(gctx: *zgpu.GraphicsContext, bind_group_layout: wgpu.Bind
 
     // Get vertex buffer layout
     const vertex_buffer_layout = vertex.getColorVertexBufferLayout();
+
+    // Create render pipeline
+    return gctx.device.createRenderPipeline(.{
+        .layout = pipeline_layout,
+        .vertex = .{
+            .module = vs_module,
+            .entry_point = "main",
+            .buffer_count = 1,
+            .buffers = &[_]wgpu.VertexBufferLayout{vertex_buffer_layout},
+        },
+        .fragment = &.{
+            .module = fs_module,
+            .entry_point = "main",
+            .target_count = 1,
+            .targets = &[_]wgpu.ColorTargetState{.{
+                .format = zgpu.GraphicsContext.swapchain_format,
+                .blend = &.{
+                    .color = .{
+                        .src_factor = .src_alpha,
+                        .dst_factor = .one_minus_src_alpha,
+                        .operation = .add,
+                    },
+                    .alpha = .{
+                        .src_factor = .one,
+                        .dst_factor = .one_minus_src_alpha,
+                        .operation = .add,
+                    },
+                },
+                .write_mask = wgpu.ColorWriteMask.all,
+            }},
+        },
+        .primitive = .{
+            .topology = .triangle_list,
+            .front_face = .ccw,
+            .cull_mode = .none,
+        },
+        .depth_stencil = null,
+        .multisample = .{
+            .count = 1,
+            .mask = 0xFFFFFFFF,
+            .alpha_to_coverage_enabled = false,
+        },
+    });
+}
+
+fn createSpritePipeline(gctx: *zgpu.GraphicsContext, bind_group_layout: wgpu.BindGroupLayout) wgpu.RenderPipeline {
+    // Create shader modules using zgpu helper
+    const vs_module = zgpu.createWgslShaderModule(gctx.device, shaders.sprite_vs, "sprite_vs");
+    defer vs_module.release();
+
+    const fs_module = zgpu.createWgslShaderModule(gctx.device, shaders.sprite_fs, "sprite_fs");
+    defer fs_module.release();
+
+    // Create pipeline layout
+    const pipeline_layout = gctx.device.createPipelineLayout(.{
+        .bind_group_layout_count = 1,
+        .bind_group_layouts = &[_]wgpu.BindGroupLayout{bind_group_layout},
+    });
+    defer pipeline_layout.release();
+
+    // Get vertex buffer layout for sprites
+    const vertex_buffer_layout = vertex.getSpriteVertexBufferLayout();
 
     // Create render pipeline
     return gctx.device.createRenderPipeline(.{

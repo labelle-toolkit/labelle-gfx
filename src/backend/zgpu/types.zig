@@ -6,15 +6,18 @@
 const std = @import("std");
 const zgpu = @import("zgpu");
 
+const wgpu = zgpu.wgpu;
+
 /// Texture handle with dimensions
 pub const Texture = struct {
-    handle: zgpu.TextureHandle,
-    view: zgpu.TextureViewHandle,
+    handle: wgpu.Texture,
+    view: wgpu.TextureView,
     width: u32,
     height: u32,
 
     pub fn isValid(self: Texture) bool {
-        return self.handle.id != 0;
+        // Check if texture handle is valid (not null/invalid)
+        return self.width > 0 and self.height > 0;
     }
 };
 

@@ -6,17 +6,16 @@
 //! Note: This backend requires GLFW or another windowing library for window management.
 //! zgpu itself does not handle window creation - it only manages graphics rendering.
 //!
-//! STATUS: Work in Progress
-//!
 //! Implemented features:
 //! - Basic rendering setup
 //! - Camera transformations (pan, zoom, rotation)
 //! - Frame time tracking
 //! - Screen/world coordinate conversion
+//! - Shape rendering (rectangle, circle, triangle, line, polygon)
+//! - Sprite/texture rendering with batching
+//! - Texture loading from file (PNG, JPG) and memory
 //!
 //! Not yet implemented:
-//! - Sprite/texture rendering
-//! - Shape rendering
 //! - Text rendering
 //!
 
@@ -33,9 +32,12 @@ const vertex = @import("zgpu/vertex.zig");
 const shaders = @import("zgpu/shaders.zig");
 const renderer_mod = @import("zgpu/renderer.zig");
 const shape_batch_mod = @import("zgpu/shape_batch.zig");
+const sprite_batch_mod = @import("zgpu/sprite_batch.zig");
+const texture_mod = @import("zgpu/texture.zig");
 
 const Renderer = renderer_mod.Renderer;
 const ShapeBatch = shape_batch_mod.ShapeBatch;
+const SpriteBatch = sprite_batch_mod.SpriteBatch;
 
 /// zgpu backend implementation
 pub const ZgpuBackend = struct {
@@ -81,6 +83,7 @@ pub const ZgpuBackend = struct {
     // Renderer and batches
     var gpu_renderer: ?Renderer = null;
     var shape_batch: ?ShapeBatch = null;
+    var sprite_batch: ?SpriteBatch = null;
 
     // State tracking for camera mode
     var current_camera: ?Camera2D = null;
@@ -117,53 +120,27 @@ pub const ZgpuBackend = struct {
     }
 
     // ============================================
-    // Texture Management
+    // Texture Management (delegated to texture module)
     // ============================================
 
     pub fn loadTexture(path: [:0]const u8) !Texture {
-        _ = path;
-        // TODO: Implement texture loading
-        return Texture{
-            .handle = .{},
-            .view = .{},
-            .width = 0,
-            .height = 0,
-        };
+        return texture_mod.loadTexture(path);
     }
 
     pub fn loadTextureFromMemory(pixels: []const u8, width: u16, height: u16) !Texture {
-        _ = pixels;
-        _ = width;
-        _ = height;
-        // TODO: Implement texture loading from memory
-        return Texture{
-            .handle = .{},
-            .view = .{},
-            .width = 0,
-            .height = 0,
-        };
+        return texture_mod.loadTextureFromMemory(pixels, width, height);
     }
 
     pub fn unloadTexture(tex: Texture) void {
-        _ = tex;
-        // TODO: Implement texture unloading
+        texture_mod.unloadTexture(tex);
     }
 
     pub fn isTextureValid(tex: Texture) bool {
-        return tex.isValid();
+        return texture_mod.isTextureValid(tex);
     }
 
     pub fn createSolidTexture(width: u16, height: u16, col: Color) !Texture {
-        _ = width;
-        _ = height;
-        _ = col;
-        // TODO: Implement solid texture creation
-        return Texture{
-            .handle = .{},
-            .view = .{},
-            .width = 0,
-            .height = 0,
-        };
+        return texture_mod.createSolidTexture(width, height, col);
     }
 
     // ============================================
@@ -178,13 +155,9 @@ pub const ZgpuBackend = struct {
         rotation: f32,
         tint: Color,
     ) void {
-        _ = tex;
-        _ = source;
-        _ = dest;
-        _ = origin;
-        _ = rotation;
-        _ = tint;
-        // TODO: Implement sprite drawing
+        if (sprite_batch) |*batch| {
+            batch.addSprite(tex, source, dest, origin, rotation, tint) catch {};
+        }
     }
 
     // ============================================
@@ -386,10 +359,12 @@ pub const ZgpuBackend = struct {
         screen_width = @intCast(fb_size[0]);
         screen_height = @intCast(fb_size[1]);
 
-        // Initialize renderer and shape batch
+        // Initialize renderer and batches
         if (gctx) |ctx| {
             gpu_renderer = Renderer.init(ctx);
             shape_batch = ShapeBatch.init(allocator);
+            sprite_batch = SpriteBatch.init(allocator);
+            texture_mod.setGraphicsContext(ctx);
         }
 
         std.log.info("[zgpu] Initialized with {}x{} framebuffer", .{ screen_width, screen_height });
@@ -397,6 +372,10 @@ pub const ZgpuBackend = struct {
 
     pub fn closeWindow() void {
         // Cleanup renderer and batches
+        if (sprite_batch) |*batch| {
+            batch.deinit();
+            sprite_batch = null;
+        }
         if (shape_batch) |*batch| {
             batch.deinit();
             shape_batch = null;
@@ -405,6 +384,10 @@ pub const ZgpuBackend = struct {
             rend.deinit();
             gpu_renderer = null;
         }
+
+        // Cleanup texture allocator and graphics context reference
+        texture_mod.setGraphicsContext(null);
+        texture_mod.deinitAllocator();
 
         if (gctx) |ctx| {
             if (gctx_allocator) |alloc| {
@@ -452,7 +435,8 @@ pub const ZgpuBackend = struct {
     pub fn endDrawing() void {
         const ctx = gctx orelse return;
         var rend = gpu_renderer orelse return;
-        var batch = shape_batch orelse return;
+        var shapes = shape_batch orelse return;
+        var sprites = sprite_batch orelse return;
 
         // Update projection matrix
         const width: f32 = @floatFromInt(screen_width);
@@ -495,9 +479,9 @@ pub const ZgpuBackend = struct {
         });
 
         // Render shapes if any
-        if (!batch.isEmpty()) {
-            const vertices = batch.vertices.items;
-            const indices = batch.indices.items;
+        if (!shapes.isEmpty()) {
+            const vertices = shapes.vertices.items;
+            const indices = shapes.indices.items;
 
             if (vertices.len > 0 and indices.len > 0) {
                 // Create vertex buffer
@@ -529,7 +513,53 @@ pub const ZgpuBackend = struct {
             }
 
             // Clear batch for next frame
-            batch.clear();
+            shapes.clear();
+        }
+
+        // Render sprites if any
+        if (!sprites.isEmpty()) {
+            const commands = sprites.commands.items;
+
+            // Process each sprite command (each sprite may have a different texture)
+            for (commands) |cmd| {
+                // Create bind group for this texture
+                const bind_group = rend.createSpriteBindGroup(ctx, cmd.texture.view);
+                defer bind_group.release();
+
+                // Build vertices and indices for this sprite (quad = 4 vertices, 6 indices)
+                var sprite_vertices: [4]vertex.SpriteVertex = cmd.vertices;
+                const sprite_indices = [6]u32{ 0, 1, 2, 0, 2, 3 };
+
+                // Create vertex buffer
+                const vb = ctx.device.createBuffer(.{
+                    .usage = .{ .vertex = true, .copy_dst = true },
+                    .size = @sizeOf(@TypeOf(sprite_vertices)),
+                    .mapped_at_creation = .false,
+                });
+                defer vb.release();
+
+                // Create index buffer
+                const ib = ctx.device.createBuffer(.{
+                    .usage = .{ .index = true, .copy_dst = true },
+                    .size = @sizeOf(@TypeOf(sprite_indices)),
+                    .mapped_at_creation = .false,
+                });
+                defer ib.release();
+
+                // Upload data
+                ctx.queue.writeBuffer(vb, 0, vertex.SpriteVertex, &sprite_vertices);
+                ctx.queue.writeBuffer(ib, 0, u32, &sprite_indices);
+
+                // Draw
+                render_pass.setPipeline(rend.sprite_pipeline);
+                render_pass.setBindGroup(0, bind_group, null);
+                render_pass.setVertexBuffer(0, vb, 0, @sizeOf(@TypeOf(sprite_vertices)));
+                render_pass.setIndexBuffer(ib, .uint32, 0, @sizeOf(@TypeOf(sprite_indices)));
+                render_pass.drawIndexed(6, 1, 0, 0, 0);
+            }
+
+            // Clear batch for next frame
+            sprites.clear();
         }
 
         render_pass.end();

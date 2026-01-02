@@ -1,7 +1,7 @@
 //! zgpu Backend Example
 //!
 //! Demonstrates the zgpu backend with GLFW window management.
-//! This example shows WebGPU/Dawn rendering with shapes.
+//! This example shows WebGPU/Dawn rendering with shapes and sprites.
 //!
 //! Prerequisites:
 //! - GLFW for window creation
@@ -46,7 +46,7 @@ pub fn main() !void {
     const window = zglfw.Window.create(
         @intCast(WIDTH),
         @intCast(HEIGHT),
-        "zgpu Backend Example - Shapes",
+        "zgpu Backend Example - Shapes & Sprites",
         null,
     ) catch |err| {
         std.log.err("Failed to create window: {}", .{err});
@@ -63,6 +63,27 @@ pub fn main() !void {
 
     std.log.info("zgpu initialized successfully!", .{});
     std.log.info("Window: {}x{}", .{ WIDTH, HEIGHT });
+
+    // Load sprite textures
+    const party_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/output/party.png") catch |err| blk: {
+        std.log.warn("Failed to load party.png: {} - sprite demo disabled", .{err});
+        break :blk null;
+    };
+    defer if (party_texture) |tex| ZgpuBackend.unloadTexture(tex);
+
+    const wizard_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/output/wizard.png") catch |err| blk: {
+        std.log.warn("Failed to load wizard.png: {} - sprite demo disabled", .{err});
+        break :blk null;
+    };
+    defer if (wizard_texture) |tex| ZgpuBackend.unloadTexture(tex);
+
+    if (party_texture != null) {
+        std.log.info("Loaded party.png texture", .{});
+    }
+    if (wizard_texture != null) {
+        std.log.info("Loaded wizard.png texture", .{});
+    }
+
     if (!ci_test) {
         std.log.info("Press ESC to close.", .{});
     }
@@ -123,23 +144,67 @@ pub fn main() !void {
         ZgpuBackend.drawCircleLines(520, 250, 45, ZgpuBackend.white);
         ZgpuBackend.drawCircleLines(650, 250, 55, ZgpuBackend.light_gray);
 
-        // Lines with different thicknesses
-        ZgpuBackend.drawLineEx(50, 350, 200, 380, 2.0, ZgpuBackend.red);
-        ZgpuBackend.drawLineEx(50, 400, 200, 420, 4.0, ZgpuBackend.green);
-        ZgpuBackend.drawLineEx(50, 450, 200, 480, 6.0, ZgpuBackend.blue);
+        // Draw sprites if textures loaded successfully
+        if (party_texture) |tex| {
+            const tex_w: f32 = @floatFromInt(tex.width);
+            const tex_h: f32 = @floatFromInt(tex.height);
 
-        // Triangles
-        ZgpuBackend.drawTriangle(280, 350, 350, 450, 210, 450, ZgpuBackend.yellow);
-        ZgpuBackend.drawTriangleLines(400, 350, 470, 450, 330, 450, ZgpuBackend.orange);
+            // Draw party sprite with bobbing animation
+            const bob_offset = @sin(time * 3.0) * 10.0;
+            ZgpuBackend.drawTexturePro(
+                tex,
+                ZgpuBackend.rectangle(0, 0, tex_w, tex_h), // source
+                ZgpuBackend.rectangle(100, 350 + bob_offset, tex_w * 2, tex_h * 2), // dest (scaled 2x)
+                ZgpuBackend.vector2(0, 0), // origin
+                0, // rotation
+                ZgpuBackend.white, // tint
+            );
 
-        // Polygons (rotating)
+            // Draw another copy with rotation
+            const rotation = time * 45.0;
+            ZgpuBackend.drawTexturePro(
+                tex,
+                ZgpuBackend.rectangle(0, 0, tex_w, tex_h),
+                ZgpuBackend.rectangle(300, 400, tex_w * 1.5, tex_h * 1.5),
+                ZgpuBackend.vector2(tex_w * 0.75, tex_h * 0.75), // center origin
+                rotation,
+                ZgpuBackend.color(255, 200, 200, 255), // pink tint
+            );
+        }
+
+        if (wizard_texture) |tex| {
+            const tex_w: f32 = @floatFromInt(tex.width);
+            const tex_h: f32 = @floatFromInt(tex.height);
+
+            // Draw wizard sprite with pulsing scale
+            const scale = 2.0 + @sin(time * 2.0) * 0.3;
+            ZgpuBackend.drawTexturePro(
+                tex,
+                ZgpuBackend.rectangle(0, 0, tex_w, tex_h),
+                ZgpuBackend.rectangle(550, 380, tex_w * scale, tex_h * scale),
+                ZgpuBackend.vector2(tex_w * scale / 2, tex_h * scale / 2),
+                0,
+                ZgpuBackend.white,
+            );
+
+            // Draw wizard with color cycling
+            const r: u8 = @intFromFloat((@sin(time) + 1.0) * 127.5);
+            const g: u8 = @intFromFloat((@sin(time + 2.0) + 1.0) * 127.5);
+            const b: u8 = @intFromFloat((@sin(time + 4.0) + 1.0) * 127.5);
+            ZgpuBackend.drawTexturePro(
+                tex,
+                ZgpuBackend.rectangle(0, 0, tex_w, tex_h),
+                ZgpuBackend.rectangle(700, 350, tex_w * 2, tex_h * 2),
+                ZgpuBackend.vector2(0, 0),
+                0,
+                ZgpuBackend.color(r, g, b, 255),
+            );
+        }
+
+        // Polygons (rotating) - draw after sprites to show layering
         const poly_rotation = time * 30.0;
-        ZgpuBackend.drawPoly(580, 400, 5, 50, poly_rotation, ZgpuBackend.purple); // Pentagon
-        ZgpuBackend.drawPoly(700, 400, 6, 45, -poly_rotation, ZgpuBackend.pink); // Hexagon
-
-        // Polygon outlines
-        ZgpuBackend.drawPolyLines(580, 520, 8, 40, poly_rotation * 0.5, ZgpuBackend.white); // Octagon
-        ZgpuBackend.drawPolyLines(700, 520, 3, 35, -poly_rotation * 0.5, ZgpuBackend.light_gray); // Triangle
+        ZgpuBackend.drawPoly(580, 520, 5, 50, poly_rotation, ZgpuBackend.purple); // Pentagon
+        ZgpuBackend.drawPoly(700, 520, 6, 45, -poly_rotation, ZgpuBackend.pink); // Hexagon
 
         ZgpuBackend.endMode2D();
 
