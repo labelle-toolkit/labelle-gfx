@@ -77,12 +77,32 @@ pub fn main() !void {
     };
     defer if (wizard_texture) |tex| ZgpuBackend.unloadTexture(tex);
 
+    // Load item sprites
+    const coin_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/sprites/items/coin.png") catch null;
+    defer if (coin_texture) |tex| ZgpuBackend.unloadTexture(tex);
+
+    const gem_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/sprites/items/gem.png") catch null;
+    defer if (gem_texture) |tex| ZgpuBackend.unloadTexture(tex);
+
+    const heart_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/sprites/items/heart.png") catch null;
+    defer if (heart_texture) |tex| ZgpuBackend.unloadTexture(tex);
+
+    const key_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/sprites/items/key.png") catch null;
+    defer if (key_texture) |tex| ZgpuBackend.unloadTexture(tex);
+
+    const potion_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/sprites/items/potion.png") catch null;
+    defer if (potion_texture) |tex| ZgpuBackend.unloadTexture(tex);
+
+    const sword_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/sprites/items/sword.png") catch null;
+    defer if (sword_texture) |tex| ZgpuBackend.unloadTexture(tex);
+
     if (party_texture != null) {
         std.log.info("Loaded party.png texture", .{});
     }
     if (wizard_texture != null) {
         std.log.info("Loaded wizard.png texture", .{});
     }
+    std.log.info("Loaded item sprites", .{});
 
     if (!ci_test) {
         std.log.info("Press ESC to close.", .{});
@@ -201,10 +221,113 @@ pub fn main() !void {
             );
         }
 
-        // Polygons (rotating) - draw after sprites to show layering
+        // Draw item sprites in a row with animations
+        const item_y: f32 = 500;
+        const item_scale: f32 = 2.5;
+        const item_spacing: f32 = 100;
+        var item_x: f32 = 100;
+
+        // Coin - spinning
+        if (coin_texture) |tex| {
+            const tex_w: f32 = @floatFromInt(tex.width);
+            const tex_h: f32 = @floatFromInt(tex.height);
+            const spin = time * 180.0;
+            ZgpuBackend.drawTexturePro(
+                tex,
+                ZgpuBackend.rectangle(0, 0, tex_w, tex_h),
+                ZgpuBackend.rectangle(item_x, item_y, tex_w * item_scale, tex_h * item_scale),
+                ZgpuBackend.vector2(tex_w * item_scale / 2, tex_h * item_scale / 2),
+                spin,
+                ZgpuBackend.color(255, 215, 0, 255), // Gold tint
+            );
+            item_x += item_spacing;
+        }
+
+        // Gem - pulsing glow
+        if (gem_texture) |tex| {
+            const tex_w: f32 = @floatFromInt(tex.width);
+            const tex_h: f32 = @floatFromInt(tex.height);
+            const pulse = 1.0 + @sin(time * 4.0) * 0.2;
+            const scale = item_scale * pulse;
+            ZgpuBackend.drawTexturePro(
+                tex,
+                ZgpuBackend.rectangle(0, 0, tex_w, tex_h),
+                ZgpuBackend.rectangle(item_x, item_y, tex_w * scale, tex_h * scale),
+                ZgpuBackend.vector2(tex_w * scale / 2, tex_h * scale / 2),
+                0,
+                ZgpuBackend.color(100, 200, 255, 255), // Blue tint
+            );
+            item_x += item_spacing;
+        }
+
+        // Heart - beating
+        if (heart_texture) |tex| {
+            const tex_w: f32 = @floatFromInt(tex.width);
+            const tex_h: f32 = @floatFromInt(tex.height);
+            const beat = 1.0 + @abs(@sin(time * 6.0)) * 0.3;
+            const scale = item_scale * beat;
+            ZgpuBackend.drawTexturePro(
+                tex,
+                ZgpuBackend.rectangle(0, 0, tex_w, tex_h),
+                ZgpuBackend.rectangle(item_x, item_y, tex_w * scale, tex_h * scale),
+                ZgpuBackend.vector2(tex_w * scale / 2, tex_h * scale / 2),
+                0,
+                ZgpuBackend.color(255, 80, 80, 255), // Red tint
+            );
+            item_x += item_spacing;
+        }
+
+        // Key - swinging
+        if (key_texture) |tex| {
+            const tex_w: f32 = @floatFromInt(tex.width);
+            const tex_h: f32 = @floatFromInt(tex.height);
+            const swing = @sin(time * 3.0) * 20.0;
+            ZgpuBackend.drawTexturePro(
+                tex,
+                ZgpuBackend.rectangle(0, 0, tex_w, tex_h),
+                ZgpuBackend.rectangle(item_x, item_y, tex_w * item_scale, tex_h * item_scale),
+                ZgpuBackend.vector2(tex_w * item_scale / 2, 0), // Pivot at top
+                swing,
+                ZgpuBackend.color(255, 200, 50, 255), // Golden tint
+            );
+            item_x += item_spacing;
+        }
+
+        // Potion - bubbling (bobbing up and down)
+        if (potion_texture) |tex| {
+            const tex_w: f32 = @floatFromInt(tex.width);
+            const tex_h: f32 = @floatFromInt(tex.height);
+            const bob = @sin(time * 5.0) * 8.0;
+            ZgpuBackend.drawTexturePro(
+                tex,
+                ZgpuBackend.rectangle(0, 0, tex_w, tex_h),
+                ZgpuBackend.rectangle(item_x, item_y + bob, tex_w * item_scale, tex_h * item_scale),
+                ZgpuBackend.vector2(tex_w * item_scale / 2, tex_h * item_scale / 2),
+                0,
+                ZgpuBackend.color(150, 255, 150, 255), // Green tint
+            );
+            item_x += item_spacing;
+        }
+
+        // Sword - slashing
+        if (sword_texture) |tex| {
+            const tex_w: f32 = @floatFromInt(tex.width);
+            const tex_h: f32 = @floatFromInt(tex.height);
+            const slash = @sin(time * 4.0) * 30.0 - 15.0;
+            ZgpuBackend.drawTexturePro(
+                tex,
+                ZgpuBackend.rectangle(0, 0, tex_w, tex_h),
+                ZgpuBackend.rectangle(item_x, item_y, tex_w * item_scale, tex_h * item_scale),
+                ZgpuBackend.vector2(tex_w * item_scale / 2, tex_h * item_scale),
+                slash,
+                ZgpuBackend.white,
+            );
+        }
+
+        // Polygons (rotating) - draw in upper area
         const poly_rotation = time * 30.0;
-        ZgpuBackend.drawPoly(580, 520, 5, 50, poly_rotation, ZgpuBackend.purple); // Pentagon
-        ZgpuBackend.drawPoly(700, 520, 6, 45, -poly_rotation, ZgpuBackend.pink); // Hexagon
+        ZgpuBackend.drawPoly(680, 180, 5, 40, poly_rotation, ZgpuBackend.purple); // Pentagon
+        ZgpuBackend.drawPoly(750, 180, 6, 35, -poly_rotation, ZgpuBackend.pink); // Hexagon
 
         ZgpuBackend.endMode2D();
 
