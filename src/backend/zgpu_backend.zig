@@ -34,6 +34,7 @@ const renderer_mod = @import("zgpu/renderer.zig");
 const shape_batch_mod = @import("zgpu/shape_batch.zig");
 const sprite_batch_mod = @import("zgpu/sprite_batch.zig");
 const texture_mod = @import("zgpu/texture.zig");
+const screenshot_mod = @import("zgpu/screenshot.zig");
 
 const Renderer = renderer_mod.Renderer;
 const ShapeBatch = shape_batch_mod.ShapeBatch;
@@ -415,7 +416,9 @@ pub const ZgpuBackend = struct {
     }
 
     pub fn takeScreenshot(filename: [*:0]const u8) void {
-        _ = filename;
+        if (gctx) |ctx| {
+            screenshot_mod.takeScreenshot(ctx, filename);
+        }
     }
 
     // ============================================
@@ -462,6 +465,20 @@ pub const ZgpuBackend = struct {
         const back_buffer_view = ctx.swapchain.getCurrentTextureView();
         defer back_buffer_view.release();
 
+        // Check if screenshot is requested - if so, create offscreen render target
+        const needs_screenshot = screenshot_mod.isScreenshotRequested();
+        var screenshot_target: ?screenshot_mod.ScreenshotTarget = null;
+        if (needs_screenshot) {
+            screenshot_target = screenshot_mod.createScreenshotRenderTarget(ctx);
+        }
+        defer if (screenshot_target) |target| {
+            target.view.release();
+            target.texture.release();
+        };
+
+        // Determine which view to render to
+        const render_view = if (screenshot_target) |target| target.view else back_buffer_view;
+
         // Create command encoder
         const encoder = ctx.device.createCommandEncoder(null);
         defer encoder.release();
@@ -470,7 +487,7 @@ pub const ZgpuBackend = struct {
         const render_pass = encoder.beginRenderPass(.{
             .color_attachment_count = 1,
             .color_attachments = &[_]wgpu.RenderPassColorAttachment{.{
-                .view = back_buffer_view,
+                .view = render_view,
                 .load_op = .clear,
                 .store_op = .store,
                 .clear_value = clear_color.toWgpuColor(),
@@ -567,9 +584,15 @@ pub const ZgpuBackend = struct {
 
         // Submit commands
         const commands = encoder.finish(null);
-        defer commands.release();
-
         ctx.submit(&[_]wgpu.CommandBuffer{commands});
+        commands.release();
+
+        // If screenshot was requested, capture from offscreen target
+        if (screenshot_target) |target| {
+            // Capture screenshot from the offscreen render target
+            screenshot_mod.captureAndSave(ctx, target.texture);
+        }
+
         _ = ctx.present();
     }
 

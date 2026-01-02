@@ -210,6 +210,11 @@ pub fn main() !void {
 
         // End frame
         ZgpuBackend.endDrawing();
+
+        // Take screenshot at frame 59 (needs one more frame to actually capture)
+        if (frame_count == 59) {
+            ZgpuBackend.takeScreenshot("examples/24_zgpu_backend/screenshot.ppm");
+        }
     }
 
     std.log.info("Example finished after {} frames", .{frame_count});

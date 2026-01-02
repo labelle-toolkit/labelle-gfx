@@ -79,6 +79,9 @@ pub fn build(b: *std.Build) void {
     // Add stb_image include path for bgfx backend image loading
     lib_mod.addIncludePath(zbgfx_dep.path("libs/bimg/3rdparty/stb"));
 
+    // Add stb_image_write include path for screenshot support (from raylib's external folder)
+    lib_mod.addIncludePath(raylib_dep.path("src/external"));
+
     // Re-export dependency modules so downstream packages can reuse them
     // This prevents Zig 0.15's "file exists in multiple modules" error
     // by allowing downstream packages to use our module references
