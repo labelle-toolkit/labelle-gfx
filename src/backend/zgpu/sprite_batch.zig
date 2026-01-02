@@ -26,15 +26,13 @@ pub const SpriteCommand = struct {
 /// A batch of sprites sharing the same texture
 pub const TextureBatch = struct {
     texture: Texture,
-    vertices: std.ArrayList(SpriteVertex),
-    indices: std.ArrayList(u32),
+    vertices: std.ArrayList(SpriteVertex) = .{},
+    indices: std.ArrayList(u32) = .{},
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, texture: Texture) TextureBatch {
         return .{
             .texture = texture,
-            .vertices = std.ArrayList(SpriteVertex).init(allocator),
-            .indices = std.ArrayList(u32).init(allocator),
             .allocator = allocator,
         };
     }
@@ -48,10 +46,10 @@ pub const TextureBatch = struct {
         const base_idx: u32 = @intCast(self.vertices.items.len);
 
         // Add the 4 vertices
-        try self.vertices.appendSlice(&quad_vertices);
+        try self.vertices.appendSlice(self.allocator, &quad_vertices);
 
         // Add indices for 2 triangles (0-1-2, 0-2-3)
-        try self.indices.appendSlice(&[_]u32{
+        try self.indices.appendSlice(self.allocator, &[_]u32{
             base_idx + 0,
             base_idx + 1,
             base_idx + 2,
