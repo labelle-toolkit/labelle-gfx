@@ -79,6 +79,8 @@ pub const sdl_backend = @import("backend/sdl_backend.zig");
 pub const SdlBackend = sdl_backend.SdlBackend;
 pub const bgfx_backend = @import("backend/bgfx_backend.zig");
 pub const BgfxBackend = bgfx_backend.BgfxBackend;
+pub const zgpu_backend = @import("backend/zgpu_backend.zig");
+pub const ZgpuBackend = zgpu_backend.ZgpuBackend;
 
 // Default backend (raylib)
 pub const DefaultBackend = Backend(RaylibBackend);
