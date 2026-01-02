@@ -38,13 +38,28 @@ jobs:
             libvulkan-dev \
             mesa-vulkan-drivers
 
+      - name: Clean build cache
+        run: |
+          # Remove any stale build artifacts to avoid cross-platform cache issues
+          rm -rf .zig-cache
+          echo "Build cache cleaned - starting fresh"
+
       - name: Build zgpu example
         run: |
-          echo "::group::Building zgpu backend example"
-          zig build run-24_zgpu_backend 2>&1 | head -100 || true
+          echo "::group::System info"
+          uname -a
+          echo "Zig version: $(zig version)"
           echo "::endgroup::"
 
-          # Just verify it compiles - the run command above starts building dependencies
+          echo "::group::Building zgpu backend example"
+          # Build with fresh cache - retry once if first attempt fails
+          if ! zig build run-24_zgpu_backend 2>&1; then
+            echo "First build attempt failed, retrying with verbose output..."
+            zig build run-24_zgpu_backend --verbose 2>&1 | head -200 || true
+          fi
+          echo "::endgroup::"
+
+          # Just verify it compiles
           echo "Verifying build completes..."
           zig build 2>&1
 
