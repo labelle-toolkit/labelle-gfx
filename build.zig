@@ -45,13 +45,20 @@ pub fn build(b: *std.Build) void {
     const zbgfx = zbgfx_dep.module("zbgfx");
     const bgfx_lib = zbgfx_dep.artifact("bgfx");
 
-    // GLFW dependency (for bgfx window management)
+    // GLFW dependency (for bgfx/zgpu window management)
     const zglfw_dep = b.dependency("zglfw", .{
         .target = target,
         .optimize = optimize,
     });
     const zglfw = zglfw_dep.module("root");
     const glfw_lib = zglfw_dep.artifact("glfw");
+
+    // zgpu dependency (WebGPU via Dawn)
+    const zgpu_dep = b.dependency("zgpu", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zgpu = zgpu_dep.module("root");
 
     // Main library module
     const lib_mod = b.addModule("labelle", .{
@@ -64,11 +71,16 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sokol", .module = sokol },
             .{ .name = "sdl2", .module = sdl },
             .{ .name = "zbgfx", .module = zbgfx },
+            .{ .name = "zgpu", .module = zgpu },
+            .{ .name = "zglfw", .module = zglfw },
         },
     });
 
     // Add stb_image include path for bgfx backend image loading
     lib_mod.addIncludePath(zbgfx_dep.path("libs/bimg/3rdparty/stb"));
+
+    // Add stb_image_write include path for screenshot support (from raylib's external folder)
+    lib_mod.addIncludePath(raylib_dep.path("src/external"));
 
     // Re-export dependency modules so downstream packages can reuse them
     // This prevents Zig 0.15's "file exists in multiple modules" error
@@ -330,6 +342,42 @@ pub fn build(b: *std.Build) void {
 
         const full_run_step_23 = b.step("run-23_bgfx_backend", "bgfx backend example with GLFW");
         full_run_step_23.dependOn(&run_cmd_23.step);
+    }
+
+    // Example 24: zgpu backend (WebGPU via Dawn) with GLFW
+    {
+        const zgpu_example_mod = b.createModule(.{
+            .root_source_file = b.path("examples/24_zgpu_backend/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zglfw", .module = zglfw },
+                .{ .name = "zgpu", .module = zgpu },
+                .{ .name = "labelle", .module = lib_mod },
+            },
+        });
+
+        const zgpu_example = b.addExecutable(.{
+            .name = "24_zgpu_backend",
+            .root_module = zgpu_example_mod,
+        });
+
+        // Link glfw library
+        zgpu_example.linkLibrary(glfw_lib);
+
+        // Link Dawn (WebGPU) library and its dependencies
+        zgpu_example.linkLibrary(zgpu_dep.artifact("zdawn"));
+
+        // Import zgpu's build.zig to use its helper functions for Dawn library paths
+        const zgpu_build = @import("zgpu");
+        zgpu_build.addLibraryPathsTo(zgpu_example);
+
+        const run_cmd_24 = b.addRunArtifact(zgpu_example);
+        const run_step_24 = b.step("run-example-24", "zgpu backend example with GLFW");
+        run_step_24.dependOn(&run_cmd_24.step);
+
+        const full_run_step_24 = b.step("run-24_zgpu_backend", "zgpu backend example with GLFW");
+        full_run_step_24.dependOn(&run_cmd_24.step);
     }
 
     // Converter tool
