@@ -2,18 +2,23 @@
 //!
 //! Provides CRUD operations for visual entities with z-bucket integration.
 //! Storage is facade-owned; bucket arrays are passed to methods.
+//!
+//! Uses a sparse set internally for O(1) operations with better cache locality
+//! than hash maps for EntityId-keyed storage.
 
 const std = @import("std");
 const log = @import("../log.zig").engine;
 
 const types = @import("types.zig");
 const z_buckets = @import("z_buckets.zig");
+const sparse_set = @import("sparse_set.zig");
 
 pub const EntityId = types.EntityId;
 pub const Position = types.Position;
 pub const ZBuckets = z_buckets.ZBuckets;
 pub const RenderItem = z_buckets.RenderItem;
 pub const RenderItemType = z_buckets.RenderItemType;
+pub const SparseSet = sparse_set.SparseSet;
 
 /// Generic storage for visual entities with z-bucket integration.
 ///
@@ -32,12 +37,12 @@ pub fn VisualStorage(
             position: Position,
         };
 
-        items: std.AutoArrayHashMap(EntityId, Entry),
+        items: SparseSet(Entry),
         allocator: std.mem.Allocator,
 
         pub fn init(allocator: std.mem.Allocator) Self {
             return .{
-                .items = std.AutoArrayHashMap(EntityId, Entry).init(allocator),
+                .items = SparseSet(Entry).init(allocator),
                 .allocator = allocator,
             };
         }
@@ -72,8 +77,8 @@ pub fn VisualStorage(
                     .{ .entity_id = id, .item_type = item_type },
                     visual.z_index,
                 ) catch {
-                    // Bucket insert failed - remove map entry to maintain consistency
-                    _ = self.items.swapRemove(id);
+                    // Bucket insert failed - remove entry to maintain consistency
+                    _ = self.items.remove(id);
                     return;
                 };
             }
@@ -138,7 +143,7 @@ pub fn VisualStorage(
                     entry.visual.z_index,
                 );
             }
-            _ = self.items.swapRemove(id);
+            _ = self.items.remove(id);
         }
 
         /// Get a visual by entity ID.
