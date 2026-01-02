@@ -100,6 +100,9 @@ pub fn SparseSetWithLimit(comptime T: type, comptime max_entity_id: u32) type {
             const dense_idx = self.sparse[idx];
             if (dense_idx == EMPTY) return null;
 
+            // Defensive bounds check (protects against data corruption)
+            if (dense_idx >= self.dense.items.len) return null;
+
             return self.dense.items[dense_idx];
         }
 
@@ -110,6 +113,9 @@ pub fn SparseSetWithLimit(comptime T: type, comptime max_entity_id: u32) type {
 
             const dense_idx = self.sparse[idx];
             if (dense_idx == EMPTY) return null;
+
+            // Defensive bounds check (protects against data corruption)
+            if (dense_idx >= self.dense.items.len) return null;
 
             return &self.dense.items[dense_idx];
         }
@@ -135,6 +141,7 @@ pub fn SparseSetWithLimit(comptime T: type, comptime max_entity_id: u32) type {
                 // Insert new
                 const new_dense_idx = self.dense.items.len;
                 try self.dense.append(self.allocator, value);
+                errdefer _ = self.dense.pop(); // Rollback if dense_ids.append fails
                 try self.dense_ids.append(self.allocator, id);
                 self.sparse[idx] = new_dense_idx;
             }
