@@ -117,13 +117,8 @@ pub const SpriteBatch = struct {
 
     /// Build batched geometry from commands, grouped by texture
     pub fn buildBatches(self: *SpriteBatch) !void {
-        // Clear previous batch data but keep texture batch allocations
-        var it = self.texture_batches.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.clear();
-        }
-
         // Group sprites by texture
+        // Note: clear() is called at end of frame, so batches are already empty
         for (self.commands.items) |cmd| {
             const batch = try self.getOrCreateTextureBatch(cmd.texture);
             try batch.addQuad(cmd.vertices);
