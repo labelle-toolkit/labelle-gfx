@@ -48,11 +48,8 @@ pub const GpuBufferManager = struct {
             if (self.vertex_buffer) |buf| {
                 buf.release();
             }
-            const new_capacity = @max(
-                MIN_VERTEX_CAPACITY,
-                if (self.vertex_capacity == 0) required_vertices else self.vertex_capacity * GROWTH_FACTOR,
-            );
-            const final_capacity = @max(new_capacity, required_vertices);
+            const new_capacity = @max(self.vertex_capacity * GROWTH_FACTOR, required_vertices);
+            const final_capacity = @max(new_capacity, MIN_VERTEX_CAPACITY);
             self.vertex_buffer = device.createBuffer(.{
                 .usage = .{ .vertex = true, .copy_dst = true },
                 .size = @intCast(final_capacity * @sizeOf(ColorVertex)),
@@ -66,11 +63,8 @@ pub const GpuBufferManager = struct {
             if (self.index_buffer) |buf| {
                 buf.release();
             }
-            const new_capacity = @max(
-                MIN_INDEX_CAPACITY,
-                if (self.index_capacity == 0) required_indices else self.index_capacity * GROWTH_FACTOR,
-            );
-            const final_capacity = @max(new_capacity, required_indices);
+            const new_capacity = @max(self.index_capacity * GROWTH_FACTOR, required_indices);
+            const final_capacity = @max(new_capacity, MIN_INDEX_CAPACITY);
             self.index_buffer = device.createBuffer(.{
                 .usage = .{ .index = true, .copy_dst = true },
                 .size = @intCast(final_capacity * @sizeOf(u32)),

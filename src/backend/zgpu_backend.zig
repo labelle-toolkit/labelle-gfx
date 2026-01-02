@@ -526,27 +526,19 @@ pub const ZgpuBackend = struct {
             const vertices = shapes.vertices.items;
             const indices = shapes.indices.items;
 
-            if (vertices.len > 0 and indices.len > 0) {
-                // Prepare reusable GPU buffers (creates or resizes as needed)
-                shapes.prepareForRender(ctx.device, ctx.queue);
+            // Prepare reusable GPU buffers (creates or resizes as needed)
+            shapes.prepareForRender(ctx.device, ctx.queue);
 
-                // Get the reusable buffers
-                const vertex_buffer = shapes.getVertexBuffer() orelse {
-                    shapes.clear();
-                    return;
-                };
-                const index_buffer = shapes.getIndexBuffer() orelse {
-                    shapes.clear();
-                    return;
-                };
+            // Get the reusable buffers (guaranteed to exist after prepareForRender)
+            const vertex_buffer = shapes.getVertexBuffer() orelse unreachable;
+            const index_buffer = shapes.getIndexBuffer() orelse unreachable;
 
-                // Draw using the reusable buffers
-                render_pass.setPipeline(rend.shape_pipeline);
-                render_pass.setBindGroup(0, rend.shape_bind_group, null);
-                render_pass.setVertexBuffer(0, vertex_buffer, 0, @intCast(vertices.len * @sizeOf(vertex.ColorVertex)));
-                render_pass.setIndexBuffer(index_buffer, .uint32, 0, @intCast(indices.len * @sizeOf(u32)));
-                render_pass.drawIndexed(@intCast(indices.len), 1, 0, 0, 0);
-            }
+            // Draw using the reusable buffers
+            render_pass.setPipeline(rend.shape_pipeline);
+            render_pass.setBindGroup(0, rend.shape_bind_group, null);
+            render_pass.setVertexBuffer(0, vertex_buffer, 0, @intCast(vertices.len * @sizeOf(vertex.ColorVertex)));
+            render_pass.setIndexBuffer(index_buffer, .uint32, 0, @intCast(indices.len * @sizeOf(u32)));
+            render_pass.drawIndexed(@intCast(indices.len), 1, 0, 0, 0);
 
             // Clear batch for next frame
             shapes.clear();
