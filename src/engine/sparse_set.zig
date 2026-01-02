@@ -5,8 +5,26 @@
 //! - Sparse array: Maps EntityId -> dense array index
 //! - Dense array: Contiguous storage of values for iteration
 //!
-//! Trade-off: Uses memory proportional to max EntityId seen, but iteration
-//! is cache-friendly since values are stored contiguously.
+//! ## Memory Model
+//!
+//! The sparse array grows proportionally to the **maximum EntityId value seen**.
+//! This is optimal for dense, sequential IDs (typical of ECS systems) but can
+//! use excessive memory if IDs are sparse or very large.
+//!
+//! Example memory usage (sparse array only, 8 bytes per entry on 64-bit):
+//! - Max ID 1,000: ~8 KB
+//! - Max ID 100,000: ~800 KB
+//! - Max ID 1,000,000: ~8 MB (default limit)
+//!
+//! ## Constraints
+//!
+//! - EntityId values must be below `MAX_ENTITY_ID` (default: 1,048,576 / ~1M)
+//! - IDs should be reasonably dense for optimal memory efficiency
+//! - Memory is not reclaimed when high-ID entities are removed (no shrink)
+//!
+//! For use cases with sparse/random IDs, consider using a hash map instead.
+//!
+//! This module is internal to labelle-gfx and its API may change.
 
 const std = @import("std");
 const types = @import("types.zig");
@@ -16,16 +34,37 @@ pub const EntityId = types.EntityId;
 /// Initial capacity for the sparse array (grows as needed)
 const INITIAL_SPARSE_CAPACITY: usize = 1024;
 
+/// Maximum allowed EntityId value.
+/// Prevents OOM from accidentally large IDs (e.g., uninitialized or corrupted data).
+/// Default: 1,048,576 (~1M entities, ~8MB sparse array on 64-bit).
+/// This can be overridden by using SparseSetWithLimit.
+pub const MAX_ENTITY_ID: u32 = 1 << 20; // 1,048,576
+
 /// Sparse set with EntityId keys and generic values.
+/// Uses the default MAX_ENTITY_ID limit.
+pub fn SparseSet(comptime T: type) type {
+    return SparseSetWithLimit(T, MAX_ENTITY_ID);
+}
+
+/// Sparse set with a custom maximum EntityId limit.
 ///
 /// Provides O(1) operations for get, put, remove, and contains.
 /// Iteration over values is cache-friendly due to dense storage.
-pub fn SparseSet(comptime T: type) type {
+pub fn SparseSetWithLimit(comptime T: type, comptime max_entity_id: u32) type {
     return struct {
         const Self = @This();
 
         /// Sentinel value indicating no mapping exists
         const EMPTY: usize = std.math.maxInt(usize);
+
+        /// Maximum sparse array size (based on max_entity_id)
+        const MAX_SPARSE_SIZE: usize = max_entity_id + 1;
+
+        pub const Error = error{
+            /// EntityId exceeds the configured maximum limit
+            EntityIdTooLarge,
+            OutOfMemory,
+        };
 
         /// Sparse array: entity_id.toInt() -> dense index (EMPTY if not present)
         sparse: []usize,
@@ -76,8 +115,14 @@ pub fn SparseSet(comptime T: type) type {
         }
 
         /// Insert or update a value for an EntityId.
-        pub fn put(self: *Self, id: EntityId, value: T) !void {
+        /// Returns error.EntityIdTooLarge if the ID exceeds the configured limit.
+        pub fn put(self: *Self, id: EntityId, value: T) Error!void {
             const idx = id.toInt();
+
+            // Check if EntityId exceeds the configured limit
+            if (idx >= MAX_SPARSE_SIZE) {
+                return error.EntityIdTooLarge;
+            }
 
             // Ensure sparse array is large enough
             try self.ensureSparseCapacity(idx + 1);
@@ -136,17 +181,24 @@ pub fn SparseSet(comptime T: type) type {
         }
 
         /// Ensure sparse array can hold at least `required_capacity` entries.
-        fn ensureSparseCapacity(self: *Self, required_capacity: usize) !void {
+        fn ensureSparseCapacity(self: *Self, required_capacity: usize) error{OutOfMemory}!void {
             if (required_capacity <= self.sparse.len) return;
 
             // Calculate new capacity (at least double, minimum INITIAL_SPARSE_CAPACITY)
+            // Use saturating multiplication and cap at MAX_SPARSE_SIZE to prevent overflow
             var new_capacity = if (self.sparse.len == 0)
                 INITIAL_SPARSE_CAPACITY
             else
                 self.sparse.len;
 
             while (new_capacity < required_capacity) {
-                new_capacity *= 2;
+                // Use saturating multiplication to prevent overflow
+                const doubled = std.math.mul(usize, new_capacity, 2) catch MAX_SPARSE_SIZE;
+                new_capacity = @min(doubled, MAX_SPARSE_SIZE);
+
+                // If we've hit the cap but still need more, break
+                // (put() already validated that required_capacity <= MAX_SPARSE_SIZE)
+                if (new_capacity == MAX_SPARSE_SIZE) break;
             }
 
             // Allocate new sparse array
