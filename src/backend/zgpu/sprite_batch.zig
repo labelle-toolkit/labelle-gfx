@@ -28,18 +28,20 @@ pub const TextureBatch = struct {
     texture: Texture,
     vertices: std.ArrayList(SpriteVertex),
     indices: std.ArrayList(u32),
+    allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, texture: Texture) TextureBatch {
         return .{
             .texture = texture,
             .vertices = std.ArrayList(SpriteVertex).init(allocator),
             .indices = std.ArrayList(u32).init(allocator),
+            .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *TextureBatch) void {
-        self.vertices.deinit();
-        self.indices.deinit();
+        self.vertices.deinit(self.allocator);
+        self.indices.deinit(self.allocator);
     }
 
     pub fn addQuad(self: *TextureBatch, quad_vertices: [4]SpriteVertex) !void {
@@ -103,8 +105,8 @@ pub const SpriteBatch = struct {
 
     /// Get or create a texture batch for the given texture
     fn getOrCreateTextureBatch(self: *SpriteBatch, texture: Texture) !*TextureBatch {
-        // Use the texture handle pointer as a unique key
-        const key = @intFromPtr(texture.handle.ptr);
+        // Use the texture handle as a unique key (it's an opaque pointer)
+        const key = @intFromPtr(texture.handle);
 
         const gop = try self.texture_batches.getOrPut(key);
         if (!gop.found_existing) {
