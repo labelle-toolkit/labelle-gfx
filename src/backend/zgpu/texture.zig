@@ -1,6 +1,10 @@
 //! zgpu Texture Management
 //!
 //! Functions for loading, creating, and managing textures in zgpu/WebGPU.
+//!
+//! This module uses explicit dependency injection - all functions that need
+//! the graphics context or allocator receive them as parameters, making
+//! dependencies clear and improving testability.
 
 const std = @import("std");
 const zgpu = @import("zgpu");
@@ -12,49 +16,39 @@ const image_loader = @import("image_loader.zig");
 pub const Texture = types.Texture;
 pub const Color = types.Color;
 
-/// Shared allocator for texture loading operations
-threadlocal var shared_gpa: ?std.heap.GeneralPurposeAllocator(.{}) = null;
-
-fn getSharedAllocator() std.mem.Allocator {
-    if (shared_gpa == null) {
-        shared_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    }
-    return shared_gpa.?.allocator();
-}
-
-/// Cleanup the shared allocator (call during backend shutdown)
-pub fn deinitAllocator() void {
-    if (shared_gpa) |*gpa| {
-        _ = gpa.deinit();
-        shared_gpa = null;
-    }
-}
-
-/// Graphics context reference (set by backend initialization)
-var gctx_ref: ?*zgpu.GraphicsContext = null;
-
-/// Set the graphics context for texture operations
-pub fn setGraphicsContext(gctx: ?*zgpu.GraphicsContext) void {
-    gctx_ref = gctx;
-}
-
 /// Load texture from file using stb_image
-pub fn loadTexture(path: [:0]const u8) !Texture {
-    const allocator = getSharedAllocator();
-
+///
+/// Parameters:
+/// - gctx: Graphics context for GPU operations
+/// - allocator: Allocator for temporary image loading
+/// - path: Path to the image file (null-terminated)
+pub fn loadTexture(
+    gctx: *zgpu.GraphicsContext,
+    allocator: std.mem.Allocator,
+    path: [:0]const u8,
+) !Texture {
     var img = image_loader.loadImage(allocator, path) catch |err| {
         std.log.err("Failed to load image: {s} - {}", .{ path, err });
         return error.TextureLoadFailed;
     };
     defer img.deinit();
 
-    return loadTextureFromMemory(img.pixels, @intCast(img.width), @intCast(img.height));
+    return loadTextureFromMemory(gctx, img.pixels, @intCast(img.width), @intCast(img.height));
 }
 
 /// Load texture from raw pixel data (RGBA8 format)
-pub fn loadTextureFromMemory(pixels: []const u8, width: u16, height: u16) !Texture {
-    const gctx = gctx_ref orelse return error.NotInitialized;
-
+///
+/// Parameters:
+/// - gctx: Graphics context for GPU operations
+/// - pixels: Raw RGBA8 pixel data
+/// - width: Texture width in pixels
+/// - height: Texture height in pixels
+pub fn loadTextureFromMemory(
+    gctx: *zgpu.GraphicsContext,
+    pixels: []const u8,
+    width: u16,
+    height: u16,
+) !Texture {
     const w: u32 = width;
     const h: u32 = height;
 
@@ -100,22 +94,21 @@ pub fn loadTextureFromMemory(pixels: []const u8, width: u16, height: u16) !Textu
     };
 }
 
-/// Unload texture
-pub fn unloadTexture(texture: Texture) void {
-    if (texture.isValid()) {
-        texture.view.release();
-        texture.handle.release();
-    }
-}
-
-/// Check if texture is valid
-pub fn isTextureValid(texture: Texture) bool {
-    return texture.isValid();
-}
-
 /// Create a solid color texture (for debugging)
-pub fn createSolidTexture(width: u16, height: u16, col: Color) !Texture {
-    const allocator = getSharedAllocator();
+///
+/// Parameters:
+/// - gctx: Graphics context for GPU operations
+/// - allocator: Allocator for temporary pixel buffer
+/// - width: Texture width in pixels
+/// - height: Texture height in pixels
+/// - col: Fill color
+pub fn createSolidTexture(
+    gctx: *zgpu.GraphicsContext,
+    allocator: std.mem.Allocator,
+    width: u16,
+    height: u16,
+    col: Color,
+) !Texture {
     const pixel_count = @as(usize, width) * @as(usize, height) * 4;
 
     const pixels = allocator.alloc(u8, pixel_count) catch return error.OutOfMemory;
@@ -130,5 +123,22 @@ pub fn createSolidTexture(width: u16, height: u16, col: Color) !Texture {
         pixels[i + 3] = col.a;
     }
 
-    return loadTextureFromMemory(pixels, width, height);
+    return loadTextureFromMemory(gctx, pixels, width, height);
+}
+
+// ============================================================================
+// Utility Functions (no dependencies)
+// ============================================================================
+
+/// Unload texture and release GPU resources
+pub fn unloadTexture(texture: Texture) void {
+    if (texture.isValid()) {
+        texture.view.release();
+        texture.handle.release();
+    }
+}
+
+/// Check if texture is valid
+pub fn isTextureValid(texture: Texture) bool {
+    return texture.isValid();
 }
