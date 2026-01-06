@@ -384,25 +384,149 @@ pub const SokolBackend = struct {
     }
 
     /// Take screenshot
-    /// Note: Only supported on GL backends (GLCORE, GLES3). Other backends
-    /// (Metal, D3D11, WGPU) don't have framebuffer readback exposed through sokol.
+    /// Supported backends:
+    /// - macOS: Uses Metal texture readback (sokol default on macOS)
+    /// - Linux/Windows with GL: Uses glReadPixels
+    /// - D3D11, WGPU: Not yet supported
     pub fn takeScreenshot(filename: [*:0]const u8) void {
-        const backend = sg.queryBackend();
+        takeScreenshotImpl(filename);
+    }
 
-        // Check if we're on a GL backend where we can use glReadPixels
-        switch (backend) {
-            .GLCORE, .GLES3 => {
-                takeScreenshotGL(filename);
-            },
-            else => {
-                std.log.warn("takeScreenshot not supported on {s} backend. " ++
-                    "Screenshots are only available on OpenGL backends (GLCORE, GLES3).", .{@tagName(backend)});
-            },
+    // Platform-specific implementation selection at comptime
+    const takeScreenshotImpl = blk: {
+        const builtin = @import("builtin");
+        if (builtin.os.tag == .macos) {
+            break :blk takeScreenshotMetal;
+        } else if (builtin.os.tag == .linux or builtin.os.tag == .windows) {
+            break :blk takeScreenshotGLImpl;
+        } else {
+            break :blk takeScreenshotUnsupported;
         }
+    };
+
+    fn takeScreenshotUnsupported(_: [*:0]const u8) void {
+        std.log.warn("takeScreenshot not supported on this platform.", .{});
+    }
+
+    /// Metal-specific screenshot implementation
+    fn takeScreenshotMetal(filename: [*:0]const u8) void {
+        const width: usize = @intCast(getScreenWidth());
+        const height: usize = @intCast(getScreenHeight());
+
+        if (width == 0 or height == 0) {
+            std.log.err("Cannot take screenshot: invalid screen dimensions", .{});
+            return;
+        }
+
+        // Import Metal/Objective-C types
+        const mtl = @cImport({
+            @cInclude("objc/runtime.h");
+            @cInclude("objc/message.h");
+        });
+
+        // Get the current drawable from sokol_app
+        const drawable = sapp.metalGetCurrentDrawable() orelse {
+            std.log.err("Cannot take screenshot: no Metal drawable available", .{});
+            return;
+        };
+
+        // Cast objc_msgSend to the correct function type for getting texture
+        // [drawable texture] returns id<MTLTexture>
+        const MsgSendTextureFn = *const fn (*anyopaque, mtl.SEL) callconv(.c) ?*anyopaque;
+        const msgSendTexture: MsgSendTextureFn = @ptrCast(&mtl.objc_msgSend);
+
+        const sel_texture = mtl.sel_registerName("texture");
+        const texture: ?*anyopaque = msgSendTexture(@ptrCast(@constCast(drawable)), sel_texture);
+
+        if (texture == null) {
+            std.log.err("Cannot take screenshot: failed to get texture from drawable", .{});
+            return;
+        }
+
+        // Allocate buffer for pixel data (BGRA - Metal's default format)
+        const bytes_per_row = width * 4;
+        const buffer_size = bytes_per_row * height;
+        const pixels = std.heap.page_allocator.alloc(u8, buffer_size) catch {
+            std.log.err("Failed to allocate memory for screenshot", .{});
+            return;
+        };
+        defer std.heap.page_allocator.free(pixels);
+
+        // Call [texture getBytes:bytesPerRow:fromRegion:mipmapLevel:]
+        // We need to construct the MTLRegion struct
+        const MTLRegion = extern struct {
+            origin: extern struct { x: usize, y: usize, z: usize },
+            size: extern struct { width: usize, height: usize, depth: usize },
+        };
+
+        const region = MTLRegion{
+            .origin = .{ .x = 0, .y = 0, .z = 0 },
+            .size = .{ .width = width, .height = height, .depth = 1 },
+        };
+
+        // getBytes:bytesPerRow:fromRegion:mipmapLevel:
+        const sel_getBytes = mtl.sel_registerName("getBytes:bytesPerRow:fromRegion:mipmapLevel:");
+
+        // Define the function type for objc_msgSend with our specific signature
+        const MsgSendGetBytesFn = *const fn (?*anyopaque, mtl.SEL, [*]u8, usize, MTLRegion, usize) callconv(.c) void;
+        const msgSendGetBytes: MsgSendGetBytesFn = @ptrCast(&mtl.objc_msgSend);
+
+        msgSendGetBytes(texture, sel_getBytes, pixels.ptr, bytes_per_row, region, 0);
+
+        // Save as PPM (Metal gives us BGRA, need to convert to RGB)
+        savePPM_BGRA(filename, pixels, width, height);
+    }
+
+    /// Save BGRA pixel data as PPM file (no vertical flip needed for Metal)
+    fn savePPM_BGRA(filename: [*:0]const u8, pixels: []const u8, width: usize, height: usize) void {
+        const path = std.mem.span(filename);
+
+        var file = std.fs.cwd().createFile(path, .{}) catch |err| {
+            std.log.err("Failed to create screenshot file: {}", .{err});
+            return;
+        };
+        defer file.close();
+
+        // Write PPM header (P6 = binary RGB)
+        var header_buf: [64]u8 = undefined;
+        const header = std.fmt.bufPrint(&header_buf, "P6\n{} {}\n255\n", .{ width, height }) catch {
+            std.log.err("Failed to format PPM header", .{});
+            return;
+        };
+        file.writeAll(header) catch |err| {
+            std.log.err("Failed to write PPM header: {}", .{err});
+            return;
+        };
+
+        // Write RGB data, converting from BGRA to RGB
+        var row_buf: [4096]u8 = undefined;
+        var y: usize = 0;
+        while (y < height) : (y += 1) {
+            const row_start = y * width * 4;
+            const row = pixels[row_start..][0 .. width * 4];
+
+            // Convert BGRA to RGB
+            var out_idx: usize = 0;
+            var x: usize = 0;
+            while (x < width * 4 and out_idx + 2 < row_buf.len) : (x += 4) {
+                row_buf[out_idx + 0] = row[x + 2]; // R (from B position in BGRA)
+                row_buf[out_idx + 1] = row[x + 1]; // G
+                row_buf[out_idx + 2] = row[x + 0]; // B (from R position in BGRA)
+                out_idx += 3;
+            }
+
+            file.writeAll(row_buf[0..out_idx]) catch |err| {
+                std.log.err("Failed to write PPM data: {}", .{err});
+                return;
+            };
+        }
+
+        std.log.info("Screenshot saved to: {s}", .{path});
     }
 
     /// GL-specific screenshot implementation using glReadPixels
-    fn takeScreenshotGL(filename: [*:0]const u8) void {
+    /// Only selected on Linux/Windows at comptime
+    fn takeScreenshotGLImpl(filename: [*:0]const u8) void {
         const width: usize = @intCast(getScreenWidth());
         const height: usize = @intCast(getScreenHeight());
 
@@ -420,16 +544,8 @@ pub const SokolBackend = struct {
         defer std.heap.page_allocator.free(pixels);
 
         // Use OpenGL to read pixels
-        // glReadPixels reads from the current framebuffer
         const gl = @cImport({
-            @cDefine("GL_SILENCE_DEPRECATION", "1");
-            if (@import("builtin").os.tag == .macos) {
-                @cInclude("OpenGL/gl3.h");
-            } else if (@import("builtin").os.tag == .linux) {
-                @cInclude("GL/gl.h");
-            } else if (@import("builtin").os.tag == .windows) {
-                @cInclude("GL/gl.h");
-            }
+            @cInclude("GL/gl.h");
         });
 
         gl.glReadPixels(
