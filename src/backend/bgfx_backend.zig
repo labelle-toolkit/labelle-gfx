@@ -196,12 +196,19 @@ pub const BgfxBackend = struct {
             const filepath = std.mem.span(filePath);
             std.log.info("bgfx screenshot callback: saving {s} ({}x{}, pitch={}, yflip={})", .{ filepath, width, height, pitch, yflip });
 
-            // Build filename with .bmp extension
+            // Build filename - only append .bmp if not already present
             var filename_buf: [512]u8 = undefined;
-            const filename = std.fmt.bufPrintZ(&filename_buf, "{s}.bmp", .{filepath}) catch {
-                std.log.err("Screenshot filename too long", .{});
-                return;
-            };
+            const has_bmp_ext = filepath.len >= 4 and std.mem.eql(u8, filepath[filepath.len - 4 ..], ".bmp");
+            const filename = if (has_bmp_ext)
+                std.fmt.bufPrintZ(&filename_buf, "{s}", .{filepath}) catch {
+                    std.log.err("Screenshot filename too long", .{});
+                    return;
+                }
+            else
+                std.fmt.bufPrintZ(&filename_buf, "{s}.bmp", .{filepath}) catch {
+                    std.log.err("Screenshot filename too long", .{});
+                    return;
+                };
 
             saveBMP(filename, data, width, height, pitch, yflip);
         }
@@ -250,7 +257,12 @@ pub const BgfxBackend = struct {
     var screenshot_callback: callbacks.CCallbackInterfaceT = .{ .vtable = &screenshot_vtbl };
 
     /// Save RGBA pixel data to BMP file
-    fn saveBMP(filename: [:0]const u8, data: [*c]u8, width: u32, height: u32, pitch: u32, yflip: bool) void {
+    fn saveBMP(filename: [:0]const u8, data: [*c]u8, width_u32: u32, height_u32: u32, pitch_u32: u32, yflip: bool) void {
+        // Convert to usize for safe indexing
+        const width: usize = @intCast(width_u32);
+        const height: usize = @intCast(height_u32);
+        const pitch: usize = @intCast(pitch_u32);
+
         var file = std.fs.cwd().createFile(filename, .{}) catch |err| {
             std.log.err("Failed to create screenshot file {s}: {}", .{ filename, err });
             return;
@@ -258,8 +270,8 @@ pub const BgfxBackend = struct {
         defer file.close();
 
         // BMP file header (14 bytes)
-        const row_size = ((width * 3 + 3) / 4) * 4; // Rows must be 4-byte aligned
-        const pixel_data_size = row_size * height;
+        const row_size: u32 = ((width_u32 * 3 + 3) / 4) * 4; // Rows must be 4-byte aligned
+        const pixel_data_size: u32 = row_size * height_u32;
         const file_size: u32 = 14 + 40 + pixel_data_size;
         const data_offset: u32 = 14 + 40;
 
@@ -343,17 +355,20 @@ pub const BgfxBackend = struct {
         };
         defer std.heap.page_allocator.free(row_buf);
 
-        const padding = row_size - (width * 3);
+        const padding: usize = @intCast(row_size - (width_u32 * 3));
         const padding_bytes = [_]u8{ 0, 0, 0 };
 
-        var y: u32 = 0;
+        var y: usize = 0;
         while (y < height) : (y += 1) {
-            // BMP is bottom-up, so we need to flip rows
-            const src_y = if (yflip) y else (height - 1 - y);
+            // BMP format is bottom-to-top (row 0 at bottom of image).
+            // bgfx's yflip=true means the source data is already top-to-bottom (standard),
+            // so we need to reverse the row order for BMP. When yflip=false, the source
+            // is bottom-to-top, matching BMP's native format, so no flip needed.
+            const src_y = if (yflip) (height - 1 - y) else y;
             const row_start = src_y * pitch;
 
             // Convert RGBA to BGR
-            var x: u32 = 0;
+            var x: usize = 0;
             while (x < width) : (x += 1) {
                 const src_idx = row_start + x * 4;
                 const dst_idx = x * 3;
