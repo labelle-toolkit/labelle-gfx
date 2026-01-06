@@ -384,10 +384,122 @@ pub const SokolBackend = struct {
     }
 
     /// Take screenshot
+    /// Note: Only supported on GL backends (GLCORE, GLES3). Other backends
+    /// (Metal, D3D11, WGPU) don't have framebuffer readback exposed through sokol.
     pub fn takeScreenshot(filename: [*:0]const u8) void {
-        // Sokol doesn't have built-in screenshot support
-        // Would need to read framebuffer and save manually
-        _ = filename;
+        const backend = sg.queryBackend();
+
+        // Check if we're on a GL backend where we can use glReadPixels
+        switch (backend) {
+            .GLCORE, .GLES3 => {
+                takeScreenshotGL(filename);
+            },
+            else => {
+                std.log.warn("takeScreenshot not supported on {s} backend. " ++
+                    "Screenshots are only available on OpenGL backends (GLCORE, GLES3).", .{@tagName(backend)});
+            },
+        }
+    }
+
+    /// GL-specific screenshot implementation using glReadPixels
+    fn takeScreenshotGL(filename: [*:0]const u8) void {
+        const width: usize = @intCast(getScreenWidth());
+        const height: usize = @intCast(getScreenHeight());
+
+        if (width == 0 or height == 0) {
+            std.log.err("Cannot take screenshot: invalid screen dimensions", .{});
+            return;
+        }
+
+        // Allocate buffer for pixel data (RGBA)
+        const buffer_size = width * height * 4;
+        const pixels = std.heap.page_allocator.alloc(u8, buffer_size) catch {
+            std.log.err("Failed to allocate memory for screenshot", .{});
+            return;
+        };
+        defer std.heap.page_allocator.free(pixels);
+
+        // Use OpenGL to read pixels
+        // glReadPixels reads from the current framebuffer
+        const gl = @cImport({
+            @cDefine("GL_SILENCE_DEPRECATION", "1");
+            if (@import("builtin").os.tag == .macos) {
+                @cInclude("OpenGL/gl3.h");
+            } else if (@import("builtin").os.tag == .linux) {
+                @cInclude("GL/gl.h");
+            } else if (@import("builtin").os.tag == .windows) {
+                @cInclude("GL/gl.h");
+            }
+        });
+
+        gl.glReadPixels(
+            0,
+            0,
+            @intCast(width),
+            @intCast(height),
+            gl.GL_RGBA,
+            gl.GL_UNSIGNED_BYTE,
+            pixels.ptr,
+        );
+
+        // Check for GL errors
+        const gl_error = gl.glGetError();
+        if (gl_error != gl.GL_NO_ERROR) {
+            std.log.err("glReadPixels failed with error: {}", .{gl_error});
+            return;
+        }
+
+        // Save as PPM file (simple format, no external dependencies)
+        // Note: glReadPixels returns bottom-to-top, so we flip vertically
+        savePPM(filename, pixels, width, height);
+    }
+
+    /// Save pixel data as PPM file (flips vertically since GL is bottom-to-top)
+    fn savePPM(filename: [*:0]const u8, pixels: []const u8, width: usize, height: usize) void {
+        const path = std.mem.span(filename);
+
+        var file = std.fs.cwd().createFile(path, .{}) catch |err| {
+            std.log.err("Failed to create screenshot file: {}", .{err});
+            return;
+        };
+        defer file.close();
+
+        // Write PPM header (P6 = binary RGB)
+        var header_buf: [64]u8 = undefined;
+        const header = std.fmt.bufPrint(&header_buf, "P6\n{} {}\n255\n", .{ width, height }) catch {
+            std.log.err("Failed to format PPM header", .{});
+            return;
+        };
+        file.writeAll(header) catch |err| {
+            std.log.err("Failed to write PPM header: {}", .{err});
+            return;
+        };
+
+        // Write RGB data, flipping vertically (GL reads bottom-to-top)
+        var row_buf: [4096]u8 = undefined;
+        var y: usize = height;
+        while (y > 0) {
+            y -= 1;
+            const row_start = y * width * 4;
+            const row = pixels[row_start..][0 .. width * 4];
+
+            // Convert RGBA to RGB
+            var out_idx: usize = 0;
+            var x: usize = 0;
+            while (x < width * 4 and out_idx + 2 < row_buf.len) : (x += 4) {
+                row_buf[out_idx + 0] = row[x + 0]; // R
+                row_buf[out_idx + 1] = row[x + 1]; // G
+                row_buf[out_idx + 2] = row[x + 2]; // B
+                out_idx += 3;
+            }
+
+            file.writeAll(row_buf[0..out_idx]) catch |err| {
+                std.log.err("Failed to write PPM data: {}", .{err});
+                return;
+            };
+        }
+
+        std.log.info("Screenshot saved to: {s}", .{path});
     }
 
     /// Begin drawing frame
