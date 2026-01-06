@@ -13,6 +13,17 @@ const sgl = sokol.gl;
 const sapp = sokol.app;
 
 const backend_mod = @import("backend.zig");
+const builtin = @import("builtin");
+
+// Platform-specific imports for screenshot functionality
+const mtl = if (builtin.os.tag == .macos) @cImport({
+    @cInclude("objc/runtime.h");
+    @cInclude("objc/message.h");
+}) else void;
+
+const gl = if (builtin.os.tag == .linux or builtin.os.tag == .windows) @cImport({
+    @cInclude("GL/gl.h");
+}) else void;
 
 /// Sokol backend implementation
 pub const SokolBackend = struct {
@@ -393,16 +404,12 @@ pub const SokolBackend = struct {
     }
 
     // Platform-specific implementation selection at comptime
-    const takeScreenshotImpl = blk: {
-        const builtin = @import("builtin");
-        if (builtin.os.tag == .macos) {
-            break :blk takeScreenshotMetal;
-        } else if (builtin.os.tag == .linux or builtin.os.tag == .windows) {
-            break :blk takeScreenshotGLImpl;
-        } else {
-            break :blk takeScreenshotUnsupported;
-        }
-    };
+    const takeScreenshotImpl = if (builtin.os.tag == .macos)
+        takeScreenshotMetal
+    else if (builtin.os.tag == .linux or builtin.os.tag == .windows)
+        takeScreenshotGLImpl
+    else
+        takeScreenshotUnsupported;
 
     fn takeScreenshotUnsupported(_: [*:0]const u8) void {
         std.log.warn("takeScreenshot not supported on this platform.", .{});
@@ -417,12 +424,6 @@ pub const SokolBackend = struct {
             std.log.err("Cannot take screenshot: invalid screen dimensions", .{});
             return;
         }
-
-        // Import Metal/Objective-C types
-        const mtl = @cImport({
-            @cInclude("objc/runtime.h");
-            @cInclude("objc/message.h");
-        });
 
         // Get the current drawable from sokol_app
         const drawable = sapp.metalGetCurrentDrawable() orelse {
@@ -499,7 +500,13 @@ pub const SokolBackend = struct {
         };
 
         // Write RGB data, converting from BGRA to RGB
-        var row_buf: [4096]u8 = undefined;
+        // Allocate row buffer on heap to support any width
+        const row_buf = std.heap.page_allocator.alloc(u8, width * 3) catch {
+            std.log.err("Failed to allocate row buffer for screenshot", .{});
+            return;
+        };
+        defer std.heap.page_allocator.free(row_buf);
+
         var y: usize = 0;
         while (y < height) : (y += 1) {
             const row_start = y * width * 4;
@@ -508,7 +515,7 @@ pub const SokolBackend = struct {
             // Convert BGRA to RGB
             var out_idx: usize = 0;
             var x: usize = 0;
-            while (x < width * 4 and out_idx + 2 < row_buf.len) : (x += 4) {
+            while (x < width * 4) : (x += 4) {
                 row_buf[out_idx + 0] = row[x + 2]; // R (from B position in BGRA)
                 row_buf[out_idx + 1] = row[x + 1]; // G
                 row_buf[out_idx + 2] = row[x + 0]; // B (from R position in BGRA)
@@ -542,11 +549,6 @@ pub const SokolBackend = struct {
             return;
         };
         defer std.heap.page_allocator.free(pixels);
-
-        // Use OpenGL to read pixels
-        const gl = @cImport({
-            @cInclude("GL/gl.h");
-        });
 
         gl.glReadPixels(
             0,
@@ -592,7 +594,13 @@ pub const SokolBackend = struct {
         };
 
         // Write RGB data, flipping vertically (GL reads bottom-to-top)
-        var row_buf: [4096]u8 = undefined;
+        // Allocate row buffer on heap to support any width
+        const row_buf = std.heap.page_allocator.alloc(u8, width * 3) catch {
+            std.log.err("Failed to allocate row buffer for screenshot", .{});
+            return;
+        };
+        defer std.heap.page_allocator.free(row_buf);
+
         var y: usize = height;
         while (y > 0) {
             y -= 1;
@@ -602,7 +610,7 @@ pub const SokolBackend = struct {
             // Convert RGBA to RGB
             var out_idx: usize = 0;
             var x: usize = 0;
-            while (x < width * 4 and out_idx + 2 < row_buf.len) : (x += 4) {
+            while (x < width * 4) : (x += 4) {
                 row_buf[out_idx + 0] = row[x + 0]; // R
                 row_buf[out_idx + 1] = row[x + 1]; // G
                 row_buf[out_idx + 2] = row[x + 2]; // B
