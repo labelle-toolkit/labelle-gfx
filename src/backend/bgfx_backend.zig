@@ -193,6 +193,12 @@ pub const BgfxBackend = struct {
             _ = _this;
             _ = _size;
 
+            // Null check for filename pointer (C callback may pass null)
+            if (@intFromPtr(filePath) == 0) {
+                std.log.err("Screenshot callback received null filename", .{});
+                return;
+            }
+
             const filepath = std.mem.span(filePath);
             std.log.info("bgfx screenshot callback: saving {s} ({}x{}, pitch={}, yflip={})", .{ filepath, width, height, pitch, yflip });
 
@@ -382,7 +388,10 @@ pub const BgfxBackend = struct {
                 return;
             };
             if (padding > 0) {
-                file.writeAll(padding_bytes[0..padding]) catch return;
+                file.writeAll(padding_bytes[0..padding]) catch |err| {
+                    std.log.err("Failed to write BMP padding: {}", .{err});
+                    return;
+                };
             }
         }
 
