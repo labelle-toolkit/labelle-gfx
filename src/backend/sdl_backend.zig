@@ -476,8 +476,45 @@ pub const SdlBackend = struct {
     }
 
     pub fn takeScreenshot(filename: [*:0]const u8) void {
-        _ = filename;
-        // Would need SDL_RenderReadPixels + image saving library
+        const ren = renderer orelse {
+            std.log.err("Cannot take screenshot: renderer not initialized", .{});
+            return;
+        };
+
+        // Create an RGB surface to hold the screenshot
+        const surface = sdl.createRgbSurfaceWithFormat(
+            @intCast(screen_width),
+            @intCast(screen_height),
+            .argb8888,
+        ) catch |err| {
+            std.log.err("Failed to create surface for screenshot: {}", .{err});
+            return;
+        };
+        defer surface.destroy();
+
+        // Read pixels from renderer into the surface
+        // Surface pitch is surface.ptr.pitch, pixels are surface.ptr.pixels
+        const pitch: u32 = @intCast(surface.ptr.pitch);
+        const pixels: [*]u8 = @ptrCast(surface.ptr.pixels orelse {
+            std.log.err("Surface has no pixel buffer", .{});
+            return;
+        });
+
+        ren.readPixels(null, null, pixels, pitch) catch |err| {
+            std.log.err("Failed to read pixels from renderer: {}", .{err});
+            return;
+        };
+
+        // Save as BMP using SDL's built-in function
+        // Access the C binding directly for SDL_SaveBMP
+        const c = sdl.c;
+        const result = c.SDL_SaveBMP(surface.ptr, filename);
+        if (result != 0) {
+            std.log.err("Failed to save screenshot: {s}", .{c.SDL_GetError()});
+            return;
+        }
+
+        std.log.info("Screenshot saved to: {s}", .{std.mem.span(filename)});
     }
 
     // =========================================================================
