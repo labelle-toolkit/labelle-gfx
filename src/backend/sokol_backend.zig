@@ -15,15 +15,17 @@ const sapp = sokol.app;
 const backend_mod = @import("backend.zig");
 const builtin = @import("builtin");
 
-// Platform-specific imports for screenshot functionality
+// Platform-specific imports for screenshot functionality (compile-time availability)
+// These are conditionally compiled based on OS, but actual usage is determined at runtime
+// by querying sokol's active backend via sg.queryBackend()
 const mtl = if (builtin.os.tag == .macos) @cImport({
     @cInclude("objc/runtime.h");
     @cInclude("objc/message.h");
-}) else void;
+}) else struct {};
 
 const gl = if (builtin.os.tag == .linux or builtin.os.tag == .windows) @cImport({
     @cInclude("GL/gl.h");
-}) else void;
+}) else struct {};
 
 /// Sokol backend implementation
 pub const SokolBackend = struct {
@@ -395,27 +397,42 @@ pub const SokolBackend = struct {
     }
 
     /// Take screenshot
-    /// Supported backends:
-    /// - macOS: Uses Metal texture readback (sokol default on macOS)
-    /// - Linux/Windows with GL: Uses glReadPixels
-    /// - D3D11, WGPU: Not yet supported
+    /// Uses runtime backend detection via sg.queryBackend() to select implementation:
+    /// - Metal: Uses Metal texture readback (macOS)
+    /// - OpenGL/GLES3: Uses glReadPixels (Linux/Windows with GL backend)
+    /// - D3D11, WGPU: Not yet supported (will log warning)
     pub fn takeScreenshot(filename: [*:0]const u8) void {
-        takeScreenshotImpl(filename);
-    }
-
-    // Platform-specific implementation selection at comptime
-    const takeScreenshotImpl = if (builtin.os.tag == .macos)
-        takeScreenshotMetal
-    else if (builtin.os.tag == .linux or builtin.os.tag == .windows)
-        takeScreenshotGLImpl
-    else
-        takeScreenshotUnsupported;
-
-    fn takeScreenshotUnsupported(_: [*:0]const u8) void {
-        std.log.warn("takeScreenshot not supported on this platform.", .{});
+        const backend = sg.queryBackend();
+        switch (backend) {
+            .METAL => {
+                if (comptime builtin.os.tag == .macos) {
+                    takeScreenshotMetal(filename);
+                } else {
+                    std.log.warn("Metal backend detected but not on macOS - screenshot not supported", .{});
+                }
+            },
+            .GLCORE, .GLES3 => {
+                if (comptime (builtin.os.tag == .linux or builtin.os.tag == .windows)) {
+                    takeScreenshotGL(filename);
+                } else {
+                    std.log.warn("GL backend detected but GL headers not available on this platform", .{});
+                }
+            },
+            .D3D11 => {
+                std.log.warn("takeScreenshot not yet implemented for D3D11 backend", .{});
+            },
+            else => {
+                std.log.warn("takeScreenshot not supported for backend: {}", .{backend});
+            },
+        }
     }
 
     /// Metal-specific screenshot implementation
+    /// Note: This reads directly from the drawable texture which works on macOS with
+    /// managed storage mode. On some configurations where the drawable uses private
+    /// storage mode, this may fail or return incorrect data. A more robust approach
+    /// would use a blit encoder to copy to a shared buffer, but that requires more
+    /// complex Metal command buffer management.
     fn takeScreenshotMetal(filename: [*:0]const u8) void {
         const width: usize = @intCast(getScreenWidth());
         const height: usize = @intCast(getScreenHeight());
@@ -466,6 +483,8 @@ pub const SokolBackend = struct {
         };
 
         // getBytes:bytesPerRow:fromRegion:mipmapLevel:
+        // Note: This call may block until the GPU is done rendering to this texture.
+        // If the texture has private storage mode, this will fail silently.
         const sel_getBytes = mtl.sel_registerName("getBytes:bytesPerRow:fromRegion:mipmapLevel:");
 
         // Define the function type for objc_msgSend with our specific signature
@@ -532,8 +551,7 @@ pub const SokolBackend = struct {
     }
 
     /// GL-specific screenshot implementation using glReadPixels
-    /// Only selected on Linux/Windows at comptime
-    fn takeScreenshotGLImpl(filename: [*:0]const u8) void {
+    fn takeScreenshotGL(filename: [*:0]const u8) void {
         const width: usize = @intCast(getScreenWidth());
         const height: usize = @intCast(getScreenHeight());
 
@@ -549,6 +567,9 @@ pub const SokolBackend = struct {
             return;
         };
         defer std.heap.page_allocator.free(pixels);
+
+        // Ensure all rendering commands have completed before reading pixels
+        gl.glFinish();
 
         gl.glReadPixels(
             0,
