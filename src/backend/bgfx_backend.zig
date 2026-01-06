@@ -132,10 +132,10 @@ pub const BgfxBackend = struct {
 
     /// Custom callback vtable with screenshot support
     const ScreenshotCallbackVtbl = struct {
-        pub fn fatal(_this: *callbacks.CCallbackInterfaceT, _filePath: [*:0]const u8, _line: u16, _code: bgfx.Fatal, c_str: [*:0]const u8) callconv(.c) void {
+        pub fn fatal(_this: *callbacks.CCallbackInterfaceT, filePath: [*:0]const u8, line: u16, code: bgfx.Fatal, c_str: [*:0]const u8) callconv(.c) void {
             _ = _this;
             const cstr = std.mem.span(c_str);
-            std.log.err("BGFX FATAL in {s}:{d}: {s} => {s}", .{ _filePath, _line, @tagName(_code), cstr });
+            std.log.err("BGFX FATAL in {s}:{d}: {s} => {s}", .{ filePath, line, @tagName(code), cstr });
         }
 
         pub fn trace_vargs(_this: *callbacks.CCallbackInterfaceT, _filePath: [*:0]const u8, _line: u16, _format: [*:0]const u8, va_list: callbacks.VaList) callconv(.c) void {
@@ -189,12 +189,12 @@ pub const BgfxBackend = struct {
         }
 
         /// Screenshot callback - saves RGBA data to BMP file
-        pub fn screen_shot(_this: *callbacks.CCallbackInterfaceT, _filePath: [*:0]const u8, _width: u32, _height: u32, _pitch: u32, _data: [*c]u8, _size: u32, _yflip: bool) callconv(.c) void {
+        pub fn screen_shot(_this: *callbacks.CCallbackInterfaceT, filePath: [*:0]const u8, width: u32, height: u32, pitch: u32, data: [*c]u8, _size: u32, yflip: bool) callconv(.c) void {
             _ = _this;
             _ = _size;
 
-            const filepath = std.mem.span(_filePath);
-            std.log.info("bgfx screenshot callback: saving {s} ({}x{}, pitch={}, yflip={})", .{ filepath, _width, _height, _pitch, _yflip });
+            const filepath = std.mem.span(filePath);
+            std.log.info("bgfx screenshot callback: saving {s} ({}x{}, pitch={}, yflip={})", .{ filepath, width, height, pitch, yflip });
 
             // Build filename with .bmp extension
             var filename_buf: [512]u8 = undefined;
@@ -203,7 +203,7 @@ pub const BgfxBackend = struct {
                 return;
             };
 
-            saveBMP(filename, _data, _width, _height, _pitch, _yflip);
+            saveBMP(filename, data, width, height, pitch, yflip);
         }
 
         pub fn capture_begin(_this: *callbacks.CCallbackInterfaceT, _width: u32, _height: u32, _pitch: u32, _format: bgfx.TextureFormat, _yflip: bool) callconv(.c) void {
@@ -336,7 +336,13 @@ pub const BgfxBackend = struct {
         };
 
         // Pixel data (BMP stores bottom-to-top, BGR format)
-        var row_buf: [4096 * 3]u8 = undefined; // Support up to 4K width
+        // Allocate row buffer on heap to support any width
+        const row_buf = std.heap.page_allocator.alloc(u8, width * 3) catch {
+            std.log.err("Failed to allocate row buffer for screenshot", .{});
+            return;
+        };
+        defer std.heap.page_allocator.free(row_buf);
+
         const padding = row_size - (width * 3);
         const padding_bytes = [_]u8{ 0, 0, 0 };
 
