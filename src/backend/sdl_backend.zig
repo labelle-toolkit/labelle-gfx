@@ -517,14 +517,25 @@ pub const SdlBackend = struct {
             return;
         };
 
-        // Save as BMP using SDL's built-in function
-        const result = c.SDL_SaveBMP(surface.ptr, filename);
-        if (result != 0) {
-            std.log.err("Failed to save screenshot: {s}", .{c.SDL_GetError()});
-            return;
+        // Save based on file extension - PNG if .png, otherwise BMP
+        const filename_slice = std.mem.span(filename);
+        if (std.mem.endsWith(u8, filename_slice, ".png")) {
+            // Save as PNG using SDL_image (if available)
+            const result = sdl_image.c.IMG_SavePNG(surface.ptr, filename);
+            if (result != 0) {
+                std.log.err("Failed to save PNG screenshot: {s}", .{c.SDL_GetError()});
+                return;
+            }
+        } else {
+            // Save as BMP using SDL's built-in function
+            const result = c.SDL_SaveBMP(surface.ptr, filename);
+            if (result != 0) {
+                std.log.err("Failed to save BMP screenshot: {s}", .{c.SDL_GetError()});
+                return;
+            }
         }
 
-        std.log.info("Screenshot saved to: {s}", .{std.mem.span(filename)});
+        std.log.info("Screenshot saved to: {s}", .{filename_slice});
     }
 
     // =========================================================================
