@@ -15,10 +15,10 @@
 //! - Scissor/viewport clipping
 //! - Screen/world coordinate conversion
 //! - Sprite/texture rendering with batching
+//! - Screenshot capture (via bgfx callback system, saves as BMP)
 //!
 //! Not yet implemented:
 //! - Text rendering (requires font atlas system)
-//! - Screenshot capture (takeScreenshot is a stub)
 //! - FPS limiting (setTargetFPS is a stub - use windowing library)
 //! - Config flags (setConfigFlags is a stub)
 //! - Actual fullscreen toggling (fullscreen functions track state only)
@@ -38,6 +38,7 @@ const std = @import("std");
 const zbgfx = @import("zbgfx");
 const bgfx = zbgfx.bgfx;
 const debugdraw = zbgfx.debugdraw;
+const callbacks = zbgfx.callbacks;
 
 const backend_mod = @import("backend.zig");
 
@@ -112,123 +113,6 @@ pub const BgfxBackend = struct {
     // Clear color for background
     threadlocal var clear_color: u32 = 0x303030ff; // Dark gray
 
-    // ============================================
-    // Screenshot Callback Implementation
-    // ============================================
-
-    // C callback interface types (matching bgfx C99 API)
-    const CallbackVtbl = extern struct {
-        fatal: ?*const fn (?*CallbackInterface, [*c]const u8, u16, bgfx.Fatal, [*c]const u8) callconv(.c) void,
-        trace_vargs: ?*const fn (?*CallbackInterface, [*c]const u8, u16, [*c]const u8, @import("std").builtin.VaList) callconv(.c) void,
-        profiler_begin: ?*const fn (?*CallbackInterface, [*c]const u8, u32, [*c]const u8, u16) callconv(.c) void,
-        profiler_begin_literal: ?*const fn (?*CallbackInterface, [*c]const u8, u32, [*c]const u8, u16) callconv(.c) void,
-        profiler_end: ?*const fn (?*CallbackInterface) callconv(.c) void,
-        cache_read_size: ?*const fn (?*CallbackInterface, u64) callconv(.c) u32,
-        cache_read: ?*const fn (?*CallbackInterface, u64, ?*anyopaque, u32) callconv(.c) bool,
-        cache_write: ?*const fn (?*CallbackInterface, u64, ?*const anyopaque, u32) callconv(.c) void,
-        screen_shot: ?*const fn (?*CallbackInterface, [*c]const u8, u32, u32, u32, ?*const anyopaque, u32, bool) callconv(.c) void,
-        capture_begin: ?*const fn (?*CallbackInterface, u32, u32, u32, bgfx.TextureFormat, bool) callconv(.c) void,
-        capture_end: ?*const fn (?*CallbackInterface) callconv(.c) void,
-        capture_frame: ?*const fn (?*CallbackInterface, ?*const anyopaque, u32) callconv(.c) void,
-    };
-
-    const CallbackInterface = extern struct {
-        vtbl: *const CallbackVtbl,
-    };
-
-    // Callback implementations
-    fn cbFatal(_: ?*CallbackInterface, _: [*c]const u8, _: u16, _: bgfx.Fatal, _: [*c]const u8) callconv(.c) void {}
-    fn cbTraceVargs(_: ?*CallbackInterface, _: [*c]const u8, _: u16, _: [*c]const u8, _: @import("std").builtin.VaList) callconv(.c) void {}
-    fn cbProfilerBegin(_: ?*CallbackInterface, _: [*c]const u8, _: u32, _: [*c]const u8, _: u16) callconv(.c) void {}
-    fn cbProfilerBeginLiteral(_: ?*CallbackInterface, _: [*c]const u8, _: u32, _: [*c]const u8, _: u16) callconv(.c) void {}
-    fn cbProfilerEnd(_: ?*CallbackInterface) callconv(.c) void {}
-    fn cbCacheReadSize(_: ?*CallbackInterface, _: u64) callconv(.c) u32 { return 0; }
-    fn cbCacheRead(_: ?*CallbackInterface, _: u64, _: ?*anyopaque, _: u32) callconv(.c) bool { return false; }
-    fn cbCacheWrite(_: ?*CallbackInterface, _: u64, _: ?*const anyopaque, _: u32) callconv(.c) void {}
-    fn cbCaptureBegin(_: ?*CallbackInterface, _: u32, _: u32, _: u32, _: bgfx.TextureFormat, _: bool) callconv(.c) void {}
-    fn cbCaptureEnd(_: ?*CallbackInterface) callconv(.c) void {}
-    fn cbCaptureFrame(_: ?*CallbackInterface, _: ?*const anyopaque, _: u32) callconv(.c) void {}
-
-    /// Screenshot callback - saves BGRA pixel data to a BMP file
-    fn cbScreenShot(_: ?*CallbackInterface, filePath: [*c]const u8, width: u32, height: u32, pitch: u32, data: ?*const anyopaque, _: u32, yflip: bool) callconv(.c) void {
-        const path = if (filePath) |p| std.mem.span(p) else "screenshot.bmp";
-        const pixels: [*]const u8 = @ptrCast(data orelse return);
-
-        // Save as BMP file
-        saveBMP(path, pixels, width, height, pitch, yflip) catch |err| {
-            std.log.err("Failed to save screenshot: {}", .{err});
-        };
-    }
-
-    /// Save BGRA pixel data to BMP file
-    fn saveBMP(path: []const u8, pixels: [*]const u8, width: u32, height: u32, pitch: u32, yflip: bool) !void {
-        var file = try std.fs.cwd().createFile(path, .{});
-        defer file.close();
-
-        const row_size = width * 4; // BGRA
-        const padded_row_size = (row_size + 3) & ~@as(u32, 3); // Align to 4 bytes
-        const image_size = padded_row_size * height;
-        const file_size: u32 = 54 + image_size;
-
-        // BMP Header (14 bytes)
-        try file.writeAll("BM");
-        try file.writeAll(&std.mem.toBytes(file_size)); // File size
-        try file.writeAll(&[_]u8{ 0, 0, 0, 0 }); // Reserved
-        try file.writeAll(&std.mem.toBytes(@as(u32, 54))); // Pixel data offset
-
-        // DIB Header (40 bytes - BITMAPINFOHEADER)
-        try file.writeAll(&std.mem.toBytes(@as(u32, 40))); // Header size
-        try file.writeAll(&std.mem.toBytes(@as(i32, @intCast(width)))); // Width
-        try file.writeAll(&std.mem.toBytes(@as(i32, @intCast(height)))); // Height (positive = bottom-up)
-        try file.writeAll(&std.mem.toBytes(@as(u16, 1))); // Planes
-        try file.writeAll(&std.mem.toBytes(@as(u16, 32))); // Bits per pixel (BGRA)
-        try file.writeAll(&std.mem.toBytes(@as(u32, 0))); // Compression (none)
-        try file.writeAll(&std.mem.toBytes(image_size)); // Image size
-        try file.writeAll(&std.mem.toBytes(@as(i32, 2835))); // X pixels per meter
-        try file.writeAll(&std.mem.toBytes(@as(i32, 2835))); // Y pixels per meter
-        try file.writeAll(&std.mem.toBytes(@as(u32, 0))); // Colors in color table
-        try file.writeAll(&std.mem.toBytes(@as(u32, 0))); // Important colors
-
-        // Pixel data (BMP is bottom-up by default)
-        var row_buf: [8192]u8 = undefined;
-        var y: u32 = 0;
-        while (y < height) : (y += 1) {
-            // Select row based on yflip and BMP's bottom-up format
-            const src_y = if (yflip) y else (height - 1 - y);
-            const row_start = src_y * pitch;
-            const src_row = pixels[row_start..][0..row_size];
-
-            // Copy row (BGRA is already correct for BMP)
-            @memcpy(row_buf[0..row_size], src_row);
-
-            // Write row with padding
-            try file.writeAll(row_buf[0..padded_row_size]);
-        }
-
-        std.log.info("Screenshot saved to: {s}", .{path});
-    }
-
-    // Static callback vtable
-    const callback_vtbl = CallbackVtbl{
-        .fatal = cbFatal,
-        .trace_vargs = cbTraceVargs,
-        .profiler_begin = cbProfilerBegin,
-        .profiler_begin_literal = cbProfilerBeginLiteral,
-        .profiler_end = cbProfilerEnd,
-        .cache_read_size = cbCacheReadSize,
-        .cache_read = cbCacheRead,
-        .cache_write = cbCacheWrite,
-        .screen_shot = cbScreenShot,
-        .capture_begin = cbCaptureBegin,
-        .capture_end = cbCaptureEnd,
-        .capture_frame = cbCaptureFrame,
-    };
-
-    // Static callback interface
-    var callback_interface = CallbackInterface{
-        .vtbl = &callback_vtbl,
-    };
-
     // Frame timing
     threadlocal var last_frame_time: i64 = 0;
     threadlocal var frame_delta: f32 = 1.0 / 60.0;
@@ -241,6 +125,248 @@ pub const BgfxBackend = struct {
     threadlocal var sprite_program: bgfx.ProgramHandle = .{ .idx = std.math.maxInt(u16) };
     threadlocal var texture_uniform: bgfx.UniformHandle = .{ .idx = std.math.maxInt(u16) };
     threadlocal var shaders_initialized: bool = false;
+
+    // ============================================
+    // Screenshot Callback Implementation
+    // ============================================
+
+    /// Custom callback vtable with screenshot support
+    const ScreenshotCallbackVtbl = struct {
+        pub fn fatal(_this: *callbacks.CCallbackInterfaceT, _filePath: [*:0]const u8, _line: u16, _code: bgfx.Fatal, c_str: [*:0]const u8) callconv(.c) void {
+            _ = _this;
+            const cstr = std.mem.span(c_str);
+            std.log.err("BGFX FATAL in {s}:{d}: {s} => {s}", .{ _filePath, _line, @tagName(_code), cstr });
+        }
+
+        pub fn trace_vargs(_this: *callbacks.CCallbackInterfaceT, _filePath: [*:0]const u8, _line: u16, _format: [*:0]const u8, va_list: callbacks.VaList) callconv(.c) void {
+            _ = _this;
+            _ = _filePath;
+            _ = _line;
+            _ = _format;
+            _ = va_list;
+            // Suppress trace output for cleaner logs
+        }
+
+        pub fn profiler_begin(_this: *callbacks.CCallbackInterfaceT, _name: [*:0]const u8, _abgr: u32, _filePath: [*:0]const u8, _line: u16) callconv(.c) void {
+            _ = _this;
+            _ = _name;
+            _ = _abgr;
+            _ = _filePath;
+            _ = _line;
+        }
+
+        pub fn profiler_begin_literal(_this: *callbacks.CCallbackInterfaceT, _name: [*:0]const u8, _abgr: u32, _filePath: [*:0]const u8, _line: u16) callconv(.c) void {
+            _ = _this;
+            _ = _name;
+            _ = _abgr;
+            _ = _filePath;
+            _ = _line;
+        }
+
+        pub fn profiler_end(_this: *callbacks.CCallbackInterfaceT) callconv(.c) void {
+            _ = _this;
+        }
+
+        pub fn cache_read_size(_this: *callbacks.CCallbackInterfaceT, _id: u64) callconv(.c) u32 {
+            _ = _this;
+            _ = _id;
+            return 0;
+        }
+
+        pub fn cache_read(_this: *callbacks.CCallbackInterfaceT, _id: u64, _data: [*c]u8, _size: u32) callconv(.c) bool {
+            _ = _this;
+            _ = _id;
+            _ = _data;
+            _ = _size;
+            return false;
+        }
+
+        pub fn cache_write(_this: *callbacks.CCallbackInterfaceT, _id: u64, _data: [*c]u8, _size: u32) callconv(.c) void {
+            _ = _this;
+            _ = _id;
+            _ = _data;
+            _ = _size;
+        }
+
+        /// Screenshot callback - saves RGBA data to BMP file
+        pub fn screen_shot(_this: *callbacks.CCallbackInterfaceT, _filePath: [*:0]const u8, _width: u32, _height: u32, _pitch: u32, _data: [*c]u8, _size: u32, _yflip: bool) callconv(.c) void {
+            _ = _this;
+            _ = _size;
+
+            const filepath = std.mem.span(_filePath);
+            std.log.info("bgfx screenshot callback: saving {s} ({}x{}, pitch={}, yflip={})", .{ filepath, _width, _height, _pitch, _yflip });
+
+            // Build filename with .bmp extension
+            var filename_buf: [512]u8 = undefined;
+            const filename = std.fmt.bufPrintZ(&filename_buf, "{s}.bmp", .{filepath}) catch {
+                std.log.err("Screenshot filename too long", .{});
+                return;
+            };
+
+            saveBMP(filename, _data, _width, _height, _pitch, _yflip);
+        }
+
+        pub fn capture_begin(_this: *callbacks.CCallbackInterfaceT, _width: u32, _height: u32, _pitch: u32, _format: bgfx.TextureFormat, _yflip: bool) callconv(.c) void {
+            _ = _this;
+            _ = _width;
+            _ = _height;
+            _ = _pitch;
+            _ = _format;
+            _ = _yflip;
+        }
+
+        pub fn capture_end(_this: *callbacks.CCallbackInterfaceT) callconv(.c) void {
+            _ = _this;
+        }
+
+        pub fn capture_frame(_this: *callbacks.CCallbackInterfaceT, _data: [*c]u8, _size: u32) callconv(.c) void {
+            _ = _this;
+            _ = _data;
+            _ = _size;
+        }
+
+        pub fn toVtbl() callbacks.CCallbackVtblT {
+            return callbacks.CCallbackVtblT{
+                .fatal = @This().fatal,
+                .trace_vargs = @This().trace_vargs,
+                .profiler_begin = @This().profiler_begin,
+                .profiler_begin_literal = @This().profiler_begin_literal,
+                .profiler_end = @This().profiler_end,
+                .cache_read_size = @This().cache_read_size,
+                .cache_read = @This().cache_read,
+                .cache_write = @This().cache_write,
+                .screen_shot = @This().screen_shot,
+                .capture_begin = @This().capture_begin,
+                .capture_end = @This().capture_end,
+                .capture_frame = @This().capture_frame,
+            };
+        }
+    };
+
+    // Static vtable instance
+    const screenshot_vtbl = ScreenshotCallbackVtbl.toVtbl();
+
+    // Callback interface instance
+    var screenshot_callback: callbacks.CCallbackInterfaceT = .{ .vtable = &screenshot_vtbl };
+
+    /// Save RGBA pixel data to BMP file
+    fn saveBMP(filename: [:0]const u8, data: [*c]u8, width: u32, height: u32, pitch: u32, yflip: bool) void {
+        var file = std.fs.cwd().createFile(filename, .{}) catch |err| {
+            std.log.err("Failed to create screenshot file {s}: {}", .{ filename, err });
+            return;
+        };
+        defer file.close();
+
+        // BMP file header (14 bytes)
+        const row_size = ((width * 3 + 3) / 4) * 4; // Rows must be 4-byte aligned
+        const pixel_data_size = row_size * height;
+        const file_size: u32 = 14 + 40 + pixel_data_size;
+        const data_offset: u32 = 14 + 40;
+
+        // Build header in a buffer (54 bytes total)
+        var header: [54]u8 = undefined;
+        var idx: usize = 0;
+
+        // BMP signature
+        header[idx] = 'B';
+        idx += 1;
+        header[idx] = 'M';
+        idx += 1;
+
+        // File size (4 bytes, little-endian)
+        std.mem.writeInt(u32, header[idx..][0..4], file_size, .little);
+        idx += 4;
+
+        // Reserved (4 bytes)
+        std.mem.writeInt(u32, header[idx..][0..4], 0, .little);
+        idx += 4;
+
+        // Data offset (4 bytes)
+        std.mem.writeInt(u32, header[idx..][0..4], data_offset, .little);
+        idx += 4;
+
+        // DIB header size (4 bytes)
+        std.mem.writeInt(u32, header[idx..][0..4], 40, .little);
+        idx += 4;
+
+        // Width (4 bytes)
+        std.mem.writeInt(i32, header[idx..][0..4], @intCast(width), .little);
+        idx += 4;
+
+        // Height (4 bytes, positive = bottom-up)
+        std.mem.writeInt(i32, header[idx..][0..4], @intCast(height), .little);
+        idx += 4;
+
+        // Planes (2 bytes)
+        std.mem.writeInt(u16, header[idx..][0..2], 1, .little);
+        idx += 2;
+
+        // Bits per pixel (2 bytes)
+        std.mem.writeInt(u16, header[idx..][0..2], 24, .little);
+        idx += 2;
+
+        // Compression (4 bytes, 0 = none)
+        std.mem.writeInt(u32, header[idx..][0..4], 0, .little);
+        idx += 4;
+
+        // Image size (4 bytes)
+        std.mem.writeInt(u32, header[idx..][0..4], pixel_data_size, .little);
+        idx += 4;
+
+        // H resolution (4 bytes, 72 DPI = 2835 pixels/meter)
+        std.mem.writeInt(i32, header[idx..][0..4], 2835, .little);
+        idx += 4;
+
+        // V resolution (4 bytes)
+        std.mem.writeInt(i32, header[idx..][0..4], 2835, .little);
+        idx += 4;
+
+        // Colors in palette (4 bytes)
+        std.mem.writeInt(u32, header[idx..][0..4], 0, .little);
+        idx += 4;
+
+        // Important colors (4 bytes)
+        std.mem.writeInt(u32, header[idx..][0..4], 0, .little);
+        idx += 4;
+
+        // Write header
+        file.writeAll(&header) catch |err| {
+            std.log.err("Failed to write BMP header: {}", .{err});
+            return;
+        };
+
+        // Pixel data (BMP stores bottom-to-top, BGR format)
+        var row_buf: [4096 * 3]u8 = undefined; // Support up to 4K width
+        const padding = row_size - (width * 3);
+        const padding_bytes = [_]u8{ 0, 0, 0 };
+
+        var y: u32 = 0;
+        while (y < height) : (y += 1) {
+            // BMP is bottom-up, so we need to flip rows
+            const src_y = if (yflip) y else (height - 1 - y);
+            const row_start = src_y * pitch;
+
+            // Convert RGBA to BGR
+            var x: u32 = 0;
+            while (x < width) : (x += 1) {
+                const src_idx = row_start + x * 4;
+                const dst_idx = x * 3;
+                row_buf[dst_idx + 0] = data[src_idx + 2]; // B
+                row_buf[dst_idx + 1] = data[src_idx + 1]; // G
+                row_buf[dst_idx + 2] = data[src_idx + 0]; // R
+            }
+
+            file.writeAll(row_buf[0 .. width * 3]) catch |err| {
+                std.log.err("Failed to write BMP pixel data: {}", .{err});
+                return;
+            };
+            if (padding > 0) {
+                file.writeAll(padding_bytes[0..padding]) catch return;
+            }
+        }
+
+        std.log.info("Screenshot saved: {s}", .{filename});
+    }
 
     // ============================================
     // Shader Initialization
@@ -645,8 +771,8 @@ pub const BgfxBackend = struct {
         init.resolution.height = @intCast(screen_height);
         init.resolution.reset = bgfx.ResetFlags_Vsync;
 
-        // Set screenshot callback interface
-        init.callback = @ptrCast(&callback_interface);
+        // Register screenshot callback
+        init.callback = @ptrCast(&screenshot_callback);
 
         if (!bgfx.init(&init)) {
             return backend_mod.BackendError.InitializationFailed;
@@ -729,13 +855,13 @@ pub const BgfxBackend = struct {
         _ = flags;
     }
 
-    /// Request a screenshot of the current frame.
-    /// The screenshot is captured asynchronously after bgfx::frame() completes
-    /// and saved to the specified file in BMP format.
+    /// Request a screenshot capture via bgfx callback system.
+    /// The screenshot will be saved as a BMP file by the callback.
+    /// Note: Screenshot is captured asynchronously and saved on the next frame.
     pub fn takeScreenshot(filename: [*:0]const u8) void {
-        // Use invalid handle to capture the default backbuffer
-        const invalid_fb = bgfx.FrameBufferHandle{ .idx = std.math.maxInt(u16) };
-        bgfx.requestScreenShot(invalid_fb, filename);
+        // BGFX_INVALID_HANDLE requests screenshot of main window backbuffer
+        const invalid_handle: bgfx.FrameBufferHandle = .{ .idx = std.math.maxInt(u16) };
+        bgfx.requestScreenShot(invalid_handle, filename);
         std.log.info("Screenshot requested: {s}", .{std.mem.span(filename)});
     }
 
