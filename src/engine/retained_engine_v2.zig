@@ -237,6 +237,31 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
             };
         }
 
+        // ==================== Screenshot ====================
+
+        /// Take a screenshot and save it to the specified filename.
+        /// Supports PNG (if backend supports it) or BMP format.
+        /// Note: Path traversal is prevented by extracting the basename.
+        /// Screenshots are saved to the current working directory.
+        pub fn takeScreenshot(self: *const Self, filename: [*:0]const u8) void {
+            _ = self;
+            // Sanitize filename to prevent path traversal attacks
+            // Extract just the basename (e.g., "../../../etc/passwd" -> "passwd")
+            const filename_slice = std.mem.span(filename);
+            const basename = std.fs.path.basename(filename_slice);
+
+            // Copy basename to null-terminated buffer for backend
+            var buf: [256]u8 = undefined;
+            if (basename.len >= buf.len) {
+                log.err("Screenshot filename too long: {d} chars", .{basename.len});
+                return;
+            }
+            @memcpy(buf[0..basename.len], basename);
+            buf[basename.len] = 0;
+
+            BackendType.takeScreenshot(buf[0..basename.len :0]);
+        }
+
         // ==================== Convenience Methods ====================
         // These delegate to subsystems for API compatibility with RetainedEngine
 
