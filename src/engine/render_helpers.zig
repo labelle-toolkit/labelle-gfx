@@ -96,8 +96,14 @@ pub fn RenderHelpers(comptime Backend: type) type {
                     }
                 },
                 .arrow => |arr| {
-                    const end_x = pos.x + arr.end.x;
-                    const end_y = pos.y + arr.end.y;
+                    // Apply rotation to the delta vector
+                    const cos_r = @cos(rotation);
+                    const sin_r = @sin(rotation);
+                    const rotated_delta_x = arr.delta.x * cos_r - arr.delta.y * sin_r;
+                    const rotated_delta_y = arr.delta.x * sin_r + arr.delta.y * cos_r;
+
+                    const end_x = pos.x + rotated_delta_x;
+                    const end_y = pos.y + rotated_delta_y;
 
                     // Draw shaft
                     if (arr.thickness > 1) {
@@ -106,8 +112,12 @@ pub fn RenderHelpers(comptime Backend: type) type {
                         Backend.drawLine(pos.x, pos.y, end_x, end_y, col);
                     }
 
+                    // Skip arrowhead for zero-length arrows (degenerate case)
+                    const magnitude_sq = rotated_delta_x * rotated_delta_x + rotated_delta_y * rotated_delta_y;
+                    if (magnitude_sq < 0.0001) return;
+
                     // Draw arrowhead (triangle at end)
-                    const angle = std.math.atan2(arr.end.y, arr.end.x);
+                    const angle = std.math.atan2(rotated_delta_y, rotated_delta_x);
                     const head_angle: f32 = std.math.pi / 6.0; // 30 degrees
                     const p1_x = end_x;
                     const p1_y = end_y;
@@ -123,8 +133,14 @@ pub fn RenderHelpers(comptime Backend: type) type {
                     }
                 },
                 .ray => |r| {
-                    const end_x = pos.x + r.direction.x * r.length;
-                    const end_y = pos.y + r.direction.y * r.length;
+                    // Apply rotation to the direction vector
+                    const cos_r = @cos(rotation);
+                    const sin_r = @sin(rotation);
+                    const rotated_dir_x = r.direction.x * cos_r - r.direction.y * sin_r;
+                    const rotated_dir_y = r.direction.x * sin_r + r.direction.y * cos_r;
+
+                    const end_x = pos.x + rotated_dir_x * r.length;
+                    const end_y = pos.y + rotated_dir_y * r.length;
                     if (r.thickness > 1) {
                         Backend.drawLineEx(pos.x, pos.y, end_x, end_y, r.thickness, col);
                     } else {
@@ -521,17 +537,58 @@ pub fn RenderHelpers(comptime Backend: type) type {
                     .w = p.radius * 2,
                     .h = p.radius * 2,
                 },
-                .arrow => |arr| .{
-                    .x = @min(pos.x, pos.x + arr.end.x) - arr.head_size,
-                    .y = @min(pos.y, pos.y + arr.end.y) - arr.head_size,
-                    .w = @abs(arr.end.x) + arr.head_size * 2,
-                    .h = @abs(arr.end.y) + arr.head_size * 2,
+                .arrow => |arr| blk: {
+                    // Use max of head_size and half-thickness for proper bounds
+                    const padding = @max(arr.head_size, arr.thickness / 2);
+                    break :blk .{
+                        .x = @min(pos.x, pos.x + arr.delta.x) - padding,
+                        .y = @min(pos.y, pos.y + arr.delta.y) - padding,
+                        .w = @abs(arr.delta.x) + padding * 2,
+                        .h = @abs(arr.delta.y) + padding * 2,
+                    };
                 },
-                .ray => |r| .{
-                    .x = @min(pos.x, pos.x + r.direction.x * r.length),
-                    .y = @min(pos.y, pos.y + r.direction.y * r.length),
-                    .w = @abs(r.direction.x * r.length) + r.thickness,
-                    .h = @abs(r.direction.y * r.length) + r.thickness,
+                .ray => |r| blk: {
+                    const start_x = pos.x;
+                    const start_y = pos.y;
+                    const end_x = pos.x + r.direction.x * r.length;
+                    const end_y = pos.y + r.direction.y * r.length;
+
+                    const dir_len_sq = r.direction.x * r.direction.x + r.direction.y * r.direction.y;
+
+                    // If direction is zero-length, use simple bounds
+                    if (dir_len_sq < 0.0001) {
+                        break :blk .{
+                            .x = @min(start_x, end_x),
+                            .y = @min(start_y, end_y),
+                            .w = @abs(end_x - start_x) + r.thickness,
+                            .h = @abs(end_y - start_y) + r.thickness,
+                        };
+                    }
+
+                    // Calculate perpendicular expansion for thickness
+                    const inv_len = 1.0 / @sqrt(dir_len_sq);
+                    const nx = r.direction.x * inv_len;
+                    const ny = r.direction.y * inv_len;
+
+                    // Perpendicular unit vector
+                    const px = -ny;
+                    const py = nx;
+
+                    const half_thickness = r.thickness / 2.0;
+                    const extra_x = @abs(px * half_thickness);
+                    const extra_y = @abs(py * half_thickness);
+
+                    const min_x = @min(start_x, end_x) - extra_x;
+                    const max_x = @max(start_x, end_x) + extra_x;
+                    const min_y = @min(start_y, end_y) - extra_y;
+                    const max_y = @max(start_y, end_y) + extra_y;
+
+                    break :blk .{
+                        .x = min_x,
+                        .y = min_y,
+                        .w = max_x - min_x,
+                        .h = max_y - min_y,
+                    };
                 },
             };
         }
