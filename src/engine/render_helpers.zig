@@ -127,7 +127,8 @@ pub fn RenderHelpers(comptime Backend: type) type {
                     const p3_y = end_y - arr.head_size * @sin(angle + head_angle);
 
                     if (arr.fill == .filled) {
-                        Backend.drawTriangle(p1_x, p1_y, p2_x, p2_y, p3_x, p3_y, col);
+                        // Raylib requires counter-clockwise winding order for filled triangles
+                        Backend.drawTriangle(p1_x, p1_y, p3_x, p3_y, p2_x, p2_y, col);
                     } else {
                         Backend.drawTriangleLines(p1_x, p1_y, p2_x, p2_y, p3_x, p3_y, col);
                     }
