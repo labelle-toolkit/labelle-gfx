@@ -1,10 +1,6 @@
 //! zgpu Texture Management
 //!
 //! Functions for loading, creating, and managing textures in zgpu/WebGPU.
-//!
-//! This module uses explicit dependency injection - all functions that need
-//! the graphics context or allocator receive them as parameters, making
-//! dependencies clear and improving testability.
 
 const std = @import("std");
 const zgpu = @import("zgpu");
@@ -16,17 +12,37 @@ const image_loader = @import("image_loader.zig");
 pub const Texture = types.Texture;
 pub const Color = types.Color;
 
+/// Shared allocator for texture loading operations.
+/// Using threadlocal to avoid contention in multi-threaded scenarios.
+/// This avoids creating/destroying a GeneralPurposeAllocator on every texture load.
+threadlocal var shared_gpa: ?std.heap.GeneralPurposeAllocator(.{}) = null;
+
+fn getSharedAllocator() std.mem.Allocator {
+    if (shared_gpa == null) {
+        shared_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    }
+    return shared_gpa.?.allocator();
+}
+
+/// Cleanup the shared allocator (call during backend shutdown)
+pub fn deinitAllocator() void {
+    if (shared_gpa) |*gpa| {
+        _ = gpa.deinit();
+        shared_gpa = null;
+    }
+}
+
 /// Load texture from file using stb_image
 ///
 /// Parameters:
 /// - gctx: Graphics context for GPU operations
-/// - allocator: Allocator for temporary image loading
 /// - path: Path to the image file (null-terminated)
 pub fn loadTexture(
     gctx: *zgpu.GraphicsContext,
-    allocator: std.mem.Allocator,
     path: [:0]const u8,
 ) !Texture {
+    const allocator = getSharedAllocator();
+
     var img = image_loader.loadImage(allocator, path) catch |err| {
         std.log.err("Failed to load image: {s} - {}", .{ path, err });
         return error.TextureLoadFailed;
@@ -95,24 +111,28 @@ pub fn loadTextureFromMemory(
 }
 
 /// Create a solid color texture (for debugging)
+/// Maximum supported size is 64x64 pixels
 ///
 /// Parameters:
 /// - gctx: Graphics context for GPU operations
-/// - allocator: Allocator for temporary pixel buffer
 /// - width: Texture width in pixels
 /// - height: Texture height in pixels
 /// - col: Fill color
 pub fn createSolidTexture(
     gctx: *zgpu.GraphicsContext,
-    allocator: std.mem.Allocator,
     width: u16,
     height: u16,
     col: Color,
 ) !Texture {
+    const max_size: usize = 64 * 64 * 4;
     const pixel_count = @as(usize, width) * @as(usize, height) * 4;
 
-    const pixels = allocator.alloc(u8, pixel_count) catch return error.OutOfMemory;
-    defer allocator.free(pixels);
+    // Validate size to prevent buffer overflow
+    if (pixel_count > max_size) {
+        return error.TextureLoadFailed;
+    }
+
+    var pixels: [max_size]u8 = undefined;
 
     // Fill with solid color (RGBA order)
     var i: usize = 0;
@@ -123,7 +143,7 @@ pub fn createSolidTexture(
         pixels[i + 3] = col.a;
     }
 
-    return loadTextureFromMemory(gctx, pixels, width, height);
+    return loadTextureFromMemory(gctx, pixels[0..pixel_count], width, height);
 }
 
 // ============================================================================

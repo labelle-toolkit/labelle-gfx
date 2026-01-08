@@ -124,10 +124,10 @@ pub const ZgpuBackend = struct {
     // Texture Management (delegated to texture module)
     // ============================================
 
-    /// Load texture from file with explicit allocator.
-    pub fn loadTexture(allocator: std.mem.Allocator, path: [:0]const u8) !Texture {
+    /// Load texture from file.
+    pub fn loadTexture(path: [:0]const u8) !Texture {
         const ctx = gctx orelse return error.NotInitialized;
-        return texture_mod.loadTexture(ctx, allocator, path);
+        return texture_mod.loadTexture(ctx, path);
     }
 
     /// Load texture from raw pixel data (RGBA8 format).
@@ -144,10 +144,10 @@ pub const ZgpuBackend = struct {
         return texture_mod.isTextureValid(tex);
     }
 
-    /// Create a solid color texture with explicit allocator.
-    pub fn createSolidTexture(allocator: std.mem.Allocator, width: u16, height: u16, col: Color) !Texture {
+    /// Create a solid color texture (max 64x64 pixels).
+    pub fn createSolidTexture(width: u16, height: u16, col: Color) !Texture {
         const ctx = gctx orelse return error.NotInitialized;
-        return texture_mod.createSolidTexture(ctx, allocator, width, height, col);
+        return texture_mod.createSolidTexture(ctx, width, height, col);
     }
 
     /// Get the graphics context (for direct texture module calls)
@@ -421,6 +421,9 @@ pub const ZgpuBackend = struct {
             rend.deinit();
             gpu_renderer = null;
         }
+
+        // Cleanup texture shared allocator
+        texture_mod.deinitAllocator();
 
         if (gctx) |ctx| {
             if (gctx_allocator) |alloc| {
