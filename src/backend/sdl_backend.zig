@@ -494,8 +494,8 @@ pub const SdlBackend = struct {
 
         // Create an RGB surface to hold the screenshot
         const surface = sdl.createRgbSurfaceWithFormat(
-            output_width,
-            output_height,
+            @intCast(output_width),
+            @intCast(output_height),
             .argb8888,
         ) catch |err| {
             std.log.err("Failed to create surface for screenshot: {} (SDL: {s})", .{ err, c.SDL_GetError() });
