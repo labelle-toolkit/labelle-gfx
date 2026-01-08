@@ -103,7 +103,8 @@ pub const SokolBackend = struct {
     threadlocal var current_camera: ?Camera2D = null;
     threadlocal var in_camera_mode: bool = false;
 
-    // State tracking for sgl initialization
+    // State tracking for sokol initialization
+    threadlocal var sg_initialized: bool = false;
     threadlocal var sgl_initialized: bool = false;
 
     /// Create a color from RGBA values
@@ -369,6 +370,10 @@ pub const SokolBackend = struct {
         if (sgl_initialized) {
             sgl.shutdown();
             sgl_initialized = false;
+        }
+        if (sg_initialized) {
+            sg.shutdown();
+            sg_initialized = false;
         }
     }
 
@@ -649,6 +654,17 @@ pub const SokolBackend = struct {
 
     /// Begin drawing frame
     pub fn beginDrawing() void {
+        // Lazy initialization of sokol_gfx if not already done
+        // sg.setup() MUST be called before any sg.* or sgl.* functions
+        // Use sg.isvalid() to detect if already initialized externally (e.g., by app's init callback)
+        if (!sg.isvalid()) {
+            sg.setup(.{
+                .environment = sokol.glue.environment(),
+                .logger = .{ .func = sokol.log.func },
+            });
+            sg_initialized = true; // Track that WE initialized it, so we call shutdown
+        }
+
         // Lazy initialization of sokol_gl if not already done
         // This ensures sgl.setup() is called before sgl.defaults()
         if (!sgl_initialized) {
