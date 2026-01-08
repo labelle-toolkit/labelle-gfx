@@ -499,6 +499,54 @@ Available shape types:
 - `line` - Start and end points + thickness
 - `triangle` - Three vertices
 - `polygon` - Regular polygon with center, sides, and radius
+- `arrow` - Line with arrowhead (delta vector + head_size)
+- `ray` - Directional line (direction vector + length)
+
+### Immediate-Mode Shape Drawing
+
+Draw shapes directly without creating entities. Useful for debug gizmos and overlays:
+
+```zig
+const gfx = @import("labelle");
+
+var engine = try gfx.RetainedEngine.init(allocator, .{
+    .window = .{ .width = 800, .height = 600, .title = "Gizmos" },
+});
+defer engine.deinit();
+
+while (engine.isRunning()) {
+    engine.beginFrame();
+    engine.render();
+
+    // Screen-space drawing (fixed position, ignores camera)
+    engine.drawShapeScreen(
+        .{ .arrow = .{ .delta = .{ .x = 50, .y = 0 }, .head_size = 10 } },
+        .{ .x = 100, .y = 100 },
+        .{ .r = 255, .g = 0, .b = 0, .a = 255 },
+    );
+
+    // World-space drawing (affected by camera transform)
+    engine.drawShapeWorld(
+        .{ .ray = .{ .direction = .{ .x = 1, .y = 0 }, .length = 100 } },
+        .{ .x = 400, .y = 300 },
+        .{ .r = 0, .g = 255, .b = 0, .a = 255 },
+    );
+
+    // With rotation
+    engine.drawShapeScreenRotated(
+        .{ .circle = .{ .radius = 20 } },
+        .{ .x = 200, .y = 200 },
+        .{ .r = 0, .g = 0, .b = 255, .a = 255 },
+        angle,
+    );
+
+    engine.endFrame();
+}
+```
+
+**Coordinate space APIs:**
+- `drawShapeScreen()` / `drawShapeScreenRotated()` - Screen space (HUD, overlays)
+- `drawShapeWorld()` / `drawShapeWorldRotated()` - World space (debug visualization)
 
 ### Z-Index Layers
 
