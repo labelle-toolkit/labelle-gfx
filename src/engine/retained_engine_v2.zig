@@ -237,6 +237,15 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
             };
         }
 
+        // ==================== Screenshot ====================
+
+        /// Take a screenshot and save it to the specified filename.
+        /// Supports PNG (if backend supports it) or BMP format.
+        pub fn takeScreenshot(self: *const Self, filename: [*:0]const u8) void {
+            _ = self;
+            BackendType.takeScreenshot(filename);
+        }
+
         // ==================== Convenience Methods ====================
         // These delegate to subsystems for API compatibility with RetainedEngine
 
