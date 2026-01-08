@@ -52,6 +52,28 @@ pub const Polygon = struct {
     thickness: f32 = 1,
 };
 
+/// Arrow shape parameters (line with arrowhead).
+/// The arrow is drawn from `pos` to `pos + delta`.
+pub const Arrow = struct {
+    /// Delta vector from start position to end point (not absolute position).
+    /// The arrow tip will be at `pos + delta`.
+    delta: Position,
+    head_size: f32 = 10,
+    thickness: f32 = 1,
+    fill: FillMode = .filled,
+};
+
+/// Ray shape parameters (directional line).
+/// The ray is drawn from `pos` in `direction` for `length` pixels.
+pub const Ray = struct {
+    /// Direction vector. Should be normalized (unit length) for predictable results.
+    /// The ray endpoint is calculated as `pos + direction * length`.
+    /// Non-normalized vectors will scale the effective length.
+    direction: Position,
+    length: f32 = 100,
+    thickness: f32 = 1,
+};
+
 /// Shape variant - union of all shape types
 pub const Shape = union(enum) {
     circle: Circle,
@@ -59,4 +81,6 @@ pub const Shape = union(enum) {
     line: Line,
     triangle: Triangle,
     polygon: Polygon,
+    arrow: Arrow,
+    ray: Ray,
 };

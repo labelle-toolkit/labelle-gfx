@@ -52,6 +52,7 @@ pub const config = @import("config.zig");
 pub const layer_mod = @import("layer.zig");
 pub const visual_types = @import("visual_types.zig");
 const z_buckets = @import("z_buckets.zig");
+const render_helpers = @import("render_helpers.zig");
 
 // Backend imports
 const backend_mod = @import("../backend/backend.zig");
@@ -411,6 +412,63 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
         // Expose texture_manager field for compatibility
         pub fn texture_manager(self: *Self) *Resources.TextureManagerType {
             return self.resources.getTextureManager();
+        }
+
+        // -------------------- Immediate Mode Drawing --------------------
+        //
+        // These methods draw shapes immediately without storing them.
+        // Use for debug gizmos, overlays, and visualizations that change every frame.
+        //
+        // IMPORTANT: Coordinate space depends on when you call these methods:
+        // - Call AFTER render() -> screen space (fixed position regardless of camera)
+        // - Call DURING render() -> depends on active camera mode
+        //
+        // For explicit control, use drawShapeScreen() or drawShapeWorld().
+
+        const Helpers = render_helpers.RenderHelpers(BackendType);
+
+        /// Draw a shape immediately in screen space (not retained).
+        /// Position is in screen pixels, unaffected by camera transform.
+        /// Use for HUD elements, debug overlays, and UI gizmos.
+        pub fn drawShapeScreen(self: *Self, shape: Shape, pos: Position, color: Color) void {
+            _ = self;
+            Helpers.renderShape(shape, pos, color, 0);
+        }
+
+        /// Draw a shape immediately in screen space with rotation.
+        pub fn drawShapeScreenRotated(self: *Self, shape: Shape, pos: Position, color: Color, rotation: f32) void {
+            _ = self;
+            Helpers.renderShape(shape, pos, color, rotation);
+        }
+
+        /// Draw a shape immediately in world space (not retained).
+        /// Position is in world coordinates, transformed by the active camera.
+        /// Use for in-game debug visualizations like collision bounds, paths, etc.
+        pub fn drawShapeWorld(self: *Self, shape: Shape, world_pos: Position, color: Color) void {
+            const camera = self.cameras.getCamera();
+            BackendType.beginMode2D(camera.getBackendCamera());
+            Helpers.renderShape(shape, world_pos, color, 0);
+            BackendType.endMode2D();
+        }
+
+        /// Draw a shape immediately in world space with rotation.
+        pub fn drawShapeWorldRotated(self: *Self, shape: Shape, world_pos: Position, color: Color, rotation: f32) void {
+            const camera = self.cameras.getCamera();
+            BackendType.beginMode2D(camera.getBackendCamera());
+            Helpers.renderShape(shape, world_pos, color, rotation);
+            BackendType.endMode2D();
+        }
+
+        /// Draw a shape immediately (legacy API, screen space).
+        /// DEPRECATED: Use drawShapeScreen() for explicit coordinate space.
+        pub fn drawShape(self: *Self, shape: Shape, pos: Position, color: Color) void {
+            self.drawShapeScreen(shape, pos, color);
+        }
+
+        /// Draw a shape immediately with rotation (legacy API, screen space).
+        /// DEPRECATED: Use drawShapeScreenRotated() for explicit coordinate space.
+        pub fn drawShapeRotated(self: *Self, shape: Shape, pos: Position, color: Color, rotation: f32) void {
+            self.drawShapeScreenRotated(shape, pos, color, rotation);
         }
     };
 }
