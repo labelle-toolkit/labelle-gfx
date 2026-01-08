@@ -52,6 +52,7 @@ pub const config = @import("config.zig");
 pub const layer_mod = @import("layer.zig");
 pub const visual_types = @import("visual_types.zig");
 const z_buckets = @import("z_buckets.zig");
+const render_helpers = @import("render_helpers.zig");
 
 // Backend imports
 const backend_mod = @import("../backend/backend.zig");
@@ -411,6 +412,23 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
         // Expose texture_manager field for compatibility
         pub fn texture_manager(self: *Self) *Resources.TextureManagerType {
             return self.resources.getTextureManager();
+        }
+
+        // -------------------- Immediate Mode Drawing --------------------
+
+        const Helpers = render_helpers.RenderHelpers(BackendType);
+
+        /// Draw a shape immediately (not retained).
+        /// Use for debug gizmos and overlays that change every frame.
+        pub fn drawShape(self: *Self, shape: Shape, pos: Position, color: Color) void {
+            _ = self;
+            Helpers.renderShape(shape, pos, color, 0);
+        }
+
+        /// Draw a shape immediately with rotation.
+        pub fn drawShapeRotated(self: *Self, shape: Shape, pos: Position, color: Color, rotation: f32) void {
+            _ = self;
+            Helpers.renderShape(shape, pos, color, rotation);
         }
     };
 }
