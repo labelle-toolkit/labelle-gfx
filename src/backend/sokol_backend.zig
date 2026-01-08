@@ -656,12 +656,13 @@ pub const SokolBackend = struct {
     pub fn beginDrawing() void {
         // Lazy initialization of sokol_gfx if not already done
         // sg.setup() MUST be called before any sg.* or sgl.* functions
-        if (!sg_initialized) {
+        // Use sg.isvalid() to detect if already initialized externally (e.g., by app's init callback)
+        if (!sg.isvalid()) {
             sg.setup(.{
                 .environment = sokol.glue.environment(),
                 .logger = .{ .func = sokol.log.func },
             });
-            sg_initialized = true;
+            sg_initialized = true; // Track that WE initialized it, so we call shutdown
         }
 
         // Lazy initialization of sokol_gl if not already done
