@@ -95,6 +95,42 @@ pub fn RenderHelpers(comptime Backend: type) type {
                         Backend.drawPolyLines(pos.x, pos.y, poly.sides, poly.radius, rotation, col);
                     }
                 },
+                .arrow => |arr| {
+                    const end_x = pos.x + arr.end.x;
+                    const end_y = pos.y + arr.end.y;
+
+                    // Draw shaft
+                    if (arr.thickness > 1) {
+                        Backend.drawLineEx(pos.x, pos.y, end_x, end_y, arr.thickness, col);
+                    } else {
+                        Backend.drawLine(pos.x, pos.y, end_x, end_y, col);
+                    }
+
+                    // Draw arrowhead (triangle at end)
+                    const angle = std.math.atan2(arr.end.y, arr.end.x);
+                    const head_angle: f32 = std.math.pi / 6.0; // 30 degrees
+                    const p1_x = end_x;
+                    const p1_y = end_y;
+                    const p2_x = end_x - arr.head_size * @cos(angle - head_angle);
+                    const p2_y = end_y - arr.head_size * @sin(angle - head_angle);
+                    const p3_x = end_x - arr.head_size * @cos(angle + head_angle);
+                    const p3_y = end_y - arr.head_size * @sin(angle + head_angle);
+
+                    if (arr.fill == .filled) {
+                        Backend.drawTriangle(p1_x, p1_y, p2_x, p2_y, p3_x, p3_y, col);
+                    } else {
+                        Backend.drawTriangleLines(p1_x, p1_y, p2_x, p2_y, p3_x, p3_y, col);
+                    }
+                },
+                .ray => |r| {
+                    const end_x = pos.x + r.direction.x * r.length;
+                    const end_y = pos.y + r.direction.y * r.length;
+                    if (r.thickness > 1) {
+                        Backend.drawLineEx(pos.x, pos.y, end_x, end_y, r.thickness, col);
+                    } else {
+                        Backend.drawLine(pos.x, pos.y, end_x, end_y, col);
+                    }
+                },
             }
         }
 
@@ -484,6 +520,18 @@ pub fn RenderHelpers(comptime Backend: type) type {
                     .y = pos.y - p.radius,
                     .w = p.radius * 2,
                     .h = p.radius * 2,
+                },
+                .arrow => |arr| .{
+                    .x = @min(pos.x, pos.x + arr.end.x) - arr.head_size,
+                    .y = @min(pos.y, pos.y + arr.end.y) - arr.head_size,
+                    .w = @abs(arr.end.x) + arr.head_size * 2,
+                    .h = @abs(arr.end.y) + arr.head_size * 2,
+                },
+                .ray => |r| .{
+                    .x = @min(pos.x, pos.x + r.direction.x * r.length),
+                    .y = @min(pos.y, pos.y + r.direction.y * r.length),
+                    .w = @abs(r.direction.x * r.length) + r.thickness,
+                    .h = @abs(r.direction.y * r.length) + r.thickness,
                 },
             };
         }

@@ -52,6 +52,21 @@ pub const Polygon = struct {
     thickness: f32 = 1,
 };
 
+/// Arrow shape parameters (line with arrowhead)
+pub const Arrow = struct {
+    end: Position,
+    head_size: f32 = 10,
+    thickness: f32 = 1,
+    fill: FillMode = .filled,
+};
+
+/// Ray shape parameters (directional line)
+pub const Ray = struct {
+    direction: Position,
+    length: f32 = 100,
+    thickness: f32 = 1,
+};
+
 /// Shape variant - union of all shape types
 pub const Shape = union(enum) {
     circle: Circle,
@@ -59,4 +74,6 @@ pub const Shape = union(enum) {
     line: Line,
     triangle: Triangle,
     polygon: Polygon,
+    arrow: Arrow,
+    ray: Ray,
 };
