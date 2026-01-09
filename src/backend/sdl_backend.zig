@@ -44,6 +44,11 @@ pub const SdlBackend = struct {
     var default_font: ?sdl_ttf.Font = null;
     var should_close: bool = false;
 
+    // GUI render callback (for ImGui integration)
+    // Called during endDrawing() before present to allow GUI rendering
+    pub const GuiRenderCallback = *const fn () void;
+    var gui_render_callback: ?GuiRenderCallback = null;
+
     // Keyboard state - tracks which keys are currently pressed or were just pressed
     var keys_pressed: [512]bool = [_]bool{false} ** 512;
     var keys_just_pressed: [512]bool = [_]bool{false} ** 512;
@@ -463,7 +468,28 @@ pub const SdlBackend = struct {
         last_frame_time = sdl.getPerformanceCounter();
     }
 
+    // =========================================================================
+    // GUI Render Callback
+    // =========================================================================
+
+    /// Register a callback to be called during rendering before present.
+    /// This allows external GUI systems (like ImGui) to submit their draw calls.
+    ///
+    /// SAFETY: This function accepts a raw function pointer that will be executed during
+    /// the render loop. Only pass function pointers from trusted application code.
+    /// Do not use with user-provided or externally-sourced callbacks.
+    pub fn registerGuiRenderCallback(callback: GuiRenderCallback) void {
+        gui_render_callback = callback;
+    }
+
+    /// Unregister the GUI render callback.
+    pub fn unregisterGuiRenderCallback() void {
+        gui_render_callback = null;
+    }
+
     pub fn closeWindow() void {
+        // Clear GUI render callback
+        unregisterGuiRenderCallback();
         if (default_font) |font| {
             font.close();
             default_font = null;
@@ -612,6 +638,12 @@ pub const SdlBackend = struct {
     }
 
     pub fn endDrawing() void {
+        // Call GUI render callback if registered (for ImGui, etc.)
+        // This allows external GUI systems to submit their draw calls before present
+        if (gui_render_callback) |callback| {
+            callback();
+        }
+
         if (renderer) |ren| {
             ren.present();
         }
