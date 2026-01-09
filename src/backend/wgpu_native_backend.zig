@@ -367,6 +367,12 @@ pub const WgpuNativeBackend = struct {
     var surface: ?*wgpu.Surface = null;
     var surface_config: ?wgpu.SurfaceConfiguration = null;
     var allocator: ?std.mem.Allocator = null;
+    var glfw_window: ?*zglfw.Window = null;
+
+    // GUI render callback (for ImGui integration)
+    // Called during endDrawing() with an active render pass
+    pub const GuiRenderCallback = *const fn (*wgpu.RenderPassEncoder) void;
+    var gui_render_callback: ?GuiRenderCallback = null;
 
     // Rendering pipelines
     var shape_pipeline: ?*wgpu.RenderPipeline = null;
@@ -442,6 +448,49 @@ pub const WgpuNativeBackend = struct {
 
     pub fn vector2(x: f32, y: f32) Vector2 {
         return Vector2{ .x = x, .y = y };
+    }
+
+    // ============================================
+    // Context Accessors (for GUI integration)
+    // ============================================
+
+    /// Get the wgpu device (for ImGui backend initialization).
+    pub fn getDevice() ?*wgpu.Device {
+        return device;
+    }
+
+    /// Get the GLFW window (for ImGui input handling).
+    pub fn getWindow() ?*zglfw.Window {
+        return glfw_window;
+    }
+
+    /// Get the swapchain format (for ImGui render pipeline creation).
+    /// Returns null if the surface has not been configured yet.
+    pub fn getSwapchainFormat() ?wgpu.TextureFormat {
+        if (surface_config) |cfg| {
+            return cfg.format;
+        }
+        return null;
+    }
+
+    // ============================================
+    // GUI Integration
+    // ============================================
+
+    /// Register a callback to be called during rendering with an active render pass.
+    /// This allows external GUI systems (like ImGui) to render into the same pass.
+    /// The callback receives the wgpu.RenderPassEncoder and should issue draw commands.
+    ///
+    /// SAFETY: This function accepts a raw function pointer that will be executed during
+    /// the render loop. Only pass function pointers from trusted application code.
+    /// Do not use with user-provided or externally-sourced callbacks.
+    pub fn registerGuiRenderCallback(callback: GuiRenderCallback) void {
+        gui_render_callback = callback;
+    }
+
+    /// Unregister the GUI render callback.
+    pub fn unregisterGuiRenderCallback() void {
+        gui_render_callback = null;
     }
 
     // ============================================
@@ -950,6 +999,7 @@ pub const WgpuNativeBackend = struct {
 
     pub fn initWgpuNative(alloc: std.mem.Allocator, window: *zglfw.Window) !void {
         allocator = alloc;
+        glfw_window = window;
 
         // Get framebuffer size
         const fb_size = window.getFramebufferSize();
@@ -1383,6 +1433,10 @@ pub const WgpuNativeBackend = struct {
 
     pub fn closeWindow() void {
         std.log.info("[wgpu_native] Cleaning up resources...", .{});
+
+        // Clear GUI render callback
+        unregisterGuiRenderCallback();
+        glfw_window = null;
 
         // Cleanup batches
         if (shape_batch) |*batch| {
@@ -1843,10 +1897,16 @@ pub const WgpuNativeBackend = struct {
             }
         }
 
-        // 6. End render pass
+        // 6. Call GUI render callback if registered (for ImGui, etc.)
+        // This allows external GUI systems to render into the same pass
+        if (gui_render_callback) |callback| {
+            callback(render_pass);
+        }
+
+        // 7. End render pass
         render_pass.end();
 
-        // 7. Submit command buffer
+        // 8. Submit command buffer
         const command_buffer = encoder.finish(&.{
             .label = wgpu.StringView.fromSlice("Main Command Buffer"),
         }) orelse return;
@@ -1854,14 +1914,14 @@ pub const WgpuNativeBackend = struct {
 
         q.submit(&[_]*wgpu.CommandBuffer{command_buffer});
 
-        // 7.5. Handle screenshot if requested
+        // 9. Handle screenshot if requested
         if (screenshot_requested) {
             captureScreenshot(surface_texture.texture.?);
             screenshot_requested = false;
             screenshot_filename = null;
         }
 
-        // 8. Present surface
+        // 10. Present surface
         _ = surf.present();
 
         // Increment render frame count
