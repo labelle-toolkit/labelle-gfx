@@ -453,6 +453,9 @@ pub const ZgpuBackend = struct {
             gctx = null;
             gctx_allocator = null;
         }
+
+        // Clear GUI render callback
+        unregisterGuiRenderCallback();
     }
 
     pub fn windowShouldClose() bool {

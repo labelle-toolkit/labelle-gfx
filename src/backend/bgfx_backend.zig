@@ -891,7 +891,7 @@ pub const BgfxBackend = struct {
         }
 
         // Clear GLFW window reference
-        glfw_window = null;
+        clearGlfwWindow();
     }
 
     /// Always returns false - bgfx doesn't manage window lifecycle.

@@ -393,18 +393,12 @@ pub const SdlBackend = struct {
     /// Get window handle as opaque pointer for C interop.
     /// Useful for passing to C libraries like ImGui backends.
     pub fn getWindowHandle() ?*anyopaque {
-        if (window) |w| {
-            return @ptrCast(w.ptr);
-        }
-        return null;
+        return if (window) |w| @ptrCast(w.ptr) else null;
     }
 
     /// Get renderer handle as opaque pointer for C interop.
     pub fn getRendererHandle() ?*anyopaque {
-        if (renderer) |r| {
-            return @ptrCast(r.ptr);
-        }
-        return null;
+        return if (renderer) |r| @ptrCast(r.ptr) else null;
     }
 
     // =========================================================================
