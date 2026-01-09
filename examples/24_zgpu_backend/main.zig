@@ -75,35 +75,35 @@ pub fn main() !void {
     std.log.info("Window: {}x{}", .{ WIDTH, HEIGHT });
 
     // Load sprite textures
-    const party_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture(allocator, "fixtures/output/party.png") catch |err| blk: {
+    const party_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/output/party.png") catch |err| blk: {
         std.log.warn("Failed to load party.png: {} - sprite demo disabled", .{err});
         break :blk null;
     };
     defer if (party_texture) |tex| ZgpuBackend.unloadTexture(tex);
 
-    const wizard_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture(allocator, "fixtures/output/wizard.png") catch |err| blk: {
+    const wizard_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/output/wizard.png") catch |err| blk: {
         std.log.warn("Failed to load wizard.png: {} - sprite demo disabled", .{err});
         break :blk null;
     };
     defer if (wizard_texture) |tex| ZgpuBackend.unloadTexture(tex);
 
     // Load item sprites
-    const coin_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture(allocator, "fixtures/sprites/items/coin.png") catch null;
+    const coin_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/sprites/items/coin.png") catch null;
     defer if (coin_texture) |tex| ZgpuBackend.unloadTexture(tex);
 
-    const gem_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture(allocator, "fixtures/sprites/items/gem.png") catch null;
+    const gem_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/sprites/items/gem.png") catch null;
     defer if (gem_texture) |tex| ZgpuBackend.unloadTexture(tex);
 
-    const heart_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture(allocator, "fixtures/sprites/items/heart.png") catch null;
+    const heart_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/sprites/items/heart.png") catch null;
     defer if (heart_texture) |tex| ZgpuBackend.unloadTexture(tex);
 
-    const key_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture(allocator, "fixtures/sprites/items/key.png") catch null;
+    const key_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/sprites/items/key.png") catch null;
     defer if (key_texture) |tex| ZgpuBackend.unloadTexture(tex);
 
-    const potion_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture(allocator, "fixtures/sprites/items/potion.png") catch null;
+    const potion_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/sprites/items/potion.png") catch null;
     defer if (potion_texture) |tex| ZgpuBackend.unloadTexture(tex);
 
-    const sword_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture(allocator, "fixtures/sprites/items/sword.png") catch null;
+    const sword_texture: ?ZgpuBackend.Texture = ZgpuBackend.loadTexture("fixtures/sprites/items/sword.png") catch null;
     defer if (sword_texture) |tex| ZgpuBackend.unloadTexture(tex);
 
     if (party_texture != null) {
