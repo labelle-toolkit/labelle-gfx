@@ -18,6 +18,12 @@ const HEIGHT: u32 = 600;
 const CAMERA_INITIAL_X: f32 = @as(f32, WIDTH) / 2.0;
 const CAMERA_INITIAL_Y: f32 = @as(f32, HEIGHT) / 2.0;
 
+/// Helper function for input handling - checks if key is pressed or held
+inline fn isKeyDown(win: *zglfw.Window, key: zglfw.Key) bool {
+    const state = win.getKey(key);
+    return state == .press or state == .repeat;
+}
+
 pub fn main() !void {
     // CI test mode - run headless and auto-exit after a few frames
     const ci_test = std.process.hasEnvVarConstant("CI_TEST");
@@ -114,8 +120,7 @@ pub fn main() !void {
         zglfw.pollEvents();
 
         // Check for escape key
-        const escape_state = window.getKey(.escape);
-        if (escape_state == .press or escape_state == .repeat) {
+        if (isKeyDown(window, .escape)) {
             std.log.info("Escape pressed, closing window", .{});
             break;
         }
@@ -123,30 +128,30 @@ pub fn main() !void {
         // Camera controls (for testing)
         if (!ci_test) {
             // Zoom in/out
-            if (window.getKey(.equal) == .press or window.getKey(.equal) == .repeat) {
+            if (isKeyDown(window, .equal)) {
                 camera.zoom *= 1.02;
             }
-            if (window.getKey(.minus) == .press or window.getKey(.minus) == .repeat) {
+            if (isKeyDown(window, .minus)) {
                 camera.zoom *= 0.98;
             }
             // Pan camera
-            if (window.getKey(.left) == .press or window.getKey(.left) == .repeat) {
+            if (isKeyDown(window, .left)) {
                 camera.target.x -= 5.0;
             }
-            if (window.getKey(.right) == .press or window.getKey(.right) == .repeat) {
+            if (isKeyDown(window, .right)) {
                 camera.target.x += 5.0;
             }
-            if (window.getKey(.up) == .press or window.getKey(.up) == .repeat) {
+            if (isKeyDown(window, .up)) {
                 camera.target.y -= 5.0;
             }
-            if (window.getKey(.down) == .press or window.getKey(.down) == .repeat) {
+            if (isKeyDown(window, .down)) {
                 camera.target.y += 5.0;
             }
             // Rotate camera
-            if (window.getKey(.q) == .press or window.getKey(.q) == .repeat) {
+            if (isKeyDown(window, .q)) {
                 camera.rotation -= 1.0;
             }
-            if (window.getKey(.e) == .press or window.getKey(.e) == .repeat) {
+            if (isKeyDown(window, .e)) {
                 camera.rotation += 1.0;
             }
             // Reset camera

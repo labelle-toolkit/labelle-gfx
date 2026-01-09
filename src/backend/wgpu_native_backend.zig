@@ -1135,7 +1135,7 @@ pub const WgpuNativeBackend = struct {
         uniform_buffer = dev.createBuffer(&.{
             .label = wgpu.StringView.fromSlice("Uniform Buffer"),
             .usage = wgpu.BufferUsages.uniform | wgpu.BufferUsages.copy_dst,
-            .size = 64, // mat4x4<f32> = 16 floats * 4 bytes
+            .size = @sizeOf([16]f32), // mat4x4<f32>
             .mapped_at_creation = 0, // WGPUBool false
         });
 
@@ -1797,37 +1797,12 @@ pub const WgpuNativeBackend = struct {
                         const texture_key = @intFromPtr(call.texture.texture);
                         var bind_group: *wgpu.BindGroup = undefined;
 
-                        if (sprite_bind_group_cache) |*cache| {
-                            if (cache.get(texture_key)) |cached_bg| {
-                                bind_group = cached_bg;
-                            } else {
-                                // Create new bind group and cache it
-                                const new_bg = dev.createBindGroup(&.{
-                                    .label = wgpu.StringView.fromSlice("Sprite Bind Group"),
-                                    .layout = sprite_bind_group_layout.?,
-                                    .entry_count = 3,
-                                    .entries = &[_]wgpu.BindGroupEntry{
-                                        .{
-                                            .binding = 0,
-                                            .buffer = uniform_buffer.?,
-                                            .size = 64,
-                                        },
-                                        .{
-                                            .binding = 1,
-                                            .texture_view = call.texture.view,
-                                        },
-                                        .{
-                                            .binding = 2,
-                                            .sampler = texture_sampler.?,
-                                        },
-                                    },
-                                }) orelse continue;
-                                cache.put(texture_key, new_bg) catch continue;
-                                bind_group = new_bg;
-                            }
+                        var cache = &sprite_bind_group_cache.?; // Cache should always be initialized
+                        if (cache.get(texture_key)) |cached_bg| {
+                            bind_group = cached_bg;
                         } else {
-                            // Fallback: create without caching
-                            bind_group = dev.createBindGroup(&.{
+                            // Create new bind group and cache it
+                            const new_bg = dev.createBindGroup(&.{
                                 .label = wgpu.StringView.fromSlice("Sprite Bind Group"),
                                 .layout = sprite_bind_group_layout.?,
                                 .entry_count = 3,
@@ -1835,7 +1810,7 @@ pub const WgpuNativeBackend = struct {
                                     .{
                                         .binding = 0,
                                         .buffer = uniform_buffer.?,
-                                        .size = 64,
+                                        .size = @sizeOf([16]f32),
                                     },
                                     .{
                                         .binding = 1,
@@ -1847,6 +1822,8 @@ pub const WgpuNativeBackend = struct {
                                     },
                                 },
                             }) orelse continue;
+                            cache.put(texture_key, new_bg) catch continue;
+                            bind_group = new_bg;
                         }
 
                         // Bind texture-specific bind group
