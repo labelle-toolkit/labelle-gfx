@@ -10,17 +10,19 @@
 //! - Simpler codebase tailored for labelle-gfx
 //!
 //! Implemented features:
-//! - TODO: Basic rendering setup
-//! - TODO: Camera transformations
-//! - TODO: Frame time tracking
-//! - TODO: Screen/world coordinate conversion
-//! - TODO: Shape rendering (batched)
-//! - TODO: Sprite/texture rendering (batched)
-//! - TODO: Texture loading from file
+//! - Basic rendering setup (instance, adapter, device, surface)
+//! - Camera transformations (zoom, pan, rotation)
+//! - Frame time tracking with delta time
+//! - Screen/world coordinate conversion
+//! - Shape rendering (batched with reusable GPU buffers)
+//! - Sprite/texture rendering (batched with multi-texture support)
+//! - Texture loading from file (PNG/JPEG via stb_image)
+//! - Scissor mode (GPU-accelerated clipping)
+//! - BindGroup caching for improved performance
 //!
 //! Not yet implemented:
 //! - Text rendering (intentionally left out like zgpu)
-//! - Scissor mode
+//! - Screenshot capture (API in place, async readback TODO)
 //!
 
 const std = @import("std");
@@ -203,8 +205,7 @@ const ShapeBatch = struct {
     vertices: std.ArrayList(ColorVertex),
     indices: std.ArrayList(u32),
 
-    fn init(alloc: std.mem.Allocator) ShapeBatch {
-        _ = alloc;
+    fn init() ShapeBatch {
         return .{
             .vertices = .{},
             .indices = .{},
@@ -230,8 +231,7 @@ const SpriteBatch = struct {
     vertices: std.ArrayList(SpriteVertex),
     indices: std.ArrayList(u32),
 
-    fn init(alloc: std.mem.Allocator) SpriteBatch {
-        _ = alloc;
+    fn init() SpriteBatch {
         return .{
             .vertices = .{},
             .indices = .{},
@@ -274,9 +274,8 @@ pub const WgpuNativeBackend = struct {
         height: u16,
 
         pub fn isValid(self: Texture) bool {
-            _ = self;
-            // TODO: Implement validation
-            return true;
+            // A valid texture must have non-null internal handles
+            return self.texture != null and self.view != null;
         }
     };
 
@@ -400,6 +399,9 @@ pub const WgpuNativeBackend = struct {
     var shape_batch: ?ShapeBatch = null;
     var sprite_batch: ?SpriteBatch = null;
     var sprite_draw_calls: ?std.ArrayList(SpriteDrawCall) = null; // Track draw calls by texture
+
+    // Sprite bind group cache (texture -> bind group mapping)
+    var sprite_bind_group_cache: ?std.AutoHashMap(usize, *wgpu.BindGroup) = null;
 
     // Rendering state
     var current_camera: ?Camera2D = null;
@@ -1018,8 +1020,8 @@ pub const WgpuNativeBackend = struct {
         try initPipelines();
 
         // 8. Initialize batching systems
-        shape_batch = ShapeBatch.init(alloc);
-        sprite_batch = SpriteBatch.init(alloc);
+        shape_batch = ShapeBatch.init();
+        sprite_batch = SpriteBatch.init();
         sprite_draw_calls = .{};
 
         // 9. Initialize reusable GPU buffers
@@ -1055,6 +1057,9 @@ pub const WgpuNativeBackend = struct {
             .mapped_at_creation = 0,
         });
         sprite_index_capacity = initial_sprite_index_capacity;
+
+        // Initialize bind group cache
+        sprite_bind_group_cache = std.AutoHashMap(usize, *wgpu.BindGroup).init(alloc);
 
         std.log.info("[wgpu_native] Initialized with {}x{} framebuffer", .{ screen_width, screen_height });
     }
@@ -1447,6 +1452,16 @@ pub const WgpuNativeBackend = struct {
             texture_sampler = null;
         }
 
+        // Release cached sprite bind groups
+        if (sprite_bind_group_cache) |*cache| {
+            var iter = cache.valueIterator();
+            while (iter.next()) |bind_group_ptr| {
+                bind_group_ptr.*.release();
+            }
+            cache.deinit();
+            sprite_bind_group_cache = null;
+        }
+
         // Release surface (must be released before adapter)
         if (surface) |surf| {
             surf.release();
@@ -1510,6 +1525,9 @@ pub const WgpuNativeBackend = struct {
     // ============================================
 
     pub fn beginDrawing() void {
+        // Reset scissor state for new frame
+        scissor_enabled = false;
+
         const current_time: i64 = @truncate(std.time.nanoTimestamp());
         if (last_frame_time != 0) {
             const elapsed_ns = current_time - last_frame_time;
@@ -1539,18 +1557,23 @@ pub const WgpuNativeBackend = struct {
             const cam = current_camera.?;
 
             // Create camera transformation matrix
-            // Order: translate to target, rotate, scale by zoom, translate by offset
+            // This should match the worldToScreen function's transformation:
+            // 1. Translate by -target (move world so target is at origin)
+            // 2. Rotate
+            // 3. Scale by zoom
+            // 4. Translate by offset
             const zoom = cam.zoom;
             const angle = -cam.rotation * std.math.pi / 180.0; // Negate for correct rotation
             const cos_r = @cos(angle);
             const sin_r = @sin(angle);
 
             // Camera view matrix (world to camera space)
+            // Rotation matches worldToScreen: [cos, sin] [-sin, cos]
             const view = [16]f32{
-                cos_r * zoom,                                                                sin_r * zoom,                                                                 0.0, 0.0,
-                -sin_r * zoom,                                                               cos_r * zoom,                                                                 0.0, 0.0,
-                0.0,                                                                         0.0,                                                                          1.0, 0.0,
-                (-cam.target.x * cos_r * zoom + cam.target.y * sin_r * zoom + cam.offset.x), (-cam.target.x * -sin_r * zoom + cam.target.y * cos_r * zoom + cam.offset.y), 0.0, 1.0,
+                cos_r * zoom,                                                            sin_r * zoom,                                                           0.0, 0.0,
+                -sin_r * zoom,                                                           cos_r * zoom,                                                           0.0, 0.0,
+                0.0,                                                                     0.0,                                                                    1.0, 0.0,
+                ((-cam.target.x * cos_r - cam.target.y * -sin_r) * zoom + cam.offset.x), ((-cam.target.x * sin_r - cam.target.y * cos_r) * zoom + cam.offset.y), 0.0, 1.0,
             };
 
             // Multiply projection * view
@@ -1584,6 +1607,19 @@ pub const WgpuNativeBackend = struct {
         const dev = device orelse return;
         const surf = surface orelse return;
         const q = queue orelse return;
+
+        // Ensure batches are cleared on all exit paths to prevent memory growth
+        defer {
+            if (shape_batch) |*batch| {
+                batch.clear();
+            }
+            if (sprite_batch) |*batch| {
+                batch.clear();
+            }
+            if (sprite_draw_calls) |*calls| {
+                calls.clearRetainingCapacity();
+            }
+        }
 
         // 1. Get current surface texture
         var surface_texture: wgpu.SurfaceTexture = undefined;
@@ -1694,9 +1730,6 @@ pub const WgpuNativeBackend = struct {
 
                 // Draw
                 render_pass.drawIndexed(@intCast(index_count), 1, 0, 0, 0);
-
-                // Clear batch for next frame
-                batch.clear();
             }
         }
 
@@ -1705,7 +1738,7 @@ pub const WgpuNativeBackend = struct {
             if (!batch.isEmpty() and sprite_draw_calls != null) {
                 const calls = sprite_draw_calls.?;
                 if (calls.items.len == 0) {
-                    batch.clear();
+                    // No draw calls, nothing to render
                 } else {
                     const vertex_count = batch.vertices.items.len;
                     const index_count = batch.indices.items.len;
@@ -1760,31 +1793,64 @@ pub const WgpuNativeBackend = struct {
 
                     // Render each draw call with its own texture
                     for (calls.items) |call| {
-                        // Create bind group for this texture
-                        const sprite_bind_group = dev.createBindGroup(&.{
-                            .label = wgpu.StringView.fromSlice("Sprite Bind Group"),
-                            .layout = sprite_bind_group_layout.?,
-                            .entry_count = 3,
-                            .entries = &[_]wgpu.BindGroupEntry{
-                                .{
-                                    .binding = 0,
-                                    .buffer = uniform_buffer.?,
-                                    .size = 64,
+                        // Get or create cached bind group for this texture
+                        const texture_key = @intFromPtr(call.texture.texture);
+                        var bind_group: *wgpu.BindGroup = undefined;
+
+                        if (sprite_bind_group_cache) |*cache| {
+                            if (cache.get(texture_key)) |cached_bg| {
+                                bind_group = cached_bg;
+                            } else {
+                                // Create new bind group and cache it
+                                const new_bg = dev.createBindGroup(&.{
+                                    .label = wgpu.StringView.fromSlice("Sprite Bind Group"),
+                                    .layout = sprite_bind_group_layout.?,
+                                    .entry_count = 3,
+                                    .entries = &[_]wgpu.BindGroupEntry{
+                                        .{
+                                            .binding = 0,
+                                            .buffer = uniform_buffer.?,
+                                            .size = 64,
+                                        },
+                                        .{
+                                            .binding = 1,
+                                            .texture_view = call.texture.view,
+                                        },
+                                        .{
+                                            .binding = 2,
+                                            .sampler = texture_sampler.?,
+                                        },
+                                    },
+                                }) orelse continue;
+                                cache.put(texture_key, new_bg) catch continue;
+                                bind_group = new_bg;
+                            }
+                        } else {
+                            // Fallback: create without caching
+                            bind_group = dev.createBindGroup(&.{
+                                .label = wgpu.StringView.fromSlice("Sprite Bind Group"),
+                                .layout = sprite_bind_group_layout.?,
+                                .entry_count = 3,
+                                .entries = &[_]wgpu.BindGroupEntry{
+                                    .{
+                                        .binding = 0,
+                                        .buffer = uniform_buffer.?,
+                                        .size = 64,
+                                    },
+                                    .{
+                                        .binding = 1,
+                                        .texture_view = call.texture.view,
+                                    },
+                                    .{
+                                        .binding = 2,
+                                        .sampler = texture_sampler.?,
+                                    },
                                 },
-                                .{
-                                    .binding = 1,
-                                    .texture_view = call.texture.view,
-                                },
-                                .{
-                                    .binding = 2,
-                                    .sampler = texture_sampler.?,
-                                },
-                            },
-                        }) orelse continue;
-                        defer sprite_bind_group.release();
+                            }) orelse continue;
+                        }
 
                         // Bind texture-specific bind group
-                        render_pass.setBindGroup(0, sprite_bind_group, 0, null);
+                        render_pass.setBindGroup(0, bind_group, 0, null);
 
                         // Draw this call's indices
                         // Note: base_vertex is 0 because indices already include vertex_start offset
@@ -1795,12 +1861,6 @@ pub const WgpuNativeBackend = struct {
                             0, // base_vertex (indices are already absolute)
                             0, // first instance
                         );
-                    }
-
-                    // Clear batch and draw calls for next frame
-                    batch.clear();
-                    if (sprite_draw_calls) |*dc| {
-                        dc.clearRetainingCapacity();
                     }
                 }
             }
@@ -1872,7 +1932,11 @@ pub const WgpuNativeBackend = struct {
     }
 
     pub fn endScissorMode() void {
-        scissor_enabled = false;
+        // Note: Don't disable scissor here! In a batched renderer, we need to keep
+        // the scissor state until endDrawing() applies it. If we clear it here,
+        // the pattern beginScissorMode() -> draw() -> endScissorMode() -> endDrawing()
+        // would not apply scissor because it's already cleared by the time we render.
+        // Instead, scissor_enabled is reset in beginDrawing() for the next frame.
     }
 
     // ============================================
