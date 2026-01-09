@@ -30,6 +30,37 @@ const zglfw = @import("zglfw");
 
 const backend_mod = @import("backend.zig");
 
+// Platform-specific imports for Metal layer creation
+const objc = if (builtin.os.tag == .macos) struct {
+    const c = @cImport({
+        @cInclude("objc/message.h");
+        @cInclude("objc/runtime.h");
+    });
+
+    pub inline fn getClass(name: [*:0]const u8) ?*anyopaque {
+        return c.objc_getClass(name);
+    }
+
+    pub inline fn sel(name: [*:0]const u8) ?*anyopaque {
+        return @ptrCast(c.sel_registerName(name));
+    }
+
+    pub inline fn msgSend(target: ?*anyopaque, selector: ?*anyopaque) ?*anyopaque {
+        const func = @as(*const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque, @ptrCast(&c.objc_msgSend));
+        return func(target, selector);
+    }
+
+    pub inline fn msgSendBool(target: ?*anyopaque, selector: ?*anyopaque, value: bool) void {
+        const func = @as(*const fn (?*anyopaque, ?*anyopaque, u8) callconv(.c) void, @ptrCast(&c.objc_msgSend));
+        func(target, selector, if (value) 1 else 0);
+    }
+
+    pub inline fn msgSendPtr(target: ?*anyopaque, selector: ?*anyopaque, arg: ?*anyopaque) void {
+        const func = @as(*const fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) void, @ptrCast(&c.objc_msgSend));
+        func(target, selector, arg);
+    }
+} else struct {};
+
 // ============================================
 // Vertex Definitions
 // ============================================
@@ -155,15 +186,16 @@ const ShapeBatch = struct {
     indices: std.ArrayList(u32),
 
     fn init(alloc: std.mem.Allocator) ShapeBatch {
+        _ = alloc;
         return .{
-            .vertices = std.ArrayList(ColorVertex).init(alloc),
-            .indices = std.ArrayList(u32).init(alloc),
+            .vertices = .{},
+            .indices = .{},
         };
     }
 
-    fn deinit(self: *ShapeBatch) void {
-        self.vertices.deinit();
-        self.indices.deinit();
+    fn deinit(self: *ShapeBatch, alloc: std.mem.Allocator) void {
+        self.vertices.deinit(alloc);
+        self.indices.deinit(alloc);
     }
 
     fn clear(self: *ShapeBatch) void {
@@ -181,15 +213,16 @@ const SpriteBatch = struct {
     indices: std.ArrayList(u32),
 
     fn init(alloc: std.mem.Allocator) SpriteBatch {
+        _ = alloc;
         return .{
-            .vertices = std.ArrayList(SpriteVertex).init(alloc),
-            .indices = std.ArrayList(u32).init(alloc),
+            .vertices = .{},
+            .indices = .{},
         };
     }
 
-    fn deinit(self: *SpriteBatch) void {
-        self.vertices.deinit();
-        self.indices.deinit();
+    fn deinit(self: *SpriteBatch, alloc: std.mem.Allocator) void {
+        self.vertices.deinit(alloc);
+        self.indices.deinit(alloc);
     }
 
     fn clear(self: *SpriteBatch) void {
@@ -592,7 +625,12 @@ pub const WgpuNativeBackend = struct {
         screen_height = @intCast(fb_size[1]);
 
         // 1. Create WebGPU instance
-        instance = wgpu.Instance.create(&.{}) orelse return error.InstanceCreationFailed;
+        instance = wgpu.Instance.create(&.{
+            .features = .{
+                .timed_wait_any_enable = 0, // WGPUBool false
+                .timed_wait_any_max_count = 0,
+            },
+        }) orelse return error.InstanceCreationFailed;
 
         // 2. Create surface from GLFW window
         surface = try createSurfaceFromGLFW(window);
@@ -606,19 +644,20 @@ pub const WgpuNativeBackend = struct {
         // Use synchronous adapter request
         const adapter_response = instance.?.requestAdapterSync(&adapter_opts, 200_000_000);
         if (adapter_response.status != .success) {
-            std.log.err("Failed to request adapter: {s}", .{adapter_response.message});
+            std.log.err("Failed to request adapter: {?s}", .{adapter_response.message});
             return error.AdapterRequestFailed;
         }
         adapter = adapter_response.adapter;
 
         // 4. Request device
         const device_descriptor = wgpu.DeviceDescriptor{
-            .label = "Main Device",
+            .label = wgpu.StringView.fromSlice("Main Device"),
+            .required_limits = null,
         };
 
-        const device_response = adapter.?.requestDeviceSync(&device_descriptor, 200_000_000);
+        const device_response = adapter.?.requestDeviceSync(instance.?, &device_descriptor, 200_000_000);
         if (device_response.status != .success) {
-            std.log.err("Failed to request device: {s}", .{device_response.message});
+            std.log.err("Failed to request device: {?s}", .{device_response.message});
             return error.DeviceRequestFailed;
         }
         device = device_response.device;
@@ -627,13 +666,17 @@ pub const WgpuNativeBackend = struct {
         queue = device.?.getQueue();
 
         // 6. Configure surface
-        const surface_caps = surface.?.getCapabilities(adapter.?);
-        defer surface_caps.deinit();
+        var surface_caps: wgpu.SurfaceCapabilities = undefined;
+        const caps_status = surface.?.getCapabilities(adapter.?, &surface_caps);
+        if (caps_status != .success) {
+            return error.SurfaceCapabilitiesFailed;
+        }
+        defer surface_caps.freeMembers();
 
         surface_config = .{
             .device = device.?,
             .format = surface_caps.formats[0], // Use first supported format
-            .usage = .{ .render_attachment = true },
+            .usage = wgpu.TextureUsages.render_attachment,
             .width = @intCast(screen_width),
             .height = @intCast(screen_height),
             .present_mode = .fifo, // VSync
@@ -654,42 +697,49 @@ pub const WgpuNativeBackend = struct {
     fn createSurfaceFromGLFW(window: *zglfw.Window) !*wgpu.Surface {
         const inst = instance orelse return error.NoInstance;
 
-        // Get platform-specific window handle and create surface
+        // Get platform-specific window handle and create surface using helper functions
         if (builtin.os.tag == .macos) {
             const ns_window = zglfw.getCocoaWindow(window);
             if (ns_window) |win| {
-                const descriptor = wgpu.SurfaceDescriptor{
-                    .next_in_chain = @ptrCast(&wgpu.SurfaceDescriptorFromMetalLayer{
-                        .chain = .{ .s_type = .surface_descriptor_from_metal_layer },
-                        .layer = @ptrCast(win),
-                    }),
-                };
+                // Get the content view from the NSWindow
+                const content_view = objc.msgSend(win, objc.sel("contentView")) orelse return error.NoContentView;
+
+                // Get the CAMetalLayer class
+                const metal_layer_class = objc.getClass("CAMetalLayer") orelse return error.NoMetalLayerClass;
+
+                // Allocate and initialize a new CAMetalLayer: [[CAMetalLayer alloc] init]
+                const metal_layer_alloc = objc.msgSend(metal_layer_class, objc.sel("alloc")) orelse return error.MetalLayerAllocFailed;
+                const metal_layer = objc.msgSend(metal_layer_alloc, objc.sel("init")) orelse return error.MetalLayerInitFailed;
+
+                // Set wantsLayer to YES first
+                objc.msgSendBool(content_view, objc.sel("setWantsLayer:"), true);
+
+                // Set the layer on the content view
+                objc.msgSendPtr(content_view, objc.sel("setLayer:"), metal_layer);
+
+                const descriptor = wgpu.surfaceDescriptorFromMetalLayer(.{
+                    .layer = metal_layer,
+                });
                 return inst.createSurface(&descriptor) orelse return error.SurfaceCreationFailed;
             }
         } else if (builtin.os.tag == .linux) {
             // Try Wayland first, then X11
             if (zglfw.getWaylandDisplay(window)) |display| {
                 if (zglfw.getWaylandWindow(window)) |wl_surface| {
-                    const descriptor = wgpu.SurfaceDescriptor{
-                        .next_in_chain = @ptrCast(&wgpu.SurfaceDescriptorFromWaylandSurface{
-                            .chain = .{ .s_type = .surface_descriptor_from_wayland_surface },
-                            .display = display,
-                            .surface = wl_surface,
-                        }),
-                    };
+                    const descriptor = wgpu.surfaceDescriptorFromWaylandSurface(.{
+                        .display = display,
+                        .surface = wl_surface,
+                    });
                     return inst.createSurface(&descriptor) orelse return error.SurfaceCreationFailed;
                 }
             }
 
             if (zglfw.getX11Display(window)) |display| {
                 if (zglfw.getX11Window(window)) |x11_window| {
-                    const descriptor = wgpu.SurfaceDescriptor{
-                        .next_in_chain = @ptrCast(&wgpu.SurfaceDescriptorFromXlibWindow{
-                            .chain = .{ .s_type = .surface_descriptor_from_xlib_window },
-                            .display = display,
-                            .window = x11_window,
-                        }),
-                    };
+                    const descriptor = wgpu.surfaceDescriptorFromXlibWindow(.{
+                        .display = display,
+                        .window = @intCast(x11_window),
+                    });
                     return inst.createSurface(&descriptor) orelse return error.SurfaceCreationFailed;
                 }
             }
@@ -697,13 +747,10 @@ pub const WgpuNativeBackend = struct {
             const hwnd = zglfw.getWin32Window(window);
             if (hwnd) |win| {
                 const hinstance = @import("std").os.windows.kernel32.GetModuleHandleW(null);
-                const descriptor = wgpu.SurfaceDescriptor{
-                    .next_in_chain = @ptrCast(&wgpu.SurfaceDescriptorFromWindowsHWND{
-                        .chain = .{ .s_type = .surface_descriptor_from_windows_hwnd },
-                        .hinstance = hinstance,
-                        .hwnd = win,
-                    }),
-                };
+                const descriptor = wgpu.surfaceDescriptorFromWindowsHWND(.{
+                    .hinstance = hinstance,
+                    .hwnd = win,
+                });
                 return inst.createSurface(&descriptor) orelse return error.SurfaceCreationFailed;
             }
         }
@@ -716,10 +763,10 @@ pub const WgpuNativeBackend = struct {
 
         // Create uniform buffer for projection matrix
         uniform_buffer = dev.createBuffer(&.{
-            .label = "Projection Matrix Uniform",
-            .usage = .{ .uniform = true, .copy_dst = true },
+            .label = wgpu.StringView.fromSlice("Projection Matrix Uniform"),
+            .usage = wgpu.BufferUsages.uniform | wgpu.BufferUsages.copy_dst,
             .size = 64, // mat4x4<f32> = 16 floats * 4 bytes
-            .mapped_at_creation = false,
+            .mapped_at_creation = 0, // WGPUBool false
         });
 
         // Create shape pipeline
@@ -734,12 +781,12 @@ pub const WgpuNativeBackend = struct {
 
         // Create bind group layout for shapes (just uniform buffer)
         shape_bind_group_layout = dev.createBindGroupLayout(&.{
-            .label = "Shape Bind Group Layout",
+            .label = wgpu.StringView.fromSlice("Shape Bind Group Layout"),
             .entry_count = 1,
             .entries = &[_]wgpu.BindGroupLayoutEntry{
                 .{
                     .binding = 0,
-                    .visibility = .{ .vertex = true },
+                    .visibility = wgpu.ShaderStages.vertex,
                     .buffer = .{
                         .type = .uniform,
                         .min_binding_size = 64,
@@ -750,7 +797,7 @@ pub const WgpuNativeBackend = struct {
 
         // Create bind group for shapes
         shape_bind_group = dev.createBindGroup(&.{
-            .label = "Shape Bind Group",
+            .label = wgpu.StringView.fromSlice("Shape Bind Group"),
             .layout = shape_bind_group_layout.?,
             .entry_count = 1,
             .entries = &[_]wgpu.BindGroupEntry{
@@ -763,24 +810,24 @@ pub const WgpuNativeBackend = struct {
         });
 
         // Create shader modules
-        const vs_module = dev.createShaderModule(&.{
+        const vs_module = dev.createShaderModule(&wgpu.shaderModuleWGSLDescriptor(.{
             .label = "Shape Vertex Shader",
-            .code = .{ .wgsl = shape_vs_source },
-        });
+            .code = shape_vs_source,
+        })).?;
         defer vs_module.release();
 
-        const fs_module = dev.createShaderModule(&.{
+        const fs_module = dev.createShaderModule(&wgpu.shaderModuleWGSLDescriptor(.{
             .label = "Shape Fragment Shader",
-            .code = .{ .wgsl = shape_fs_source },
-        });
+            .code = shape_fs_source,
+        })).?;
         defer fs_module.release();
 
         // Create pipeline layout
         const pipeline_layout = dev.createPipelineLayout(&.{
-            .label = "Shape Pipeline Layout",
+            .label = wgpu.StringView.fromSlice("Shape Pipeline Layout"),
             .bind_group_layout_count = 1,
             .bind_group_layouts = &[_]*wgpu.BindGroupLayout{shape_bind_group_layout.?},
-        });
+        }).?;
         defer pipeline_layout.release();
 
         // Create render pipeline
@@ -795,17 +842,17 @@ pub const WgpuNativeBackend = struct {
         };
 
         shape_pipeline = dev.createRenderPipeline(&.{
-            .label = "Shape Pipeline",
+            .label = wgpu.StringView.fromSlice("Shape Pipeline"),
             .layout = pipeline_layout,
             .vertex = .{
                 .module = vs_module,
-                .entry_point = "main",
+                .entry_point = wgpu.StringView.fromSlice("main"),
                 .buffer_count = 1,
                 .buffers = &[_]wgpu.VertexBufferLayout{vertex_buffer_layout},
             },
             .fragment = &.{
                 .module = fs_module,
-                .entry_point = "main",
+                .entry_point = wgpu.StringView.fromSlice("main"),
                 .target_count = 1,
                 .targets = &[_]wgpu.ColorTargetState{
                     .{
@@ -822,7 +869,7 @@ pub const WgpuNativeBackend = struct {
                                 .dst_factor = .one_minus_src_alpha,
                             },
                         },
-                        .write_mask = .all,
+                        .write_mask = wgpu.ColorWriteMasks.all,
                     },
                 },
             },
@@ -843,12 +890,12 @@ pub const WgpuNativeBackend = struct {
 
         // Create bind group layout for sprites (uniform + texture + sampler)
         sprite_bind_group_layout = dev.createBindGroupLayout(&.{
-            .label = "Sprite Bind Group Layout",
+            .label = wgpu.StringView.fromSlice("Sprite Bind Group Layout"),
             .entry_count = 3,
             .entries = &[_]wgpu.BindGroupLayoutEntry{
                 .{
                     .binding = 0,
-                    .visibility = .{ .vertex = true },
+                    .visibility = wgpu.ShaderStages.vertex,
                     .buffer = .{
                         .type = .uniform,
                         .min_binding_size = 64,
@@ -856,15 +903,15 @@ pub const WgpuNativeBackend = struct {
                 },
                 .{
                     .binding = 1,
-                    .visibility = .{ .fragment = true },
+                    .visibility = wgpu.ShaderStages.fragment,
                     .texture = .{
                         .sample_type = .float,
-                        .view_dimension = .dimension_2d,
+                        .view_dimension = .@"2d",
                     },
                 },
                 .{
                     .binding = 2,
-                    .visibility = .{ .fragment = true },
+                    .visibility = wgpu.ShaderStages.fragment,
                     .sampler = .{
                         .type = .filtering,
                     },
@@ -873,24 +920,24 @@ pub const WgpuNativeBackend = struct {
         });
 
         // Create shader modules
-        const vs_module = dev.createShaderModule(&.{
+        const vs_module = dev.createShaderModule(&wgpu.shaderModuleWGSLDescriptor(.{
             .label = "Sprite Vertex Shader",
-            .code = .{ .wgsl = sprite_vs_source },
-        });
+            .code = sprite_vs_source,
+        })).?;
         defer vs_module.release();
 
-        const fs_module = dev.createShaderModule(&.{
+        const fs_module = dev.createShaderModule(&wgpu.shaderModuleWGSLDescriptor(.{
             .label = "Sprite Fragment Shader",
-            .code = .{ .wgsl = sprite_fs_source },
-        });
+            .code = sprite_fs_source,
+        })).?;
         defer fs_module.release();
 
         // Create pipeline layout
         const pipeline_layout = dev.createPipelineLayout(&.{
-            .label = "Sprite Pipeline Layout",
+            .label = wgpu.StringView.fromSlice("Sprite Pipeline Layout"),
             .bind_group_layout_count = 1,
             .bind_group_layouts = &[_]*wgpu.BindGroupLayout{sprite_bind_group_layout.?},
-        });
+        }).?;
         defer pipeline_layout.release();
 
         // Create render pipeline
@@ -906,17 +953,17 @@ pub const WgpuNativeBackend = struct {
         };
 
         sprite_pipeline = dev.createRenderPipeline(&.{
-            .label = "Sprite Pipeline",
+            .label = wgpu.StringView.fromSlice("Sprite Pipeline"),
             .layout = pipeline_layout,
             .vertex = .{
                 .module = vs_module,
-                .entry_point = "main",
+                .entry_point = wgpu.StringView.fromSlice("main"),
                 .buffer_count = 1,
                 .buffers = &[_]wgpu.VertexBufferLayout{vertex_buffer_layout},
             },
             .fragment = &.{
                 .module = fs_module,
-                .entry_point = "main",
+                .entry_point = wgpu.StringView.fromSlice("main"),
                 .target_count = 1,
                 .targets = &[_]wgpu.ColorTargetState{
                     .{
@@ -933,7 +980,7 @@ pub const WgpuNativeBackend = struct {
                                 .dst_factor = .one_minus_src_alpha,
                             },
                         },
-                        .write_mask = .all,
+                        .write_mask = wgpu.ColorWriteMasks.all,
                     },
                 },
             },
@@ -950,9 +997,79 @@ pub const WgpuNativeBackend = struct {
     }
 
     pub fn closeWindow() void {
-        // TODO: Cleanup all WebGPU resources
-        // Release device, adapter, surface, instance
-        // Cleanup batches and pipelines
+        std.log.info("[wgpu_native] Cleaning up resources...", .{});
+
+        // Cleanup batches
+        if (shape_batch) |*batch| {
+            batch.deinit(allocator.?);
+            shape_batch = null;
+        }
+        if (sprite_batch) |*batch| {
+            batch.deinit(allocator.?);
+            sprite_batch = null;
+        }
+
+        // Release pipelines
+        if (shape_pipeline) |pipeline| {
+            pipeline.release();
+            shape_pipeline = null;
+        }
+        if (sprite_pipeline) |pipeline| {
+            pipeline.release();
+            sprite_pipeline = null;
+        }
+
+        // Release bind groups and layouts
+        if (shape_bind_group) |bg| {
+            bg.release();
+            shape_bind_group = null;
+        }
+        if (shape_bind_group_layout) |layout| {
+            layout.release();
+            shape_bind_group_layout = null;
+        }
+        if (sprite_bind_group_layout) |layout| {
+            layout.release();
+            sprite_bind_group_layout = null;
+        }
+
+        // Release uniform buffer
+        if (uniform_buffer) |buf| {
+            buf.release();
+            uniform_buffer = null;
+        }
+
+        // Release surface (must be released before adapter)
+        if (surface) |surf| {
+            surf.release();
+            surface = null;
+        }
+
+        // Release queue
+        if (queue) |q| {
+            q.release();
+            queue = null;
+        }
+
+        // Release device
+        if (device) |dev| {
+            dev.release();
+            device = null;
+        }
+
+        // Release adapter
+        if (adapter) |adp| {
+            adp.release();
+            adapter = null;
+        }
+
+        // Release instance (must be last)
+        if (instance) |inst| {
+            inst.release();
+            instance = null;
+        }
+
+        std.log.info("[wgpu_native] Cleanup complete", .{});
     }
 
     pub fn windowShouldClose() bool {
@@ -993,15 +1110,67 @@ pub const WgpuNativeBackend = struct {
     }
 
     pub fn endDrawing() void {
-        // TODO: Implement rendering
+        const dev = device orelse return;
+        const surf = surface orelse return;
+        const q = queue orelse return;
+
         // 1. Get current surface texture
+        var surface_texture: wgpu.SurfaceTexture = undefined;
+        surf.getCurrentTexture(&surface_texture);
+        if (surface_texture.status != .success_optimal and surface_texture.status != .success_suboptimal) {
+            std.log.warn("Failed to acquire surface texture: {}", .{surface_texture.status});
+            return;
+        }
+        defer surface_texture.texture.?.release();
+
+        // Create texture view
+        const view = surface_texture.texture.?.createView(&.{
+            .label = wgpu.StringView.fromSlice("Surface Texture View"),
+        }) orelse return;
+        defer view.release();
+
         // 2. Create command encoder
+        const encoder = dev.createCommandEncoder(&.{
+            .label = wgpu.StringView.fromSlice("Main Command Encoder"),
+        }) orelse return;
+        defer encoder.release();
+
         // 3. Begin render pass with clear color
-        // 4. Render batched shapes
-        // 5. Render batched sprites
+        const color_attachment = wgpu.ColorAttachment{
+            .view = view,
+            .load_op = .clear,
+            .store_op = .store,
+            .clear_value = .{
+                .r = @as(f64, @floatFromInt(clear_color.r)) / 255.0,
+                .g = @as(f64, @floatFromInt(clear_color.g)) / 255.0,
+                .b = @as(f64, @floatFromInt(clear_color.b)) / 255.0,
+                .a = @as(f64, @floatFromInt(clear_color.a)) / 255.0,
+            },
+        };
+
+        const render_pass = encoder.beginRenderPass(&.{
+            .label = wgpu.StringView.fromSlice("Main Render Pass"),
+            .color_attachment_count = 1,
+            .color_attachments = @ptrCast(&color_attachment),
+        }) orelse return;
+        defer render_pass.release();
+
+        // TODO: 4. Render batched shapes (Phase 2.6)
+        // TODO: 5. Render batched sprites (Phase 2.7)
+
         // 6. End render pass
+        render_pass.end();
+
         // 7. Submit command buffer
+        const command_buffer = encoder.finish(&.{
+            .label = wgpu.StringView.fromSlice("Main Command Buffer"),
+        }) orelse return;
+        defer command_buffer.release();
+
+        q.submit(&[_]*wgpu.CommandBuffer{command_buffer});
+
         // 8. Present surface
+        _ = surf.present();
     }
 
     pub fn clearBackground(col: Color) void {

@@ -391,6 +391,34 @@ pub fn build(b: *std.Build) void {
         full_run_step_24.dependOn(&run_cmd_24.step);
     }
 
+    // Example 25: wgpu_native backend (lower-level WebGPU) with GLFW
+    {
+        const wgpu_native_example_mod = b.createModule(.{
+            .root_source_file = b.path("examples/25_wgpu_native_backend/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zglfw", .module = zglfw },
+                .{ .name = "labelle", .module = lib_mod },
+            },
+        });
+
+        const wgpu_native_example = b.addExecutable(.{
+            .name = "25_wgpu_native_backend",
+            .root_module = wgpu_native_example_mod,
+        });
+
+        // Link glfw library
+        wgpu_native_example.linkLibrary(glfw_lib);
+
+        const run_cmd_25 = b.addRunArtifact(wgpu_native_example);
+        const run_step_25 = b.step("run-example-25", "wgpu_native backend example with GLFW");
+        run_step_25.dependOn(&run_cmd_25.step);
+
+        const full_run_step_25 = b.step("run-25_wgpu_native_backend", "wgpu_native backend example with GLFW");
+        full_run_step_25.dependOn(&run_cmd_25.step);
+    }
+
     // Converter tool
     const converter_exe = b.addExecutable(.{
         .name = "labelle-convert",
