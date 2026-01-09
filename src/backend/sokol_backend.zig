@@ -3,8 +3,54 @@
 //! Implements the backend interface using sokol-zig bindings.
 //! Uses sokol_gfx for rendering and sokol_gl for immediate-mode 2D drawing.
 //!
-//! Note: This backend requires the application to handle window creation
-//! and the sokol setup/teardown lifecycle separately (typically via sokol_app).
+//! ## Usage
+//!
+//! The sokol backend provides two ways to run applications:
+//!
+//! ### 1. Using `run()` (Recommended)
+//!
+//! The simplest approach - sokol_app is set up internally:
+//!
+//! ```zig
+//! const gfx = @import("labelle");
+//!
+//! pub fn main() void {
+//!     gfx.SokolBackend.run(.{
+//!         .init = myInit,
+//!         .frame = myFrame,
+//!         .cleanup = myCleanup,
+//!         .width = 800,
+//!         .height = 600,
+//!         .title = "My Game",
+//!     });
+//! }
+//!
+//! fn myInit() void {
+//!     // sokol_gfx and sokol_gl are already initialized
+//!     // Initialize your game state here
+//! }
+//!
+//! fn myFrame() void {
+//!     // Called every frame - do your rendering here
+//!     gfx.SokolBackend.beginDrawing();
+//!     // ... draw stuff ...
+//!     gfx.SokolBackend.endDrawing();
+//! }
+//!
+//! fn myCleanup() void {
+//!     // Clean up your game state
+//! }
+//! ```
+//!
+//! ### 2. Export callbacks manually (Advanced)
+//!
+//! For full control, export sokol_app callbacks yourself:
+//!
+//! ```zig
+//! export fn init() void { ... }
+//! export fn frame() void { ... }
+//! export fn cleanup() void { ... }
+//! ```
 
 const std = @import("std");
 const sokol = @import("sokol");
@@ -1015,5 +1061,211 @@ pub const SokolBackend = struct {
     /// Note: sokol_app doesn't provide direct monitor access, so this returns screen height
     pub fn getMonitorHeight() i32 {
         return getScreenHeight();
+    }
+
+    // ==================== Callback-based Application Runner ====================
+
+    /// Configuration for running a sokol application
+    pub const RunConfig = struct {
+        /// Called once after sokol_gfx and sokol_gl are initialized
+        init: ?*const fn () void = null,
+        /// Called every frame
+        frame: ?*const fn () void = null,
+        /// Called before shutdown
+        cleanup: ?*const fn () void = null,
+        /// Called for input events (optional)
+        event: ?*const fn (sapp.Event) void = null,
+        /// Window width
+        width: i32 = 800,
+        /// Window height
+        height: i32 = 600,
+        /// Window title
+        title: [:0]const u8 = "Sokol App",
+        /// Enable high DPI rendering
+        high_dpi: bool = true,
+        /// Sample count for MSAA
+        sample_count: i32 = 4,
+        /// Swap interval (1 = vsync)
+        swap_interval: i32 = 1,
+        /// Clear color (used in beginPass)
+        clear_color: Color = Color{ .r = 30, .g = 30, .b = 40, .a = 255 },
+    };
+
+    /// Internal context for callback forwarding via user_data.
+    /// This avoids global state by using sokol_app's user_data mechanism.
+    const RunContext = struct {
+        config: RunConfig,
+        pass_action: sg.PassAction,
+    };
+
+    /// Run a sokol application with the provided callbacks.
+    ///
+    /// This function sets up sokol_app, sokol_gfx, and sokol_gl internally,
+    /// then calls your callbacks at the appropriate times.
+    ///
+    /// Example:
+    /// ```zig
+    /// SokolBackend.run(.{
+    ///     .init = myInit,
+    ///     .frame = myFrame,
+    ///     .cleanup = myCleanup,
+    ///     .width = 800,
+    ///     .height = 600,
+    ///     .title = "My Game",
+    /// });
+    /// ```
+    ///
+    /// Note: This function may never return on some platforms (native).
+    /// On Emscripten/WebAssembly, it returns immediately after setting up
+    /// the async main loop. All cleanup should be done in the cleanup callback.
+    ///
+    /// Warning: This function is NOT reentrant. Only one sokol application can
+    /// run at a time, which is a limitation of sokol_app itself. Calling run()
+    /// a second time while the first is still active will overwrite the context
+    /// and cause undefined behavior.
+    pub fn run(config: RunConfig) void {
+        // Use static storage to ensure the context survives across async
+        // main loop iterations on Emscripten (where sapp.run returns immediately)
+        const S = struct {
+            var context: RunContext = undefined;
+        };
+
+        S.context = RunContext{
+            .config = config,
+            .pass_action = .{},
+        };
+
+        // Set up pass action with clear color
+        S.context.pass_action.colors[0] = .{
+            .load_action = .CLEAR,
+            .clear_value = config.clear_color.toSg(),
+        };
+
+        sapp.run(.{
+            .init_userdata_cb = internalInit,
+            .frame_userdata_cb = internalFrame,
+            .cleanup_userdata_cb = internalCleanup,
+            .event_userdata_cb = internalEvent,
+            .user_data = &S.context,
+            .width = config.width,
+            .height = config.height,
+            .window_title = config.title.ptr,
+            .high_dpi = config.high_dpi,
+            .sample_count = config.sample_count,
+            .swap_interval = config.swap_interval,
+            .logger = .{ .func = sokol.log.func },
+        });
+    }
+
+    /// Internal init callback - sets up sokol_gfx/sokol_gl, then calls user init
+    fn internalInit(user_data: ?*anyopaque) callconv(.c) void {
+        const context: *RunContext = @ptrCast(@alignCast(user_data));
+
+        // Initialize sokol_gfx (only if not already initialized)
+        // sg_setup() must only be called once per application lifetime
+        if (!sg.isvalid()) {
+            sg.setup(.{
+                .environment = sokol.glue.environment(),
+                .logger = .{ .func = sokol.log.func },
+            });
+            sg_initialized = true;
+        }
+
+        // Initialize sokol_gl (only if not already initialized)
+        if (!sgl_initialized) {
+            sgl.setup(.{
+                .logger = .{ .func = sokol.log.func },
+            });
+            sgl_initialized = true;
+        }
+
+        // Call user's init callback
+        if (context.config.init) |init_fn| {
+            init_fn();
+        }
+    }
+
+    /// Internal frame callback - handles pass management, calls user frame
+    fn internalFrame(user_data: ?*anyopaque) callconv(.c) void {
+        const context: *RunContext = @ptrCast(@alignCast(user_data));
+
+        // Begin the default render pass
+        sg.beginPass(.{
+            .action = context.pass_action,
+            .swapchain = sokol.glue.swapchain(),
+        });
+
+        // Call user's frame callback
+        if (context.config.frame) |frame_fn| {
+            frame_fn();
+        }
+
+        // End the render pass and commit
+        sg.endPass();
+        sg.commit();
+    }
+
+    /// Internal cleanup callback - calls user cleanup, then shuts down sokol
+    fn internalCleanup(user_data: ?*anyopaque) callconv(.c) void {
+        const context: *RunContext = @ptrCast(@alignCast(user_data));
+
+        // Call user's cleanup callback first
+        if (context.config.cleanup) |cleanup_fn| {
+            cleanup_fn();
+        }
+
+        // Shutdown sokol in reverse order
+        if (sgl_initialized) {
+            sgl.shutdown();
+            sgl_initialized = false;
+        }
+        if (sg_initialized) {
+            sg.shutdown();
+            sg_initialized = false;
+        }
+    }
+
+    /// Internal event callback - forwards events to user callback
+    fn internalEvent(event: [*c]const sapp.Event, user_data: ?*anyopaque) callconv(.c) void {
+        const context: *RunContext = @ptrCast(@alignCast(user_data));
+
+        if (context.config.event) |event_fn| {
+            if (event != null) {
+                event_fn(event.*);
+            }
+        }
+    }
+
+    /// Check if sokol_app is currently running and valid.
+    /// This returns true when inside sokol_app callbacks (init/frame/cleanup).
+    /// Useful for subsystems that need to know if sokol is properly initialized.
+    pub fn isAppValid() bool {
+        return sapp.isvalid();
+    }
+
+    /// Check if sokol_gfx is initialized and valid.
+    pub fn isGfxValid() bool {
+        return sg.isvalid();
+    }
+
+    /// Get the current pass action (for custom rendering pipelines).
+    /// Only valid when called from within run() callbacks.
+    pub fn getPassAction() ?sg.PassAction {
+        const user_data = sapp.userdata();
+        if (user_data) |ptr| {
+            const context: *RunContext = @ptrCast(@alignCast(ptr));
+            return context.pass_action;
+        }
+        return null;
+    }
+
+    /// Set the clear color for subsequent frames.
+    /// Only valid when called from within run() callbacks.
+    pub fn setClearColor(col: Color) void {
+        const user_data = sapp.userdata();
+        if (user_data) |ptr| {
+            const context: *RunContext = @ptrCast(@alignCast(ptr));
+            context.pass_action.colors[0].clear_value = col.toSg();
+        }
     }
 };
