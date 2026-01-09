@@ -9,9 +9,10 @@
             .url = "git+https://github.com/labelle-toolkit/zig-utils#0eb76432845d30a8744d0f1e7b2f184bde30ef25",
             .hash = "zig_utils-0.1.0-dUo89-MYAABNGtQuVNvsszZwByyjALW-LLaqVZYTkI_I",
         },
+        // Using labelle-toolkit fork with getGLFWWindow() for ImGui integration
         .raylib_zig = .{
-            .url = "git+https://github.com/raylib-zig/raylib-zig#a4d18b2d1cf8fdddec68b5b084535fca0475f466",
-            .hash = "raylib_zig-5.6.0-dev-KE8REL5MBQAf3p497t52Xw9P7ojndIkVOWPXnLiLLw2P",
+            .url = "git+https://github.com/labelle-toolkit/raylib-zig#acc802ae88b7266116164bcd1499e2b3da49ebd9",
+            .hash = "raylib_zig-5.6.0-dev-KE8REExOBQDevXoErLTYmABXzBpiiUCT2iisjDXVNPhq",
         },
         .zspec = .{
             .url = "git+https://github.com/apotema/zspec?ref=v0.6.0#71c901d6e74b2d5a8c556d4c74ced9b91446d8a4",
