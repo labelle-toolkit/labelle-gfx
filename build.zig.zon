@@ -64,8 +64,8 @@
             .lazy = true,
         },
         .wgpu_native_zig = .{
-            .url = "https://github.com/bronter/wgpu_native_zig/archive/refs/tags/v6.5.0.tar.gz",
-            .hash = "wgpu_native_zig-6.5.0-B9jeDFtzAwB1vPOiXTd2BqrP1j4phYk-oBbxbpLKY3xD",
+            .url = "git+https://github.com/apotema/wgpu_native_zig#fb54d9c8cbefa0b8d0e8224aa8323b7974ae454f",
+            .hash = "1220fb54d9c8cbefa0b8d0e8224aa8323b7974ae454f30c52d4ca2e1e44f7f92e4a9",
         },
     },
 
