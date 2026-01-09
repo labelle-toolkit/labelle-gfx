@@ -30,6 +30,24 @@ const zglfw = @import("zglfw");
 
 const backend_mod = @import("backend.zig");
 
+// stb_image for texture loading
+const stb = @cImport({
+    @cDefine("STBI_NO_STDIO", "1");
+    @cDefine("STBI_NO_BMP", "1");
+    @cDefine("STBI_NO_PSD", "1");
+    @cDefine("STBI_NO_TGA", "1");
+    @cDefine("STBI_NO_GIF", "1");
+    @cDefine("STBI_NO_HDR", "1");
+    @cDefine("STBI_NO_PIC", "1");
+    @cDefine("STBI_NO_PNM", "1");
+    @cInclude("stb_image.h");
+});
+
+// stb_image_write for screenshot capture
+const stb_write = @cImport({
+    @cInclude("stb_image_write.h");
+});
+
 // Platform-specific imports for Metal layer creation
 const objc = if (builtin.os.tag == .macos) struct {
     const c = @cImport({
@@ -255,6 +273,15 @@ pub const WgpuNativeBackend = struct {
         }
     };
 
+    /// Sprite draw call - tracks texture and vertex/index range
+    const SpriteDrawCall = struct {
+        texture: Texture,
+        vertex_start: u32,
+        vertex_count: u32,
+        index_start: u32,
+        index_count: u32,
+    };
+
     /// RGBA color (0-255 per channel)
     pub const Color = struct {
         r: u8,
@@ -347,14 +374,23 @@ pub const WgpuNativeBackend = struct {
     // Uniform buffer for projection matrix
     var uniform_buffer: ?*wgpu.Buffer = null;
 
+    // Texture sampler (shared for all textures)
+    var texture_sampler: ?*wgpu.Sampler = null;
+
     // Batching systems
     var shape_batch: ?ShapeBatch = null;
     var sprite_batch: ?SpriteBatch = null;
+    var sprite_draw_calls: ?std.ArrayList(SpriteDrawCall) = null; // Track draw calls by texture
+    var current_sprite_texture: ?Texture = null; // Current texture for sprite batch
 
     // Rendering state
     var current_camera: ?Camera2D = null;
     var in_camera_mode: bool = false;
     var clear_color: Color = dark_gray;
+
+    // Scissor state
+    var scissor_enabled: bool = false;
+    var scissor_rect: Rectangle = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
 
     // Screen dimensions
     var screen_width: i32 = 800;
@@ -363,9 +399,14 @@ pub const WgpuNativeBackend = struct {
     // Frame timing
     var last_frame_time: i64 = 0;
     var frame_delta: f32 = 1.0 / 60.0;
+    var render_frame_count: u32 = 0; // For debug logging
 
     // Fullscreen state
     var is_fullscreen: bool = false;
+
+    // Screenshot state
+    var screenshot_requested: bool = false;
+    var screenshot_filename: ?[]const u8 = null;
 
     // ============================================
     // Helper Functions
@@ -388,20 +429,113 @@ pub const WgpuNativeBackend = struct {
     // ============================================
 
     pub fn loadTexture(path: [:0]const u8) !Texture {
-        _ = path;
-        // TODO: Implement texture loading from file
-        // 1. Load image file (PNG/JPG) into memory
-        // 2. Create wgpu texture with proper dimensions
-        // 3. Upload pixel data to GPU
-        // 4. Create texture view
-        // 5. Return Texture handle
-        return error.NotImplemented;
+        const alloc = allocator orelse return error.NoAllocator;
+        const dev = device orelse return error.NoDevice;
+        const q = queue orelse return error.NoQueue;
+
+        // Load image file using stb_image
+        const file = std.fs.cwd().openFile(path, .{}) catch |err| {
+            std.log.err("[wgpu_native] Failed to open image file: {s} - {}", .{ path, err });
+            return error.FileNotFound;
+        };
+        defer file.close();
+
+        const file_size = try file.getEndPos();
+        const file_data = try alloc.alloc(u8, file_size);
+        defer alloc.free(file_data);
+
+        const bytes_read = try file.readAll(file_data);
+        if (bytes_read != file_size) {
+            return error.FileReadError;
+        }
+
+        // Decode image with stb_image
+        var width: c_int = 0;
+        var height: c_int = 0;
+        var channels: c_int = 0;
+
+        const stb_pixels = stb.stbi_load_from_memory(
+            file_data.ptr,
+            @intCast(file_data.len),
+            &width,
+            &height,
+            &channels,
+            4, // Force RGBA
+        );
+
+        if (stb_pixels == null) {
+            const failure_reason = stb.stbi_failure_reason();
+            if (failure_reason != null) {
+                std.log.err("[wgpu_native] stb_image failed: {s}", .{failure_reason});
+            }
+            return error.ImageLoadFailed;
+        }
+        defer stb.stbi_image_free(stb_pixels);
+
+        const w: u32 = @intCast(width);
+        const h: u32 = @intCast(height);
+        const pixel_count: usize = @intCast(width * height * 4);
+
+        // Create WebGPU texture
+        const empty_view_formats: [0]wgpu.TextureFormat = .{};
+        const wgpu_texture = dev.createTexture(&.{
+            .label = wgpu.StringView.fromSlice("Loaded Texture"),
+            .usage = wgpu.TextureUsages.texture_binding | wgpu.TextureUsages.copy_dst,
+            .dimension = .@"2d",
+            .size = .{ .width = w, .height = h, .depth_or_array_layers = 1 },
+            .format = .rgba8_unorm,
+            .mip_level_count = 1,
+            .sample_count = 1,
+            .view_format_count = 0,
+            .view_formats = &empty_view_formats,
+        }) orelse return error.TextureCreationFailed;
+
+        // Upload pixel data to GPU
+        q.writeTexture(
+            &.{
+                .texture = wgpu_texture,
+                .mip_level = 0,
+                .origin = .{ .x = 0, .y = 0, .z = 0 },
+                .aspect = .all,
+            },
+            stb_pixels,
+            pixel_count,
+            &.{
+                .offset = 0,
+                .bytes_per_row = w * 4,
+                .rows_per_image = h,
+            },
+            &.{ .width = w, .height = h, .depth_or_array_layers = 1 },
+        );
+
+        // Create texture view
+        const view = wgpu_texture.createView(&.{
+            .label = wgpu.StringView.fromSlice("Loaded Texture View"),
+            .format = .rgba8_unorm,
+            .dimension = .@"2d",
+            .base_mip_level = 0,
+            .mip_level_count = 1,
+            .base_array_layer = 0,
+            .array_layer_count = 1,
+            .aspect = .all,
+        }) orelse {
+            wgpu_texture.release();
+            return error.TextureViewCreationFailed;
+        };
+
+        std.log.info("[wgpu_native] Loaded texture: {s} ({}x{})", .{ path, width, height });
+
+        return Texture{
+            .texture = wgpu_texture,
+            .view = view,
+            .width = @intCast(width),
+            .height = @intCast(height),
+        };
     }
 
     pub fn unloadTexture(tex: Texture) void {
-        _ = tex;
-        // TODO: Implement texture cleanup
-        // Release texture view and texture
+        tex.view.release();
+        tex.texture.release();
     }
 
     pub fn isTextureValid(tex: Texture) bool {
@@ -420,14 +554,88 @@ pub const WgpuNativeBackend = struct {
         rotation: f32,
         tint: Color,
     ) void {
-        _ = tex;
-        _ = source;
-        _ = dest;
-        _ = origin;
-        _ = rotation;
-        _ = tint;
-        // TODO: Implement sprite rendering
-        // Add sprite to batch for rendering
+        if (sprite_batch) |*batch| {
+            const alloc = allocator orelse return;
+            const color_packed = tint.toAbgr();
+
+            // Calculate UV coordinates from source rectangle
+            const tex_w: f32 = @floatFromInt(tex.width);
+            const tex_h: f32 = @floatFromInt(tex.height);
+            const uv_x0 = source.x / tex_w;
+            const uv_y0 = source.y / tex_h;
+            const uv_x1 = (source.x + source.width) / tex_w;
+            const uv_y1 = (source.y + source.height) / tex_h;
+
+            // Calculate sprite corner positions
+            const x0 = -origin.x;
+            const y0 = -origin.y;
+            const x1 = dest.width - origin.x;
+            const y1 = dest.height - origin.y;
+
+            // Apply rotation if needed
+            const cos_r = @cos(rotation * std.math.pi / 180.0);
+            const sin_r = @sin(rotation * std.math.pi / 180.0);
+
+            // Transform and translate vertices
+            const base_idx: u32 = @intCast(batch.vertices.items.len);
+
+            // Top-left
+            const tx0 = dest.x + (x0 * cos_r - y0 * sin_r);
+            const ty0 = dest.y + (x0 * sin_r + y0 * cos_r);
+            batch.vertices.append(alloc, SpriteVertex.init(tx0, ty0, uv_x0, uv_y0, color_packed)) catch return;
+
+            // Top-right
+            const tx1 = dest.x + (x1 * cos_r - y0 * sin_r);
+            const ty1 = dest.y + (x1 * sin_r + y0 * cos_r);
+            batch.vertices.append(alloc, SpriteVertex.init(tx1, ty1, uv_x1, uv_y0, color_packed)) catch return;
+
+            // Bottom-right
+            const tx2 = dest.x + (x1 * cos_r - y1 * sin_r);
+            const ty2 = dest.y + (x1 * sin_r + y1 * cos_r);
+            batch.vertices.append(alloc, SpriteVertex.init(tx2, ty2, uv_x1, uv_y1, color_packed)) catch return;
+
+            // Bottom-left
+            const tx3 = dest.x + (x0 * cos_r - y1 * sin_r);
+            const ty3 = dest.y + (x0 * sin_r + y1 * cos_r);
+            batch.vertices.append(alloc, SpriteVertex.init(tx3, ty3, uv_x0, uv_y1, color_packed)) catch return;
+
+            // Add indices for 2 triangles (CCW winding)
+            batch.indices.append(alloc, base_idx + 0) catch return;
+            batch.indices.append(alloc, base_idx + 1) catch return;
+            batch.indices.append(alloc, base_idx + 2) catch return;
+
+            batch.indices.append(alloc, base_idx + 0) catch return;
+            batch.indices.append(alloc, base_idx + 2) catch return;
+            batch.indices.append(alloc, base_idx + 3) catch return;
+
+            // Track this draw call - check if we need to create a new draw call
+            if (sprite_draw_calls) |*calls| {
+                const needs_new_call = if (calls.items.len == 0)
+                    true
+                else blk: {
+                    const last_call = &calls.items[calls.items.len - 1];
+                    // Check if texture changed (compare texture pointers)
+                    const tex_changed = last_call.texture.texture != tex.texture;
+                    break :blk tex_changed;
+                };
+
+                if (needs_new_call) {
+                    // Create new draw call for this texture
+                    calls.append(alloc, SpriteDrawCall{
+                        .texture = tex,
+                        .vertex_start = base_idx,
+                        .vertex_count = 4,
+                        .index_start = @intCast(batch.indices.items.len - 6),
+                        .index_count = 6,
+                    }) catch return;
+                } else {
+                    // Extend current draw call
+                    var last_call = &calls.items[calls.items.len - 1];
+                    last_call.vertex_count += 4;
+                    last_call.index_count += 6;
+                }
+            }
+        }
     }
 
     // ============================================
@@ -439,47 +647,97 @@ pub const WgpuNativeBackend = struct {
     }
 
     pub fn drawRectangleLines(x: i32, y: i32, width: i32, height: i32, col: Color) void {
-        _ = x;
-        _ = y;
-        _ = width;
-        _ = height;
-        _ = col;
-        // TODO: Implement rectangle outline
+        drawRectangleLinesV(@floatFromInt(x), @floatFromInt(y), @floatFromInt(width), @floatFromInt(height), col);
     }
 
     pub fn drawRectangleV(x: f32, y: f32, w: f32, h: f32, col: Color) void {
-        _ = x;
-        _ = y;
-        _ = w;
-        _ = h;
-        _ = col;
-        // TODO: Implement filled rectangle
-        // Add rectangle vertices to shape batch
+        if (shape_batch) |*batch| {
+            const alloc = allocator orelse return;
+            const color_packed = col.toAbgr();
+
+            // Get current vertex index for indexing
+            const base_idx: u32 = @intCast(batch.vertices.items.len);
+
+            // Add 4 vertices for rectangle (2 triangles)
+            batch.vertices.append(alloc, ColorVertex.init(x, y, color_packed)) catch return;
+            batch.vertices.append(alloc, ColorVertex.init(x + w, y, color_packed)) catch return;
+            batch.vertices.append(alloc, ColorVertex.init(x + w, y + h, color_packed)) catch return;
+            batch.vertices.append(alloc, ColorVertex.init(x, y + h, color_packed)) catch return;
+
+            // Add 6 indices for 2 triangles (CCW winding)
+            // Triangle 1: top-left, top-right, bottom-right
+            batch.indices.append(alloc, base_idx + 0) catch return;
+            batch.indices.append(alloc, base_idx + 1) catch return;
+            batch.indices.append(alloc, base_idx + 2) catch return;
+
+            // Triangle 2: top-left, bottom-right, bottom-left
+            batch.indices.append(alloc, base_idx + 0) catch return;
+            batch.indices.append(alloc, base_idx + 2) catch return;
+            batch.indices.append(alloc, base_idx + 3) catch return;
+        }
     }
 
     pub fn drawRectangleLinesV(x: f32, y: f32, w: f32, h: f32, col: Color) void {
-        _ = x;
-        _ = y;
-        _ = w;
-        _ = h;
-        _ = col;
-        // TODO: Implement rectangle outline
+        // Draw rectangle outline as 4 lines
+        const thickness: f32 = 1.0;
+        drawLineEx(x, y, x + w, y, thickness, col); // Top
+        drawLineEx(x + w, y, x + w, y + h, thickness, col); // Right
+        drawLineEx(x + w, y + h, x, y + h, thickness, col); // Bottom
+        drawLineEx(x, y + h, x, y, thickness, col); // Left
     }
 
     pub fn drawCircle(center_x: f32, center_y: f32, radius: f32, col: Color) void {
-        _ = center_x;
-        _ = center_y;
-        _ = radius;
-        _ = col;
-        // TODO: Implement filled circle
+        if (shape_batch) |*batch| {
+            const alloc = allocator orelse return;
+            const color_packed = col.toAbgr();
+            const segments: u32 = 36; // 36 segments for smooth circle
+
+            const base_idx: u32 = @intCast(batch.vertices.items.len);
+
+            // Add center vertex
+            batch.vertices.append(alloc, ColorVertex.init(center_x, center_y, color_packed)) catch return;
+
+            // Add perimeter vertices
+            var i: u32 = 0;
+            while (i <= segments) : (i += 1) {
+                const angle = (@as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(segments))) * 2.0 * std.math.pi;
+                const x = center_x + @cos(angle) * radius;
+                const y = center_y + @sin(angle) * radius;
+                batch.vertices.append(alloc, ColorVertex.init(x, y, color_packed)) catch return;
+            }
+
+            // Add indices for triangles (center + 2 perimeter vertices per triangle)
+            i = 0;
+            while (i < segments) : (i += 1) {
+                batch.indices.append(alloc, base_idx) catch return; // center
+                batch.indices.append(alloc, base_idx + i + 1) catch return; // current perimeter vertex
+                batch.indices.append(alloc, base_idx + i + 2) catch return; // next perimeter vertex
+            }
+        }
     }
 
     pub fn drawCircleLines(center_x: f32, center_y: f32, radius: f32, col: Color) void {
-        _ = center_x;
-        _ = center_y;
-        _ = radius;
-        _ = col;
-        // TODO: Implement circle outline
+        if (shape_batch) |*batch| {
+            const alloc = allocator orelse return;
+            const color_packed = col.toAbgr();
+            const segments: u32 = 36; // 36 segments for smooth circle
+            const thickness: f32 = 1.0;
+
+            // Draw circle as connected line segments
+            var i: u32 = 0;
+            while (i < segments) : (i += 1) {
+                const angle1 = (@as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(segments))) * 2.0 * std.math.pi;
+                const angle2 = (@as(f32, @floatFromInt(i + 1)) / @as(f32, @floatFromInt(segments))) * 2.0 * std.math.pi;
+                const x1 = center_x + @cos(angle1) * radius;
+                const y1 = center_y + @sin(angle1) * radius;
+                const x2 = center_x + @cos(angle2) * radius;
+                const y2 = center_y + @sin(angle2) * radius;
+                drawLineEx(x1, y1, x2, y2, thickness, col);
+            }
+            _ = batch;
+            _ = alloc;
+            _ = color_packed;
+        }
     }
 
     pub fn drawLine(start_x: f32, start_y: f32, end_x: f32, end_y: f32, col: Color) void {
@@ -487,55 +745,114 @@ pub const WgpuNativeBackend = struct {
     }
 
     pub fn drawLineEx(start_x: f32, start_y: f32, end_x: f32, end_y: f32, thickness: f32, col: Color) void {
-        _ = start_x;
-        _ = start_y;
-        _ = end_x;
-        _ = end_y;
-        _ = thickness;
-        _ = col;
-        // TODO: Implement line with thickness
+        if (shape_batch) |*batch| {
+            const alloc = allocator orelse return;
+            const color_packed = col.toAbgr();
+
+            // Calculate line direction and perpendicular
+            const dx = end_x - start_x;
+            const dy = end_y - start_y;
+            const len = @sqrt(dx * dx + dy * dy);
+
+            if (len < 0.0001) return; // Skip degenerate lines
+
+            // Normalized perpendicular vector (for thickness)
+            const perp_x = -dy / len * (thickness * 0.5);
+            const perp_y = dx / len * (thickness * 0.5);
+
+            const base_idx: u32 = @intCast(batch.vertices.items.len);
+
+            // Create quad with 4 vertices
+            // Top-left and top-right at start
+            batch.vertices.append(alloc, ColorVertex.init(start_x + perp_x, start_y + perp_y, color_packed)) catch return;
+            batch.vertices.append(alloc, ColorVertex.init(start_x - perp_x, start_y - perp_y, color_packed)) catch return;
+            // Bottom-right and bottom-left at end
+            batch.vertices.append(alloc, ColorVertex.init(end_x - perp_x, end_y - perp_y, color_packed)) catch return;
+            batch.vertices.append(alloc, ColorVertex.init(end_x + perp_x, end_y + perp_y, color_packed)) catch return;
+
+            // Add 6 indices for 2 triangles (CCW winding)
+            batch.indices.append(alloc, base_idx + 0) catch return;
+            batch.indices.append(alloc, base_idx + 1) catch return;
+            batch.indices.append(alloc, base_idx + 2) catch return;
+
+            batch.indices.append(alloc, base_idx + 0) catch return;
+            batch.indices.append(alloc, base_idx + 2) catch return;
+            batch.indices.append(alloc, base_idx + 3) catch return;
+        }
     }
 
     pub fn drawTriangle(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: Color) void {
-        _ = x1;
-        _ = y1;
-        _ = x2;
-        _ = y2;
-        _ = x3;
-        _ = y3;
-        _ = col;
-        // TODO: Implement filled triangle
+        if (shape_batch) |*batch| {
+            const alloc = allocator orelse return;
+            const color_packed = col.toAbgr();
+
+            const base_idx: u32 = @intCast(batch.vertices.items.len);
+
+            // Add 3 vertices for triangle
+            batch.vertices.append(alloc, ColorVertex.init(x1, y1, color_packed)) catch return;
+            batch.vertices.append(alloc, ColorVertex.init(x2, y2, color_packed)) catch return;
+            batch.vertices.append(alloc, ColorVertex.init(x3, y3, color_packed)) catch return;
+
+            // Add 3 indices for 1 triangle (CCW winding)
+            batch.indices.append(alloc, base_idx + 0) catch return;
+            batch.indices.append(alloc, base_idx + 1) catch return;
+            batch.indices.append(alloc, base_idx + 2) catch return;
+        }
     }
 
     pub fn drawTriangleLines(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: Color) void {
-        _ = x1;
-        _ = y1;
-        _ = x2;
-        _ = y2;
-        _ = x3;
-        _ = y3;
-        _ = col;
-        // TODO: Implement triangle outline
+        // Draw triangle outline as 3 lines
+        const thickness: f32 = 1.0;
+        drawLineEx(x1, y1, x2, y2, thickness, col);
+        drawLineEx(x2, y2, x3, y3, thickness, col);
+        drawLineEx(x3, y3, x1, y1, thickness, col);
     }
 
     pub fn drawPoly(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
-        _ = center_x;
-        _ = center_y;
-        _ = sides;
-        _ = radius;
-        _ = rotation;
-        _ = col;
-        // TODO: Implement filled polygon
+        if (shape_batch) |*batch| {
+            const alloc = allocator orelse return;
+            const color_packed = col.toAbgr();
+            const num_sides: u32 = @intCast(sides);
+
+            const base_idx: u32 = @intCast(batch.vertices.items.len);
+
+            // Add center vertex
+            batch.vertices.append(alloc, ColorVertex.init(center_x, center_y, color_packed)) catch return;
+
+            // Add perimeter vertices
+            var i: u32 = 0;
+            while (i <= num_sides) : (i += 1) {
+                const angle = rotation + (@as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_sides))) * 2.0 * std.math.pi;
+                const x = center_x + @cos(angle) * radius;
+                const y = center_y + @sin(angle) * radius;
+                batch.vertices.append(alloc, ColorVertex.init(x, y, color_packed)) catch return;
+            }
+
+            // Add indices for triangles (center + 2 perimeter vertices per triangle)
+            i = 0;
+            while (i < num_sides) : (i += 1) {
+                batch.indices.append(alloc, base_idx) catch return; // center
+                batch.indices.append(alloc, base_idx + i + 1) catch return; // current perimeter vertex
+                batch.indices.append(alloc, base_idx + i + 2) catch return; // next perimeter vertex
+            }
+        }
     }
 
     pub fn drawPolyLines(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
-        _ = center_x;
-        _ = center_y;
-        _ = sides;
-        _ = radius;
-        _ = rotation;
-        _ = col;
-        // TODO: Implement polygon outline
+        const num_sides: u32 = @intCast(sides);
+        const thickness: f32 = 1.0;
+
+        // Draw polygon outline as connected line segments
+        var i: u32 = 0;
+        while (i < num_sides) : (i += 1) {
+            const angle1 = rotation + (@as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_sides))) * 2.0 * std.math.pi;
+            const angle2 = rotation + (@as(f32, @floatFromInt(i + 1)) / @as(f32, @floatFromInt(num_sides))) * 2.0 * std.math.pi;
+            const x1 = center_x + @cos(angle1) * radius;
+            const y1 = center_y + @sin(angle1) * radius;
+            const x2 = center_x + @cos(angle2) * radius;
+            const y2 = center_y + @sin(angle2) * radius;
+            drawLineEx(x1, y1, x2, y2, thickness, col);
+        }
     }
 
     // ============================================
@@ -690,6 +1007,7 @@ pub const WgpuNativeBackend = struct {
         // 8. Initialize batching systems
         shape_batch = ShapeBatch.init(alloc);
         sprite_batch = SpriteBatch.init(alloc);
+        sprite_draw_calls = .{};
 
         std.log.info("[wgpu_native] Initialized with {}x{} framebuffer", .{ screen_width, screen_height });
     }
@@ -763,10 +1081,25 @@ pub const WgpuNativeBackend = struct {
 
         // Create uniform buffer for projection matrix
         uniform_buffer = dev.createBuffer(&.{
-            .label = wgpu.StringView.fromSlice("Projection Matrix Uniform"),
+            .label = wgpu.StringView.fromSlice("Uniform Buffer"),
             .usage = wgpu.BufferUsages.uniform | wgpu.BufferUsages.copy_dst,
             .size = 64, // mat4x4<f32> = 16 floats * 4 bytes
             .mapped_at_creation = 0, // WGPUBool false
+        });
+
+        // Create texture sampler (shared for all textures)
+        texture_sampler = dev.createSampler(&.{
+            .label = wgpu.StringView.fromSlice("Texture Sampler"),
+            .address_mode_u = .clamp_to_edge,
+            .address_mode_v = .clamp_to_edge,
+            .address_mode_w = .clamp_to_edge,
+            .mag_filter = .linear,
+            .min_filter = .linear,
+            .mipmap_filter = .linear,
+            .lod_min_clamp = 0.0,
+            .lod_max_clamp = 32.0,
+            .compare = .undefined,
+            .max_anisotropy = 1,
         });
 
         // Create shape pipeline
@@ -1008,6 +1341,10 @@ pub const WgpuNativeBackend = struct {
             batch.deinit(allocator.?);
             sprite_batch = null;
         }
+        if (sprite_draw_calls) |*calls| {
+            calls.deinit(allocator.?);
+            sprite_draw_calls = null;
+        }
 
         // Release pipelines
         if (shape_pipeline) |pipeline| {
@@ -1037,6 +1374,12 @@ pub const WgpuNativeBackend = struct {
         if (uniform_buffer) |buf| {
             buf.release();
             uniform_buffer = null;
+        }
+
+        // Release texture sampler
+        if (texture_sampler) |sampler| {
+            sampler.release();
+            texture_sampler = null;
         }
 
         // Release surface (must be released before adapter)
@@ -1091,8 +1434,10 @@ pub const WgpuNativeBackend = struct {
     }
 
     pub fn takeScreenshot(filename: [*:0]const u8) void {
-        _ = filename;
-        // TODO: Implement screenshot capture
+        // Request screenshot to be taken on next endDrawing()
+        screenshot_requested = true;
+        screenshot_filename = std.mem.span(filename);
+        std.log.info("Screenshot requested: {s}", .{filename});
     }
 
     // ============================================
@@ -1107,6 +1452,67 @@ pub const WgpuNativeBackend = struct {
             frame_delta = @max(0.0001, @min(frame_delta, 0.25));
         }
         last_frame_time = current_time;
+
+        // Update projection matrix in uniform buffer
+        const q = queue orelse return;
+        const ub = uniform_buffer orelse return;
+
+        const w: f32 = @floatFromInt(screen_width);
+        const h: f32 = @floatFromInt(screen_height);
+
+        // Base orthographic projection: maps (0,0)-(width,height) to NDC (-1,-1)-(1,1)
+        // Y-axis points down in screen space
+        var projection = [16]f32{
+            2.0 / w, 0.0,      0.0, 0.0,
+            0.0,     -2.0 / h, 0.0, 0.0,
+            0.0,     0.0,      1.0, 0.0,
+            -1.0,    1.0,      0.0, 1.0,
+        };
+
+        // Apply camera transformation if in camera mode
+        if (in_camera_mode and current_camera != null) {
+            const cam = current_camera.?;
+
+            // Create camera transformation matrix
+            // Order: translate to target, rotate, scale by zoom, translate by offset
+            const zoom = cam.zoom;
+            const angle = -cam.rotation * std.math.pi / 180.0; // Negate for correct rotation
+            const cos_r = @cos(angle);
+            const sin_r = @sin(angle);
+
+            // Camera view matrix (world to camera space)
+            const view = [16]f32{
+                cos_r * zoom,                                                                sin_r * zoom,                                                                 0.0, 0.0,
+                -sin_r * zoom,                                                               cos_r * zoom,                                                                 0.0, 0.0,
+                0.0,                                                                         0.0,                                                                          1.0, 0.0,
+                (-cam.target.x * cos_r * zoom + cam.target.y * sin_r * zoom + cam.offset.x), (-cam.target.x * -sin_r * zoom + cam.target.y * cos_r * zoom + cam.offset.y), 0.0, 1.0,
+            };
+
+            // Multiply projection * view
+            projection = multiplyMatrices(projection, view);
+        }
+
+        q.writeBuffer(ub, 0, &projection, @sizeOf(@TypeOf(projection)));
+    }
+
+    // Helper function to multiply two 4x4 matrices (column-major order)
+    fn multiplyMatrices(a: [16]f32, b: [16]f32) [16]f32 {
+        var result: [16]f32 = undefined;
+
+        var row: usize = 0;
+        while (row < 4) : (row += 1) {
+            var col: usize = 0;
+            while (col < 4) : (col += 1) {
+                var sum: f32 = 0.0;
+                var i: usize = 0;
+                while (i < 4) : (i += 1) {
+                    sum += a[i * 4 + row] * b[col * 4 + i];
+                }
+                result[col * 4 + row] = sum;
+            }
+        }
+
+        return result;
     }
 
     pub fn endDrawing() void {
@@ -1155,8 +1561,156 @@ pub const WgpuNativeBackend = struct {
         }) orelse return;
         defer render_pass.release();
 
-        // TODO: 4. Render batched shapes (Phase 2.6)
-        // TODO: 5. Render batched sprites (Phase 2.7)
+        // Apply scissor rect if enabled
+        if (scissor_enabled) {
+            const x: u32 = @intFromFloat(@max(0, scissor_rect.x));
+            const y: u32 = @intFromFloat(@max(0, scissor_rect.y));
+            const width: u32 = @intFromFloat(@max(1, scissor_rect.width));
+            const height: u32 = @intFromFloat(@max(1, scissor_rect.height));
+            render_pass.setScissorRect(x, y, width, height);
+        }
+
+        // 4. Render batched shapes
+        if (shape_batch) |*batch| {
+            if (!batch.isEmpty()) {
+                const vertex_count = batch.vertices.items.len;
+                const index_count = batch.indices.items.len;
+
+                // Debug log on first render
+                if (render_frame_count == 0) {
+                    std.log.info("[wgpu_native] Rendering shape batch: {} vertices, {} indices", .{ vertex_count, index_count });
+                }
+
+                // Create vertex buffer
+                const vertex_buffer = dev.createBuffer(&.{
+                    .label = wgpu.StringView.fromSlice("Shape Vertex Buffer"),
+                    .usage = wgpu.BufferUsages.vertex | wgpu.BufferUsages.copy_dst,
+                    .size = @intCast(vertex_count * @sizeOf(ColorVertex)),
+                    .mapped_at_creation = 0, // WGPUBool false
+                }) orelse return;
+                defer vertex_buffer.release();
+
+                // Create index buffer
+                const index_buffer = dev.createBuffer(&.{
+                    .label = wgpu.StringView.fromSlice("Shape Index Buffer"),
+                    .usage = wgpu.BufferUsages.index | wgpu.BufferUsages.copy_dst,
+                    .size = @intCast(index_count * @sizeOf(u32)),
+                    .mapped_at_creation = 0, // WGPUBool false
+                }) orelse return;
+                defer index_buffer.release();
+
+                // Upload vertex data
+                q.writeBuffer(vertex_buffer, 0, batch.vertices.items.ptr, vertex_count * @sizeOf(ColorVertex));
+
+                // Upload index data
+                q.writeBuffer(index_buffer, 0, batch.indices.items.ptr, index_count * @sizeOf(u32));
+
+                // Set pipeline and bind group
+                render_pass.setPipeline(shape_pipeline.?);
+                render_pass.setBindGroup(0, shape_bind_group.?, 0, null);
+
+                // Set vertex and index buffers
+                render_pass.setVertexBuffer(0, vertex_buffer, 0, @intCast(vertex_count * @sizeOf(ColorVertex)));
+                render_pass.setIndexBuffer(index_buffer, .uint32, 0, @intCast(index_count * @sizeOf(u32)));
+
+                // Draw
+                render_pass.drawIndexed(@intCast(index_count), 1, 0, 0, 0);
+
+                // Clear batch for next frame
+                batch.clear();
+            }
+        }
+
+        // 5. Render batched sprites (with multi-texture support)
+        if (sprite_batch) |*batch| {
+            if (!batch.isEmpty() and sprite_draw_calls != null) {
+                const calls = sprite_draw_calls.?;
+                if (calls.items.len == 0) {
+                    batch.clear();
+                } else {
+                    const vertex_count = batch.vertices.items.len;
+                    const index_count = batch.indices.items.len;
+
+                    // Debug log on first render
+                    if (render_frame_count == 0) {
+                        std.log.info("[wgpu_native] Rendering sprite batch: {} vertices, {} indices, {} draw calls", .{ vertex_count, index_count, calls.items.len });
+                    }
+
+                    // Create shared vertex buffer for all sprites
+                    const vertex_buffer = dev.createBuffer(&.{
+                        .label = wgpu.StringView.fromSlice("Sprite Vertex Buffer"),
+                        .usage = wgpu.BufferUsages.vertex | wgpu.BufferUsages.copy_dst,
+                        .size = @intCast(vertex_count * @sizeOf(SpriteVertex)),
+                        .mapped_at_creation = 0,
+                    }) orelse return;
+                    defer vertex_buffer.release();
+
+                    // Create shared index buffer for all sprites
+                    const index_buffer = dev.createBuffer(&.{
+                        .label = wgpu.StringView.fromSlice("Sprite Index Buffer"),
+                        .usage = wgpu.BufferUsages.index | wgpu.BufferUsages.copy_dst,
+                        .size = @intCast(index_count * @sizeOf(u32)),
+                        .mapped_at_creation = 0,
+                    }) orelse return;
+                    defer index_buffer.release();
+
+                    // Upload all vertex and index data once
+                    q.writeBuffer(vertex_buffer, 0, batch.vertices.items.ptr, vertex_count * @sizeOf(SpriteVertex));
+                    q.writeBuffer(index_buffer, 0, batch.indices.items.ptr, index_count * @sizeOf(u32));
+
+                    // Set pipeline once
+                    render_pass.setPipeline(sprite_pipeline.?);
+
+                    // Set buffers once
+                    render_pass.setVertexBuffer(0, vertex_buffer, 0, @intCast(vertex_count * @sizeOf(SpriteVertex)));
+                    render_pass.setIndexBuffer(index_buffer, .uint32, 0, @intCast(index_count * @sizeOf(u32)));
+
+                    // Render each draw call with its own texture
+                    for (calls.items) |call| {
+                        // Create bind group for this texture
+                        const sprite_bind_group = dev.createBindGroup(&.{
+                            .label = wgpu.StringView.fromSlice("Sprite Bind Group"),
+                            .layout = sprite_bind_group_layout.?,
+                            .entry_count = 3,
+                            .entries = &[_]wgpu.BindGroupEntry{
+                                .{
+                                    .binding = 0,
+                                    .buffer = uniform_buffer.?,
+                                    .size = 64,
+                                },
+                                .{
+                                    .binding = 1,
+                                    .texture_view = call.texture.view,
+                                },
+                                .{
+                                    .binding = 2,
+                                    .sampler = texture_sampler.?,
+                                },
+                            },
+                        }) orelse continue;
+                        defer sprite_bind_group.release();
+
+                        // Bind texture-specific bind group
+                        render_pass.setBindGroup(0, sprite_bind_group, 0, null);
+
+                        // Draw this call's indices
+                        render_pass.drawIndexed(
+                            call.index_count,
+                            1, // instance count
+                            call.index_start,
+                            @intCast(call.vertex_start),
+                            0, // first instance
+                        );
+                    }
+
+                    // Clear batch and draw calls for next frame
+                    batch.clear();
+                    if (sprite_draw_calls) |*dc| {
+                        dc.clearRetainingCapacity();
+                    }
+                }
+            }
+        }
 
         // 6. End render pass
         render_pass.end();
@@ -1169,8 +1723,40 @@ pub const WgpuNativeBackend = struct {
 
         q.submit(&[_]*wgpu.CommandBuffer{command_buffer});
 
+        // 7.5. Handle screenshot if requested
+        if (screenshot_requested) {
+            captureScreenshot(surface_texture.texture.?);
+            screenshot_requested = false;
+            screenshot_filename = null;
+        }
+
         // 8. Present surface
         _ = surf.present();
+
+        // Increment render frame count
+        render_frame_count += 1;
+    }
+
+    fn captureScreenshot(tex: *wgpu.Texture) void {
+        _ = tex;
+        const filename = screenshot_filename orelse {
+            std.log.err("Screenshot requested but no filename provided", .{});
+            return;
+        };
+
+        // TODO: Implement full async screenshot capture
+        // This requires:
+        // 1. Creating a staging buffer with MAP_READ usage
+        // 2. Copying texture to buffer via command encoder
+        // 3. Submitting and waiting for async buffer mapping
+        // 4. Reading mapped data
+        // 5. Writing PNG with stb_image_write
+        //
+        // The challenge is properly waiting for async operations in wgpu_native.
+        // For now, this is stubbed out.
+
+        std.log.warn("Screenshot capture not yet implemented: {s}", .{filename});
+        std.log.warn("TODO: Implement async buffer readback and PNG encoding", .{});
     }
 
     pub fn clearBackground(col: Color) void {
@@ -1182,15 +1768,17 @@ pub const WgpuNativeBackend = struct {
     // ============================================
 
     pub fn beginScissorMode(x: i32, y: i32, w: i32, h: i32) void {
-        _ = x;
-        _ = y;
-        _ = w;
-        _ = h;
-        // TODO: Implement scissor mode
+        scissor_enabled = true;
+        scissor_rect = .{
+            .x = @floatFromInt(x),
+            .y = @floatFromInt(y),
+            .width = @floatFromInt(w),
+            .height = @floatFromInt(h),
+        };
     }
 
     pub fn endScissorMode() void {
-        // TODO: Implement scissor mode end
+        scissor_enabled = false;
     }
 
     // ============================================
