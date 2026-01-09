@@ -1115,17 +1115,23 @@ pub const SokolBackend = struct {
     /// });
     /// ```
     ///
-    /// Note: This function may never return on some platforms.
-    /// All cleanup should be done in the cleanup callback.
+    /// Note: This function may never return on some platforms (native).
+    /// On Emscripten/WebAssembly, it returns immediately after setting up
+    /// the async main loop. All cleanup should be done in the cleanup callback.
     pub fn run(config: RunConfig) void {
-        // Create context on stack - sokol_app will keep a pointer to it
-        var context = RunContext{
+        // Use static storage to ensure the context survives across async
+        // main loop iterations on Emscripten (where sapp.run returns immediately)
+        const S = struct {
+            var context: RunContext = undefined;
+        };
+
+        S.context = RunContext{
             .config = config,
             .pass_action = .{},
         };
 
         // Set up pass action with clear color
-        context.pass_action.colors[0] = .{
+        S.context.pass_action.colors[0] = .{
             .load_action = .CLEAR,
             .clear_value = config.clear_color.toSg(),
         };
@@ -1135,7 +1141,7 @@ pub const SokolBackend = struct {
             .frame_userdata_cb = internalFrame,
             .cleanup_userdata_cb = internalCleanup,
             .event_userdata_cb = internalEvent,
-            .user_data = &context,
+            .user_data = &S.context,
             .width = config.width,
             .height = config.height,
             .window_title = config.title.ptr,
