@@ -81,6 +81,8 @@ pub const bgfx_backend = @import("backend/bgfx_backend.zig");
 pub const BgfxBackend = bgfx_backend.BgfxBackend;
 pub const zgpu_backend = @import("backend/zgpu_backend.zig");
 pub const ZgpuBackend = zgpu_backend.ZgpuBackend;
+pub const wgpu_native_backend = @import("backend/wgpu_native_backend.zig");
+pub const WgpuNativeBackend = wgpu_native_backend.WgpuNativeBackend;
 
 // Default backend (raylib)
 pub const DefaultBackend = Backend(RaylibBackend);
