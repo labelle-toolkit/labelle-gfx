@@ -122,6 +122,11 @@ pub const BgfxBackend = struct {
     // pass their window pointer for ImGui or other GUI libraries
     threadlocal var glfw_window: ?*anyopaque = null;
 
+    // GUI render callback (for ImGui integration)
+    // Called during endDrawing() before bgfx.frame() to allow GUI draw submission
+    pub const GuiRenderCallback = *const fn () void;
+    threadlocal var gui_render_callback: ?GuiRenderCallback = null;
+
     // View IDs
     const VIEW_ID: bgfx.ViewId = 0;
     const SPRITE_VIEW_ID: bgfx.ViewId = 1;
@@ -863,7 +868,29 @@ pub const BgfxBackend = struct {
         glfw_window = null;
     }
 
+    // =========================================================================
+    // GUI Integration - Render Callback
+    // =========================================================================
+
+    /// Register a callback to be called during rendering before frame submission.
+    /// This allows external GUI systems (like ImGui) to submit their draw calls.
+    ///
+    /// SAFETY: This function accepts a raw function pointer that will be executed during
+    /// the render loop. Only pass function pointers from trusted application code.
+    /// Do not use with user-provided or externally-sourced callbacks.
+    pub fn registerGuiRenderCallback(callback: GuiRenderCallback) void {
+        gui_render_callback = callback;
+    }
+
+    /// Unregister the GUI render callback.
+    pub fn unregisterGuiRenderCallback() void {
+        gui_render_callback = null;
+    }
+
     pub fn closeWindow() void {
+        // Clear GUI render callback
+        unregisterGuiRenderCallback();
+
         // Clean up debug draw
         if (dd_encoder) |encoder| {
             encoder.destroy();
@@ -952,6 +979,12 @@ pub const BgfxBackend = struct {
     pub fn endDrawing() void {
         if (dd_encoder) |encoder| {
             encoder.end();
+        }
+
+        // Call GUI render callback if registered (for ImGui, etc.)
+        // This allows external GUI systems to submit their draw calls before frame
+        if (gui_render_callback) |callback| {
+            callback();
         }
 
         _ = bgfx.frame(false);
