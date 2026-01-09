@@ -63,6 +63,10 @@
             .hash = "N-V-__8AAGsYnAT5RIzeAu881RveLghQ1EidqgVBVx10gVTo",
             .lazy = true,
         },
+        .wgpu_native_zig = .{
+            .url = "git+https://github.com/apotema/wgpu_native_zig#fb54d9c8cbefa0b8d0e8224aa8323b7974ae454f",
+            .hash = "1220ec8a938a2b278c3e5f8dc624b98342f610dfd42099f0d8fe85f3aaf3fe8dd1a3",
+        },
     },
 
     .paths = .{

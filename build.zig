@@ -60,6 +60,13 @@ pub fn build(b: *std.Build) void {
     });
     const zgpu = zgpu_dep.module("root");
 
+    // wgpu_native_zig dependency (lower-level WebGPU bindings)
+    const wgpu_native_dep = b.dependency("wgpu_native_zig", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const wgpu_native = wgpu_native_dep.module("wgpu");
+
     // Main library module
     const lib_mod = b.addModule("labelle", .{
         .root_source_file = b.path("src/lib.zig"),
@@ -73,6 +80,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zbgfx", .module = zbgfx },
             .{ .name = "zgpu", .module = zgpu },
             .{ .name = "zglfw", .module = zglfw },
+            .{ .name = "wgpu", .module = wgpu_native },
         },
     });
 
@@ -102,6 +110,9 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "sokol", .module = sokol },
                 .{ .name = "sdl2", .module = sdl },
                 .{ .name = "zbgfx", .module = zbgfx },
+                .{ .name = "zgpu", .module = zgpu },
+                .{ .name = "zglfw", .module = zglfw },
+                .{ .name = "wgpu", .module = wgpu_native },
             },
         }),
     });
@@ -401,6 +412,34 @@ pub fn build(b: *std.Build) void {
 
         const full_run_step_25 = b.step("run-25_sokol_run", "Sokol run() API example");
         full_run_step_25.dependOn(&run_cmd_25.step);
+    }
+
+    // Example 26: wgpu_native backend (lower-level WebGPU) with GLFW
+    {
+        const wgpu_native_example_mod = b.createModule(.{
+            .root_source_file = b.path("examples/25_wgpu_native_backend/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zglfw", .module = zglfw },
+                .{ .name = "labelle", .module = lib_mod },
+            },
+        });
+
+        const wgpu_native_example = b.addExecutable(.{
+            .name = "26_wgpu_native_backend",
+            .root_module = wgpu_native_example_mod,
+        });
+
+        // Link glfw library
+        wgpu_native_example.linkLibrary(glfw_lib);
+
+        const run_cmd_26 = b.addRunArtifact(wgpu_native_example);
+        const run_step_26 = b.step("run-example-26", "wgpu_native backend example with GLFW");
+        run_step_26.dependOn(&run_cmd_26.step);
+
+        const full_run_step_26 = b.step("run-25_wgpu_native_backend", "wgpu_native backend example with GLFW (kept as 25 for compatibility)");
+        full_run_step_26.dependOn(&run_cmd_26.step);
     }
 
     // Converter tool
