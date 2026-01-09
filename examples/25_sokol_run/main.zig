@@ -1,10 +1,10 @@
-//! Example 23: Sokol Run API
+//! Example 25: Sokol Run API
 //!
 //! This example demonstrates the simplified SokolBackend.run() API.
 //! Instead of manually exporting sokol_app callbacks, you can use
 //! run() which handles all the sokol setup internally.
 //!
-//! Run with: zig build run-example-23
+//! Run with: zig build run-example-25
 
 const std = @import("std");
 const gfx = @import("labelle");
@@ -131,7 +131,7 @@ pub fn main() void {
         .event = myEvent,
         .width = 800,
         .height = 600,
-        .title = "Example 23: Sokol Run API",
+        .title = "Example 25: Sokol Run API",
         .clear_color = .{ .r = 40, .g = 40, .b = 60, .a = 255 },
     });
 }

@@ -1091,10 +1091,12 @@ pub const SokolBackend = struct {
         clear_color: Color = Color{ .r = 30, .g = 30, .b = 40, .a = 255 },
     };
 
-    // Global state for callback forwarding
-    // These are set by run() and used by the internal callbacks
-    var run_config: RunConfig = .{};
-    var pass_action: sg.PassAction = .{};
+    /// Internal context for callback forwarding via user_data.
+    /// This avoids global state by using sokol_app's user_data mechanism.
+    const RunContext = struct {
+        config: RunConfig,
+        pass_action: sg.PassAction,
+    };
 
     /// Run a sokol application with the provided callbacks.
     ///
@@ -1116,20 +1118,24 @@ pub const SokolBackend = struct {
     /// Note: This function may never return on some platforms.
     /// All cleanup should be done in the cleanup callback.
     pub fn run(config: RunConfig) void {
-        run_config = config;
+        // Create context on stack - sokol_app will keep a pointer to it
+        var context = RunContext{
+            .config = config,
+            .pass_action = .{},
+        };
 
         // Set up pass action with clear color
-        pass_action = .{};
-        pass_action.colors[0] = .{
+        context.pass_action.colors[0] = .{
             .load_action = .CLEAR,
             .clear_value = config.clear_color.toSg(),
         };
 
         sapp.run(.{
-            .init_cb = internalInit,
-            .frame_cb = internalFrame,
-            .cleanup_cb = internalCleanup,
-            .event_cb = internalEvent,
+            .init_userdata_cb = internalInit,
+            .frame_userdata_cb = internalFrame,
+            .cleanup_userdata_cb = internalCleanup,
+            .event_userdata_cb = internalEvent,
+            .user_data = &context,
             .width = config.width,
             .height = config.height,
             .window_title = config.title.ptr,
@@ -1141,7 +1147,9 @@ pub const SokolBackend = struct {
     }
 
     /// Internal init callback - sets up sokol_gfx/sokol_gl, then calls user init
-    fn internalInit() callconv(.c) void {
+    fn internalInit(user_data: ?*anyopaque) callconv(.c) void {
+        const context: *RunContext = @ptrCast(@alignCast(user_data));
+
         // Initialize sokol_gfx
         sg.setup(.{
             .environment = sokol.glue.environment(),
@@ -1156,21 +1164,23 @@ pub const SokolBackend = struct {
         sgl_initialized = true;
 
         // Call user's init callback
-        if (run_config.init) |init_fn| {
+        if (context.config.init) |init_fn| {
             init_fn();
         }
     }
 
     /// Internal frame callback - handles pass management, calls user frame
-    fn internalFrame() callconv(.c) void {
+    fn internalFrame(user_data: ?*anyopaque) callconv(.c) void {
+        const context: *RunContext = @ptrCast(@alignCast(user_data));
+
         // Begin the default render pass
         sg.beginPass(.{
-            .action = pass_action,
+            .action = context.pass_action,
             .swapchain = sokol.glue.swapchain(),
         });
 
         // Call user's frame callback
-        if (run_config.frame) |frame_fn| {
+        if (context.config.frame) |frame_fn| {
             frame_fn();
         }
 
@@ -1180,9 +1190,11 @@ pub const SokolBackend = struct {
     }
 
     /// Internal cleanup callback - calls user cleanup, then shuts down sokol
-    fn internalCleanup() callconv(.c) void {
+    fn internalCleanup(user_data: ?*anyopaque) callconv(.c) void {
+        const context: *RunContext = @ptrCast(@alignCast(user_data));
+
         // Call user's cleanup callback first
-        if (run_config.cleanup) |cleanup_fn| {
+        if (context.config.cleanup) |cleanup_fn| {
             cleanup_fn();
         }
 
@@ -1198,8 +1210,10 @@ pub const SokolBackend = struct {
     }
 
     /// Internal event callback - forwards events to user callback
-    fn internalEvent(event: [*c]const sapp.Event) callconv(.c) void {
-        if (run_config.event) |event_fn| {
+    fn internalEvent(event: [*c]const sapp.Event, user_data: ?*anyopaque) callconv(.c) void {
+        const context: *RunContext = @ptrCast(@alignCast(user_data));
+
+        if (context.config.event) |event_fn| {
             if (event) |e| {
                 event_fn(e.*);
             }
@@ -1218,13 +1232,24 @@ pub const SokolBackend = struct {
         return sg.isvalid();
     }
 
-    /// Get the current pass action (for custom rendering pipelines)
-    pub fn getPassAction() sg.PassAction {
-        return pass_action;
+    /// Get the current pass action (for custom rendering pipelines).
+    /// Only valid when called from within run() callbacks.
+    pub fn getPassAction() ?sg.PassAction {
+        const user_data = sapp.userdata();
+        if (user_data) |ptr| {
+            const context: *RunContext = @ptrCast(@alignCast(ptr));
+            return context.pass_action;
+        }
+        return null;
     }
 
-    /// Set the clear color for subsequent frames
+    /// Set the clear color for subsequent frames.
+    /// Only valid when called from within run() callbacks.
     pub fn setClearColor(col: Color) void {
-        pass_action.colors[0].clear_value = col.toSg();
+        const user_data = sapp.userdata();
+        if (user_data) |ptr| {
+            const context: *RunContext = @ptrCast(@alignCast(ptr));
+            context.pass_action.colors[0].clear_value = col.toSg();
+        }
     }
 };
