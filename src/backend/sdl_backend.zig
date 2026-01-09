@@ -375,6 +375,33 @@ pub const SdlBackend = struct {
     }
 
     // =========================================================================
+    // GUI Integration - Window/Renderer Access
+    // =========================================================================
+
+    /// Get the SDL window handle for GUI integration (e.g., ImGui).
+    /// Returns null if window is not initialized.
+    pub fn getWindow() ?sdl.Window {
+        return window;
+    }
+
+    /// Get the SDL renderer handle for GUI integration (e.g., ImGui).
+    /// Returns null if renderer is not initialized.
+    pub fn getRenderer() ?sdl.Renderer {
+        return renderer;
+    }
+
+    /// Get window handle as opaque pointer for C interop.
+    /// Useful for passing to C libraries like ImGui backends.
+    pub fn getWindowHandle() ?*anyopaque {
+        return if (window) |w| @ptrCast(w.ptr) else null;
+    }
+
+    /// Get renderer handle as opaque pointer for C interop.
+    pub fn getRendererHandle() ?*anyopaque {
+        return if (renderer) |r| @ptrCast(r.ptr) else null;
+    }
+
+    // =========================================================================
     // OPTIONAL: WINDOW MANAGEMENT
     // =========================================================================
 
