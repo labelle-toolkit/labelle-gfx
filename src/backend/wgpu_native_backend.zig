@@ -465,11 +465,12 @@ pub const WgpuNativeBackend = struct {
     }
 
     /// Get the swapchain format (for ImGui render pipeline creation).
-    pub fn getSwapchainFormat() wgpu.TextureFormat {
+    /// Returns null if the surface has not been configured yet.
+    pub fn getSwapchainFormat() ?wgpu.TextureFormat {
         if (surface_config) |cfg| {
             return cfg.format;
         }
-        return .bgra8_unorm; // Default fallback
+        return null;
     }
 
     // ============================================
@@ -479,6 +480,10 @@ pub const WgpuNativeBackend = struct {
     /// Register a callback to be called during rendering with an active render pass.
     /// This allows external GUI systems (like ImGui) to render into the same pass.
     /// The callback receives the wgpu.RenderPassEncoder and should issue draw commands.
+    ///
+    /// SAFETY: This function accepts a raw function pointer that will be executed during
+    /// the render loop. Only pass function pointers from trusted application code.
+    /// Do not use with user-provided or externally-sourced callbacks.
     pub fn registerGuiRenderCallback(callback: GuiRenderCallback) void {
         gui_render_callback = callback;
     }
@@ -1901,7 +1906,7 @@ pub const WgpuNativeBackend = struct {
         // 7. End render pass
         render_pass.end();
 
-        // 7. Submit command buffer
+        // 8. Submit command buffer
         const command_buffer = encoder.finish(&.{
             .label = wgpu.StringView.fromSlice("Main Command Buffer"),
         }) orelse return;
@@ -1909,14 +1914,14 @@ pub const WgpuNativeBackend = struct {
 
         q.submit(&[_]*wgpu.CommandBuffer{command_buffer});
 
-        // 7.5. Handle screenshot if requested
+        // 9. Handle screenshot if requested
         if (screenshot_requested) {
             captureScreenshot(surface_texture.texture.?);
             screenshot_requested = false;
             screenshot_filename = null;
         }
 
-        // 8. Present surface
+        // 10. Present surface
         _ = surf.present();
 
         // Increment render frame count
