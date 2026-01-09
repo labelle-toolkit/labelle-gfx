@@ -256,6 +256,13 @@ const SpriteBatch = struct {
 /// wgpu_native backend implementation
 pub const WgpuNativeBackend = struct {
     // ============================================
+    // Constants
+    // ============================================
+
+    /// Timeout for synchronous WebGPU operations (200ms)
+    const SYNC_TIMEOUT_NS: u64 = 200 * 1_000_000;
+
+    // ============================================
     // Backend Interface Types
     // ============================================
 
@@ -377,11 +384,22 @@ pub const WgpuNativeBackend = struct {
     // Texture sampler (shared for all textures)
     var texture_sampler: ?*wgpu.Sampler = null;
 
+    // Reusable GPU buffers for shapes
+    var shape_vertex_buffer: ?*wgpu.Buffer = null;
+    var shape_index_buffer: ?*wgpu.Buffer = null;
+    var shape_vertex_capacity: usize = 0;
+    var shape_index_capacity: usize = 0;
+
+    // Reusable GPU buffers for sprites
+    var sprite_vertex_buffer: ?*wgpu.Buffer = null;
+    var sprite_index_buffer: ?*wgpu.Buffer = null;
+    var sprite_vertex_capacity: usize = 0;
+    var sprite_index_capacity: usize = 0;
+
     // Batching systems
     var shape_batch: ?ShapeBatch = null;
     var sprite_batch: ?SpriteBatch = null;
     var sprite_draw_calls: ?std.ArrayList(SpriteDrawCall) = null; // Track draw calls by texture
-    var current_sprite_texture: ?Texture = null; // Current texture for sprite batch
 
     // Rendering state
     var current_camera: ?Camera2D = null;
@@ -717,9 +735,7 @@ pub const WgpuNativeBackend = struct {
     }
 
     pub fn drawCircleLines(center_x: f32, center_y: f32, radius: f32, col: Color) void {
-        if (shape_batch) |*batch| {
-            const alloc = allocator orelse return;
-            const color_packed = col.toAbgr();
+        if (shape_batch) |_| {
             const segments: u32 = 36; // 36 segments for smooth circle
             const thickness: f32 = 1.0;
 
@@ -734,9 +750,6 @@ pub const WgpuNativeBackend = struct {
                 const y2 = center_y + @sin(angle2) * radius;
                 drawLineEx(x1, y1, x2, y2, thickness, col);
             }
-            _ = batch;
-            _ = alloc;
-            _ = color_packed;
         }
     }
 
@@ -959,7 +972,7 @@ pub const WgpuNativeBackend = struct {
         };
 
         // Use synchronous adapter request
-        const adapter_response = instance.?.requestAdapterSync(&adapter_opts, 200_000_000);
+        const adapter_response = instance.?.requestAdapterSync(&adapter_opts, SYNC_TIMEOUT_NS);
         if (adapter_response.status != .success) {
             std.log.err("Failed to request adapter: {?s}", .{adapter_response.message});
             return error.AdapterRequestFailed;
@@ -972,7 +985,7 @@ pub const WgpuNativeBackend = struct {
             .required_limits = null,
         };
 
-        const device_response = adapter.?.requestDeviceSync(instance.?, &device_descriptor, 200_000_000);
+        const device_response = adapter.?.requestDeviceSync(instance.?, &device_descriptor, SYNC_TIMEOUT_NS);
         if (device_response.status != .success) {
             std.log.err("Failed to request device: {?s}", .{device_response.message});
             return error.DeviceRequestFailed;
@@ -1008,6 +1021,40 @@ pub const WgpuNativeBackend = struct {
         shape_batch = ShapeBatch.init(alloc);
         sprite_batch = SpriteBatch.init(alloc);
         sprite_draw_calls = .{};
+
+        // 9. Initialize reusable GPU buffers
+        const initial_shape_vertex_capacity = 1024;
+        const initial_shape_index_capacity = 2048;
+        const initial_sprite_vertex_capacity = 512;
+        const initial_sprite_index_capacity = 1024;
+
+        shape_vertex_buffer = device.?.createBuffer(&.{
+            .size = initial_shape_vertex_capacity * @sizeOf(ColorVertex),
+            .usage = wgpu.BufferUsages.vertex | wgpu.BufferUsages.copy_dst,
+            .mapped_at_creation = 0,
+        });
+        shape_vertex_capacity = initial_shape_vertex_capacity;
+
+        shape_index_buffer = device.?.createBuffer(&.{
+            .size = initial_shape_index_capacity * @sizeOf(u32),
+            .usage = wgpu.BufferUsages.index | wgpu.BufferUsages.copy_dst,
+            .mapped_at_creation = 0,
+        });
+        shape_index_capacity = initial_shape_index_capacity;
+
+        sprite_vertex_buffer = device.?.createBuffer(&.{
+            .size = initial_sprite_vertex_capacity * @sizeOf(SpriteVertex),
+            .usage = wgpu.BufferUsages.vertex | wgpu.BufferUsages.copy_dst,
+            .mapped_at_creation = 0,
+        });
+        sprite_vertex_capacity = initial_sprite_vertex_capacity;
+
+        sprite_index_buffer = device.?.createBuffer(&.{
+            .size = initial_sprite_index_capacity * @sizeOf(u32),
+            .usage = wgpu.BufferUsages.index | wgpu.BufferUsages.copy_dst,
+            .mapped_at_creation = 0,
+        });
+        sprite_index_capacity = initial_sprite_index_capacity;
 
         std.log.info("[wgpu_native] Initialized with {}x{} framebuffer", .{ screen_width, screen_height });
     }
@@ -1146,13 +1193,13 @@ pub const WgpuNativeBackend = struct {
         const vs_module = dev.createShaderModule(&wgpu.shaderModuleWGSLDescriptor(.{
             .label = "Shape Vertex Shader",
             .code = shape_vs_source,
-        })).?;
+        })) orelse return error.ShaderModuleCreationFailed;
         defer vs_module.release();
 
         const fs_module = dev.createShaderModule(&wgpu.shaderModuleWGSLDescriptor(.{
             .label = "Shape Fragment Shader",
             .code = shape_fs_source,
-        })).?;
+        })) orelse return error.ShaderModuleCreationFailed;
         defer fs_module.release();
 
         // Create pipeline layout
@@ -1160,7 +1207,7 @@ pub const WgpuNativeBackend = struct {
             .label = wgpu.StringView.fromSlice("Shape Pipeline Layout"),
             .bind_group_layout_count = 1,
             .bind_group_layouts = &[_]*wgpu.BindGroupLayout{shape_bind_group_layout.?},
-        }).?;
+        }) orelse return error.PipelineLayoutCreationFailed;
         defer pipeline_layout.release();
 
         // Create render pipeline
@@ -1256,13 +1303,13 @@ pub const WgpuNativeBackend = struct {
         const vs_module = dev.createShaderModule(&wgpu.shaderModuleWGSLDescriptor(.{
             .label = "Sprite Vertex Shader",
             .code = sprite_vs_source,
-        })).?;
+        })) orelse return error.ShaderModuleCreationFailed;
         defer vs_module.release();
 
         const fs_module = dev.createShaderModule(&wgpu.shaderModuleWGSLDescriptor(.{
             .label = "Sprite Fragment Shader",
             .code = sprite_fs_source,
-        })).?;
+        })) orelse return error.ShaderModuleCreationFailed;
         defer fs_module.release();
 
         // Create pipeline layout
@@ -1270,7 +1317,7 @@ pub const WgpuNativeBackend = struct {
             .label = wgpu.StringView.fromSlice("Sprite Pipeline Layout"),
             .bind_group_layout_count = 1,
             .bind_group_layouts = &[_]*wgpu.BindGroupLayout{sprite_bind_group_layout.?},
-        }).?;
+        }) orelse return error.PipelineLayoutCreationFailed;
         defer pipeline_layout.release();
 
         // Create render pipeline
@@ -1374,6 +1421,24 @@ pub const WgpuNativeBackend = struct {
         if (uniform_buffer) |buf| {
             buf.release();
             uniform_buffer = null;
+        }
+
+        // Release reusable GPU buffers
+        if (shape_vertex_buffer) |buf| {
+            buf.release();
+            shape_vertex_buffer = null;
+        }
+        if (shape_index_buffer) |buf| {
+            buf.release();
+            shape_index_buffer = null;
+        }
+        if (sprite_vertex_buffer) |buf| {
+            buf.release();
+            sprite_vertex_buffer = null;
+        }
+        if (sprite_index_buffer) |buf| {
+            buf.release();
+            sprite_index_buffer = null;
         }
 
         // Release texture sampler
@@ -1581,37 +1646,51 @@ pub const WgpuNativeBackend = struct {
                     std.log.info("[wgpu_native] Rendering shape batch: {} vertices, {} indices", .{ vertex_count, index_count });
                 }
 
-                // Create vertex buffer
-                const vertex_buffer = dev.createBuffer(&.{
-                    .label = wgpu.StringView.fromSlice("Shape Vertex Buffer"),
-                    .usage = wgpu.BufferUsages.vertex | wgpu.BufferUsages.copy_dst,
-                    .size = @intCast(vertex_count * @sizeOf(ColorVertex)),
-                    .mapped_at_creation = 0, // WGPUBool false
-                }) orelse return;
-                defer vertex_buffer.release();
+                // Resize vertex buffer if needed
+                if (vertex_count > shape_vertex_capacity) {
+                    if (shape_vertex_buffer) |buf| buf.release();
+                    shape_vertex_capacity = vertex_count * 2; // 2x for growth room
+                    shape_vertex_buffer = dev.createBuffer(&.{
+                        .label = wgpu.StringView.fromSlice("Shape Vertex Buffer"),
+                        .usage = wgpu.BufferUsages.vertex | wgpu.BufferUsages.copy_dst,
+                        .size = @intCast(shape_vertex_capacity * @sizeOf(ColorVertex)),
+                        .mapped_at_creation = 0,
+                    });
+                }
 
-                // Create index buffer
-                const index_buffer = dev.createBuffer(&.{
-                    .label = wgpu.StringView.fromSlice("Shape Index Buffer"),
-                    .usage = wgpu.BufferUsages.index | wgpu.BufferUsages.copy_dst,
-                    .size = @intCast(index_count * @sizeOf(u32)),
-                    .mapped_at_creation = 0, // WGPUBool false
-                }) orelse return;
-                defer index_buffer.release();
+                // Resize index buffer if needed
+                if (index_count > shape_index_capacity) {
+                    if (shape_index_buffer) |buf| buf.release();
+                    shape_index_capacity = index_count * 2; // 2x for growth room
+                    shape_index_buffer = dev.createBuffer(&.{
+                        .label = wgpu.StringView.fromSlice("Shape Index Buffer"),
+                        .usage = wgpu.BufferUsages.index | wgpu.BufferUsages.copy_dst,
+                        .size = @intCast(shape_index_capacity * @sizeOf(u32)),
+                        .mapped_at_creation = 0,
+                    });
+                }
 
-                // Upload vertex data
-                q.writeBuffer(vertex_buffer, 0, batch.vertices.items.ptr, vertex_count * @sizeOf(ColorVertex));
+                // Upload vertex data to reusable buffer
+                if (shape_vertex_buffer) |buf| {
+                    q.writeBuffer(buf, 0, batch.vertices.items.ptr, vertex_count * @sizeOf(ColorVertex));
+                }
 
-                // Upload index data
-                q.writeBuffer(index_buffer, 0, batch.indices.items.ptr, index_count * @sizeOf(u32));
+                // Upload index data to reusable buffer
+                if (shape_index_buffer) |buf| {
+                    q.writeBuffer(buf, 0, batch.indices.items.ptr, index_count * @sizeOf(u32));
+                }
 
                 // Set pipeline and bind group
                 render_pass.setPipeline(shape_pipeline.?);
                 render_pass.setBindGroup(0, shape_bind_group.?, 0, null);
 
                 // Set vertex and index buffers
-                render_pass.setVertexBuffer(0, vertex_buffer, 0, @intCast(vertex_count * @sizeOf(ColorVertex)));
-                render_pass.setIndexBuffer(index_buffer, .uint32, 0, @intCast(index_count * @sizeOf(u32)));
+                if (shape_vertex_buffer) |buf| {
+                    render_pass.setVertexBuffer(0, buf, 0, @intCast(vertex_count * @sizeOf(ColorVertex)));
+                }
+                if (shape_index_buffer) |buf| {
+                    render_pass.setIndexBuffer(buf, .uint32, 0, @intCast(index_count * @sizeOf(u32)));
+                }
 
                 // Draw
                 render_pass.drawIndexed(@intCast(index_count), 1, 0, 0, 0);
@@ -1636,34 +1715,48 @@ pub const WgpuNativeBackend = struct {
                         std.log.info("[wgpu_native] Rendering sprite batch: {} vertices, {} indices, {} draw calls", .{ vertex_count, index_count, calls.items.len });
                     }
 
-                    // Create shared vertex buffer for all sprites
-                    const vertex_buffer = dev.createBuffer(&.{
-                        .label = wgpu.StringView.fromSlice("Sprite Vertex Buffer"),
-                        .usage = wgpu.BufferUsages.vertex | wgpu.BufferUsages.copy_dst,
-                        .size = @intCast(vertex_count * @sizeOf(SpriteVertex)),
-                        .mapped_at_creation = 0,
-                    }) orelse return;
-                    defer vertex_buffer.release();
+                    // Resize vertex buffer if needed
+                    if (vertex_count > sprite_vertex_capacity) {
+                        if (sprite_vertex_buffer) |buf| buf.release();
+                        sprite_vertex_capacity = vertex_count * 2; // 2x for growth room
+                        sprite_vertex_buffer = dev.createBuffer(&.{
+                            .label = wgpu.StringView.fromSlice("Sprite Vertex Buffer"),
+                            .usage = wgpu.BufferUsages.vertex | wgpu.BufferUsages.copy_dst,
+                            .size = @intCast(sprite_vertex_capacity * @sizeOf(SpriteVertex)),
+                            .mapped_at_creation = 0,
+                        });
+                    }
 
-                    // Create shared index buffer for all sprites
-                    const index_buffer = dev.createBuffer(&.{
-                        .label = wgpu.StringView.fromSlice("Sprite Index Buffer"),
-                        .usage = wgpu.BufferUsages.index | wgpu.BufferUsages.copy_dst,
-                        .size = @intCast(index_count * @sizeOf(u32)),
-                        .mapped_at_creation = 0,
-                    }) orelse return;
-                    defer index_buffer.release();
+                    // Resize index buffer if needed
+                    if (index_count > sprite_index_capacity) {
+                        if (sprite_index_buffer) |buf| buf.release();
+                        sprite_index_capacity = index_count * 2; // 2x for growth room
+                        sprite_index_buffer = dev.createBuffer(&.{
+                            .label = wgpu.StringView.fromSlice("Sprite Index Buffer"),
+                            .usage = wgpu.BufferUsages.index | wgpu.BufferUsages.copy_dst,
+                            .size = @intCast(sprite_index_capacity * @sizeOf(u32)),
+                            .mapped_at_creation = 0,
+                        });
+                    }
 
-                    // Upload all vertex and index data once
-                    q.writeBuffer(vertex_buffer, 0, batch.vertices.items.ptr, vertex_count * @sizeOf(SpriteVertex));
-                    q.writeBuffer(index_buffer, 0, batch.indices.items.ptr, index_count * @sizeOf(u32));
+                    // Upload all vertex and index data once to reusable buffers
+                    if (sprite_vertex_buffer) |buf| {
+                        q.writeBuffer(buf, 0, batch.vertices.items.ptr, vertex_count * @sizeOf(SpriteVertex));
+                    }
+                    if (sprite_index_buffer) |buf| {
+                        q.writeBuffer(buf, 0, batch.indices.items.ptr, index_count * @sizeOf(u32));
+                    }
 
                     // Set pipeline once
                     render_pass.setPipeline(sprite_pipeline.?);
 
                     // Set buffers once
-                    render_pass.setVertexBuffer(0, vertex_buffer, 0, @intCast(vertex_count * @sizeOf(SpriteVertex)));
-                    render_pass.setIndexBuffer(index_buffer, .uint32, 0, @intCast(index_count * @sizeOf(u32)));
+                    if (sprite_vertex_buffer) |buf| {
+                        render_pass.setVertexBuffer(0, buf, 0, @intCast(vertex_count * @sizeOf(SpriteVertex)));
+                    }
+                    if (sprite_index_buffer) |buf| {
+                        render_pass.setIndexBuffer(buf, .uint32, 0, @intCast(index_count * @sizeOf(u32)));
+                    }
 
                     // Render each draw call with its own texture
                     for (calls.items) |call| {
@@ -1694,11 +1787,12 @@ pub const WgpuNativeBackend = struct {
                         render_pass.setBindGroup(0, sprite_bind_group, 0, null);
 
                         // Draw this call's indices
+                        // Note: base_vertex is 0 because indices already include vertex_start offset
                         render_pass.drawIndexed(
                             call.index_count,
                             1, // instance count
                             call.index_start,
-                            @intCast(call.vertex_start),
+                            0, // base_vertex (indices are already absolute)
                             0, // first instance
                         );
                     }

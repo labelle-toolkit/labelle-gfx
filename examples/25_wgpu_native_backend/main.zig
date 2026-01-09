@@ -15,19 +15,12 @@ const WgpuNativeBackend = gfx.WgpuNativeBackend;
 
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
+const CAMERA_INITIAL_X: f32 = @as(f32, WIDTH) / 2.0;
+const CAMERA_INITIAL_Y: f32 = @as(f32, HEIGHT) / 2.0;
 
 pub fn main() !void {
     // CI test mode - run headless and auto-exit after a few frames
-    var gpa_env = std.heap.GeneralPurposeAllocator(.{}){};
-    const ci_test = blk: {
-        const result = std.process.getEnvVarOwned(gpa_env.allocator(), "CI_TEST") catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => break :blk false,
-            else => break :blk false,
-        };
-        gpa_env.allocator().free(result);
-        break :blk true;
-    };
-    _ = gpa_env.deinit();
+    const ci_test = std.process.hasEnvVarConstant("CI_TEST");
     const max_frames: u32 = if (ci_test) 60 else std.math.maxInt(u32);
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -104,8 +97,8 @@ pub fn main() !void {
 
     // Camera for testing camera transformations
     var camera = WgpuNativeBackend.Camera2D{
-        .offset = .{ .x = @as(f32, WIDTH) / 2.0, .y = @as(f32, HEIGHT) / 2.0 },
-        .target = .{ .x = @as(f32, WIDTH) / 2.0, .y = @as(f32, HEIGHT) / 2.0 },
+        .offset = .{ .x = CAMERA_INITIAL_X, .y = CAMERA_INITIAL_Y },
+        .target = .{ .x = CAMERA_INITIAL_X, .y = CAMERA_INITIAL_Y },
         .rotation = 0,
         .zoom = 1.0,
     };
@@ -160,7 +153,7 @@ pub fn main() !void {
             if (window.getKey(.r) == .press) {
                 camera.zoom = 1.0;
                 camera.rotation = 0;
-                camera.target = .{ .x = @as(f32, WIDTH) / 2.0, .y = @as(f32, HEIGHT) / 2.0 };
+                camera.target = .{ .x = CAMERA_INITIAL_X, .y = CAMERA_INITIAL_Y };
             }
             // Toggle scissor mode
             if (window.getKey(.s) == .press) {
