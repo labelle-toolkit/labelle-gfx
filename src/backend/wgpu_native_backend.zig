@@ -24,10 +24,183 @@
 //!
 
 const std = @import("std");
+const builtin = @import("builtin");
 const wgpu = @import("wgpu");
 const zglfw = @import("zglfw");
 
 const backend_mod = @import("backend.zig");
+
+// ============================================
+// Vertex Definitions
+// ============================================
+
+/// Sprite vertex with position, UV, and color
+const SpriteVertex = extern struct {
+    position: [2]f32,
+    uv: [2]f32,
+    color: u32, // ABGR packed
+
+    fn init(x: f32, y: f32, u: f32, v: f32, col: u32) SpriteVertex {
+        return .{
+            .position = .{ x, y },
+            .uv = .{ u, v },
+            .color = col,
+        };
+    }
+};
+
+/// Color vertex for shape rendering
+const ColorVertex = extern struct {
+    position: [2]f32,
+    color: u32, // ABGR packed
+
+    fn init(x: f32, y: f32, col: u32) ColorVertex {
+        return .{
+            .position = .{ x, y },
+            .color = col,
+        };
+    }
+};
+
+// ============================================
+// Shader Code (WGSL)
+// ============================================
+
+const sprite_vs_source =
+    \\struct Uniforms {
+    \\    projection: mat4x4<f32>,
+    \\}
+    \\@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+    \\
+    \\struct VertexInput {
+    \\    @location(0) position: vec2<f32>,
+    \\    @location(1) uv: vec2<f32>,
+    \\    @location(2) color: vec4<f32>,
+    \\}
+    \\
+    \\struct VertexOutput {
+    \\    @builtin(position) position: vec4<f32>,
+    \\    @location(0) uv: vec2<f32>,
+    \\    @location(1) color: vec4<f32>,
+    \\}
+    \\
+    \\@vertex
+    \\fn main(in: VertexInput) -> VertexOutput {
+    \\    var out: VertexOutput;
+    \\    out.position = uniforms.projection * vec4<f32>(in.position, 0.0, 1.0);
+    \\    out.uv = in.uv;
+    \\    out.color = in.color;
+    \\    return out;
+    \\}
+;
+
+const sprite_fs_source =
+    \\@group(0) @binding(1) var t_diffuse: texture_2d<f32>;
+    \\@group(0) @binding(2) var s_diffuse: sampler;
+    \\
+    \\struct FragmentInput {
+    \\    @location(0) uv: vec2<f32>,
+    \\    @location(1) color: vec4<f32>,
+    \\}
+    \\
+    \\@fragment
+    \\fn main(in: FragmentInput) -> @location(0) vec4<f32> {
+    \\    let tex_color = textureSample(t_diffuse, s_diffuse, in.uv);
+    \\    return tex_color * in.color;
+    \\}
+;
+
+const shape_vs_source =
+    \\struct Uniforms {
+    \\    projection: mat4x4<f32>,
+    \\}
+    \\@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+    \\
+    \\struct VertexInput {
+    \\    @location(0) position: vec2<f32>,
+    \\    @location(1) color: vec4<f32>,
+    \\}
+    \\
+    \\struct VertexOutput {
+    \\    @builtin(position) position: vec4<f32>,
+    \\    @location(0) color: vec4<f32>,
+    \\}
+    \\
+    \\@vertex
+    \\fn main(in: VertexInput) -> VertexOutput {
+    \\    var out: VertexOutput;
+    \\    out.position = uniforms.projection * vec4<f32>(in.position, 0.0, 1.0);
+    \\    out.color = in.color;
+    \\    return out;
+    \\}
+;
+
+const shape_fs_source =
+    \\struct FragmentInput {
+    \\    @location(0) color: vec4<f32>,
+    \\}
+    \\
+    \\@fragment
+    \\fn main(in: FragmentInput) -> @location(0) vec4<f32> {
+    \\    return in.color;
+    \\}
+;
+
+// ============================================
+// Batching Structures
+// ============================================
+
+const ShapeBatch = struct {
+    vertices: std.ArrayList(ColorVertex),
+    indices: std.ArrayList(u32),
+
+    fn init(alloc: std.mem.Allocator) ShapeBatch {
+        return .{
+            .vertices = std.ArrayList(ColorVertex).init(alloc),
+            .indices = std.ArrayList(u32).init(alloc),
+        };
+    }
+
+    fn deinit(self: *ShapeBatch) void {
+        self.vertices.deinit();
+        self.indices.deinit();
+    }
+
+    fn clear(self: *ShapeBatch) void {
+        self.vertices.clearRetainingCapacity();
+        self.indices.clearRetainingCapacity();
+    }
+
+    fn isEmpty(self: *const ShapeBatch) bool {
+        return self.vertices.items.len == 0;
+    }
+};
+
+const SpriteBatch = struct {
+    vertices: std.ArrayList(SpriteVertex),
+    indices: std.ArrayList(u32),
+
+    fn init(alloc: std.mem.Allocator) SpriteBatch {
+        return .{
+            .vertices = std.ArrayList(SpriteVertex).init(alloc),
+            .indices = std.ArrayList(u32).init(alloc),
+        };
+    }
+
+    fn deinit(self: *SpriteBatch) void {
+        self.vertices.deinit();
+        self.indices.deinit();
+    }
+
+    fn clear(self: *SpriteBatch) void {
+        self.vertices.clearRetainingCapacity();
+        self.indices.clearRetainingCapacity();
+    }
+
+    fn isEmpty(self: *const SpriteBatch) bool {
+        return self.vertices.items.len == 0;
+    }
+};
 
 /// wgpu_native backend implementation
 pub const WgpuNativeBackend = struct {
@@ -126,7 +299,24 @@ pub const WgpuNativeBackend = struct {
     var device: ?*wgpu.Device = null;
     var queue: ?*wgpu.Queue = null;
     var surface: ?*wgpu.Surface = null;
+    var surface_config: ?wgpu.SurfaceConfiguration = null;
     var allocator: ?std.mem.Allocator = null;
+
+    // Rendering pipelines
+    var shape_pipeline: ?*wgpu.RenderPipeline = null;
+    var sprite_pipeline: ?*wgpu.RenderPipeline = null;
+
+    // Bind groups and layouts
+    var shape_bind_group: ?*wgpu.BindGroup = null;
+    var shape_bind_group_layout: ?*wgpu.BindGroupLayout = null;
+    var sprite_bind_group_layout: ?*wgpu.BindGroupLayout = null;
+
+    // Uniform buffer for projection matrix
+    var uniform_buffer: ?*wgpu.Buffer = null;
+
+    // Batching systems
+    var shape_batch: ?ShapeBatch = null;
+    var sprite_batch: ?SpriteBatch = null;
 
     // Rendering state
     var current_camera: ?Camera2D = null;
@@ -396,19 +586,367 @@ pub const WgpuNativeBackend = struct {
     pub fn initWgpuNative(alloc: std.mem.Allocator, window: *zglfw.Window) !void {
         allocator = alloc;
 
-        // TODO: Initialize WebGPU
-        // 1. Create instance
+        // Get framebuffer size
+        const fb_size = window.getFramebufferSize();
+        screen_width = @intCast(fb_size[0]);
+        screen_height = @intCast(fb_size[1]);
+
+        // 1. Create WebGPU instance
+        instance = wgpu.Instance.create(&.{}) orelse return error.InstanceCreationFailed;
+
         // 2. Create surface from GLFW window
+        surface = try createSurfaceFromGLFW(window);
+
         // 3. Request adapter
+        const adapter_opts = wgpu.RequestAdapterOptions{
+            .compatible_surface = surface,
+            .power_preference = .high_performance,
+        };
+
+        // Use synchronous adapter request
+        const adapter_response = instance.?.requestAdapterSync(&adapter_opts, 200_000_000);
+        if (adapter_response.status != .success) {
+            std.log.err("Failed to request adapter: {s}", .{adapter_response.message});
+            return error.AdapterRequestFailed;
+        }
+        adapter = adapter_response.adapter;
+
         // 4. Request device
+        const device_descriptor = wgpu.DeviceDescriptor{
+            .label = "Main Device",
+        };
+
+        const device_response = adapter.?.requestDeviceSync(&device_descriptor, 200_000_000);
+        if (device_response.status != .success) {
+            std.log.err("Failed to request device: {s}", .{device_response.message});
+            return error.DeviceRequestFailed;
+        }
+        device = device_response.device;
+
         // 5. Get queue
+        queue = device.?.getQueue();
+
         // 6. Configure surface
+        const surface_caps = surface.?.getCapabilities(adapter.?);
+        defer surface_caps.deinit();
+
+        surface_config = .{
+            .device = device.?,
+            .format = surface_caps.formats[0], // Use first supported format
+            .usage = .{ .render_attachment = true },
+            .width = @intCast(screen_width),
+            .height = @intCast(screen_height),
+            .present_mode = .fifo, // VSync
+            .alpha_mode = surface_caps.alpha_modes[0],
+        };
+        surface.?.configure(&surface_config.?);
+
         // 7. Initialize rendering pipelines
+        try initPipelines();
+
         // 8. Initialize batching systems
+        shape_batch = ShapeBatch.init(alloc);
+        sprite_batch = SpriteBatch.init(alloc);
 
-        _ = window;
+        std.log.info("[wgpu_native] Initialized with {}x{} framebuffer", .{ screen_width, screen_height });
+    }
 
-        return error.NotImplemented;
+    fn createSurfaceFromGLFW(window: *zglfw.Window) !*wgpu.Surface {
+        const inst = instance orelse return error.NoInstance;
+
+        // Get platform-specific window handle and create surface
+        if (builtin.os.tag == .macos) {
+            const ns_window = zglfw.getCocoaWindow(window);
+            if (ns_window) |win| {
+                const descriptor = wgpu.SurfaceDescriptor{
+                    .next_in_chain = @ptrCast(&wgpu.SurfaceDescriptorFromMetalLayer{
+                        .chain = .{ .s_type = .surface_descriptor_from_metal_layer },
+                        .layer = @ptrCast(win),
+                    }),
+                };
+                return inst.createSurface(&descriptor) orelse return error.SurfaceCreationFailed;
+            }
+        } else if (builtin.os.tag == .linux) {
+            // Try Wayland first, then X11
+            if (zglfw.getWaylandDisplay(window)) |display| {
+                if (zglfw.getWaylandWindow(window)) |wl_surface| {
+                    const descriptor = wgpu.SurfaceDescriptor{
+                        .next_in_chain = @ptrCast(&wgpu.SurfaceDescriptorFromWaylandSurface{
+                            .chain = .{ .s_type = .surface_descriptor_from_wayland_surface },
+                            .display = display,
+                            .surface = wl_surface,
+                        }),
+                    };
+                    return inst.createSurface(&descriptor) orelse return error.SurfaceCreationFailed;
+                }
+            }
+
+            if (zglfw.getX11Display(window)) |display| {
+                if (zglfw.getX11Window(window)) |x11_window| {
+                    const descriptor = wgpu.SurfaceDescriptor{
+                        .next_in_chain = @ptrCast(&wgpu.SurfaceDescriptorFromXlibWindow{
+                            .chain = .{ .s_type = .surface_descriptor_from_xlib_window },
+                            .display = display,
+                            .window = x11_window,
+                        }),
+                    };
+                    return inst.createSurface(&descriptor) orelse return error.SurfaceCreationFailed;
+                }
+            }
+        } else if (builtin.os.tag == .windows) {
+            const hwnd = zglfw.getWin32Window(window);
+            if (hwnd) |win| {
+                const hinstance = @import("std").os.windows.kernel32.GetModuleHandleW(null);
+                const descriptor = wgpu.SurfaceDescriptor{
+                    .next_in_chain = @ptrCast(&wgpu.SurfaceDescriptorFromWindowsHWND{
+                        .chain = .{ .s_type = .surface_descriptor_from_windows_hwnd },
+                        .hinstance = hinstance,
+                        .hwnd = win,
+                    }),
+                };
+                return inst.createSurface(&descriptor) orelse return error.SurfaceCreationFailed;
+            }
+        }
+
+        return error.UnsupportedPlatform;
+    }
+
+    fn initPipelines() !void {
+        const dev = device orelse return error.NoDevice;
+
+        // Create uniform buffer for projection matrix
+        uniform_buffer = dev.createBuffer(&.{
+            .label = "Projection Matrix Uniform",
+            .usage = .{ .uniform = true, .copy_dst = true },
+            .size = 64, // mat4x4<f32> = 16 floats * 4 bytes
+            .mapped_at_creation = false,
+        });
+
+        // Create shape pipeline
+        try initShapePipeline();
+
+        // Create sprite pipeline
+        try initSpritePipeline();
+    }
+
+    fn initShapePipeline() !void {
+        const dev = device orelse return error.NoDevice;
+
+        // Create bind group layout for shapes (just uniform buffer)
+        shape_bind_group_layout = dev.createBindGroupLayout(&.{
+            .label = "Shape Bind Group Layout",
+            .entry_count = 1,
+            .entries = &[_]wgpu.BindGroupLayoutEntry{
+                .{
+                    .binding = 0,
+                    .visibility = .{ .vertex = true },
+                    .buffer = .{
+                        .type = .uniform,
+                        .min_binding_size = 64,
+                    },
+                },
+            },
+        });
+
+        // Create bind group for shapes
+        shape_bind_group = dev.createBindGroup(&.{
+            .label = "Shape Bind Group",
+            .layout = shape_bind_group_layout.?,
+            .entry_count = 1,
+            .entries = &[_]wgpu.BindGroupEntry{
+                .{
+                    .binding = 0,
+                    .buffer = uniform_buffer.?,
+                    .size = 64,
+                },
+            },
+        });
+
+        // Create shader modules
+        const vs_module = dev.createShaderModule(&.{
+            .label = "Shape Vertex Shader",
+            .code = .{ .wgsl = shape_vs_source },
+        });
+        defer vs_module.release();
+
+        const fs_module = dev.createShaderModule(&.{
+            .label = "Shape Fragment Shader",
+            .code = .{ .wgsl = shape_fs_source },
+        });
+        defer fs_module.release();
+
+        // Create pipeline layout
+        const pipeline_layout = dev.createPipelineLayout(&.{
+            .label = "Shape Pipeline Layout",
+            .bind_group_layout_count = 1,
+            .bind_group_layouts = &[_]*wgpu.BindGroupLayout{shape_bind_group_layout.?},
+        });
+        defer pipeline_layout.release();
+
+        // Create render pipeline
+        const vertex_buffer_layout = wgpu.VertexBufferLayout{
+            .array_stride = @sizeOf(ColorVertex),
+            .step_mode = .vertex,
+            .attribute_count = 2,
+            .attributes = &[_]wgpu.VertexAttribute{
+                .{ .format = .float32x2, .offset = 0, .shader_location = 0 }, // position
+                .{ .format = .unorm8x4, .offset = 8, .shader_location = 1 }, // color
+            },
+        };
+
+        shape_pipeline = dev.createRenderPipeline(&.{
+            .label = "Shape Pipeline",
+            .layout = pipeline_layout,
+            .vertex = .{
+                .module = vs_module,
+                .entry_point = "main",
+                .buffer_count = 1,
+                .buffers = &[_]wgpu.VertexBufferLayout{vertex_buffer_layout},
+            },
+            .fragment = &.{
+                .module = fs_module,
+                .entry_point = "main",
+                .target_count = 1,
+                .targets = &[_]wgpu.ColorTargetState{
+                    .{
+                        .format = surface_config.?.format,
+                        .blend = &.{
+                            .color = .{
+                                .operation = .add,
+                                .src_factor = .src_alpha,
+                                .dst_factor = .one_minus_src_alpha,
+                            },
+                            .alpha = .{
+                                .operation = .add,
+                                .src_factor = .one,
+                                .dst_factor = .one_minus_src_alpha,
+                            },
+                        },
+                        .write_mask = .all,
+                    },
+                },
+            },
+            .primitive = .{
+                .topology = .triangle_list,
+                .front_face = .ccw,
+                .cull_mode = .none,
+            },
+            .multisample = .{
+                .count = 1,
+                .mask = 0xFFFFFFFF,
+            },
+        });
+    }
+
+    fn initSpritePipeline() !void {
+        const dev = device orelse return error.NoDevice;
+
+        // Create bind group layout for sprites (uniform + texture + sampler)
+        sprite_bind_group_layout = dev.createBindGroupLayout(&.{
+            .label = "Sprite Bind Group Layout",
+            .entry_count = 3,
+            .entries = &[_]wgpu.BindGroupLayoutEntry{
+                .{
+                    .binding = 0,
+                    .visibility = .{ .vertex = true },
+                    .buffer = .{
+                        .type = .uniform,
+                        .min_binding_size = 64,
+                    },
+                },
+                .{
+                    .binding = 1,
+                    .visibility = .{ .fragment = true },
+                    .texture = .{
+                        .sample_type = .float,
+                        .view_dimension = .dimension_2d,
+                    },
+                },
+                .{
+                    .binding = 2,
+                    .visibility = .{ .fragment = true },
+                    .sampler = .{
+                        .type = .filtering,
+                    },
+                },
+            },
+        });
+
+        // Create shader modules
+        const vs_module = dev.createShaderModule(&.{
+            .label = "Sprite Vertex Shader",
+            .code = .{ .wgsl = sprite_vs_source },
+        });
+        defer vs_module.release();
+
+        const fs_module = dev.createShaderModule(&.{
+            .label = "Sprite Fragment Shader",
+            .code = .{ .wgsl = sprite_fs_source },
+        });
+        defer fs_module.release();
+
+        // Create pipeline layout
+        const pipeline_layout = dev.createPipelineLayout(&.{
+            .label = "Sprite Pipeline Layout",
+            .bind_group_layout_count = 1,
+            .bind_group_layouts = &[_]*wgpu.BindGroupLayout{sprite_bind_group_layout.?},
+        });
+        defer pipeline_layout.release();
+
+        // Create render pipeline
+        const vertex_buffer_layout = wgpu.VertexBufferLayout{
+            .array_stride = @sizeOf(SpriteVertex),
+            .step_mode = .vertex,
+            .attribute_count = 3,
+            .attributes = &[_]wgpu.VertexAttribute{
+                .{ .format = .float32x2, .offset = 0, .shader_location = 0 }, // position
+                .{ .format = .float32x2, .offset = 8, .shader_location = 1 }, // uv
+                .{ .format = .unorm8x4, .offset = 16, .shader_location = 2 }, // color
+            },
+        };
+
+        sprite_pipeline = dev.createRenderPipeline(&.{
+            .label = "Sprite Pipeline",
+            .layout = pipeline_layout,
+            .vertex = .{
+                .module = vs_module,
+                .entry_point = "main",
+                .buffer_count = 1,
+                .buffers = &[_]wgpu.VertexBufferLayout{vertex_buffer_layout},
+            },
+            .fragment = &.{
+                .module = fs_module,
+                .entry_point = "main",
+                .target_count = 1,
+                .targets = &[_]wgpu.ColorTargetState{
+                    .{
+                        .format = surface_config.?.format,
+                        .blend = &.{
+                            .color = .{
+                                .operation = .add,
+                                .src_factor = .src_alpha,
+                                .dst_factor = .one_minus_src_alpha,
+                            },
+                            .alpha = .{
+                                .operation = .add,
+                                .src_factor = .one,
+                                .dst_factor = .one_minus_src_alpha,
+                            },
+                        },
+                        .write_mask = .all,
+                    },
+                },
+            },
+            .primitive = .{
+                .topology = .triangle_list,
+                .front_face = .ccw,
+                .cull_mode = .none,
+            },
+            .multisample = .{
+                .count = 1,
+                .mask = 0xFFFFFFFF,
+            },
+        });
     }
 
     pub fn closeWindow() void {
