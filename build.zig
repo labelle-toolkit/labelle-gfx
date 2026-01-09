@@ -380,6 +380,29 @@ pub fn build(b: *std.Build) void {
         full_run_step_24.dependOn(&run_cmd_24.step);
     }
 
+    // Example 25: Sokol Run API - simplified sokol application runner
+    {
+        const sokol_run = b.addExecutable(.{
+            .name = "25_sokol_run",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/25_sokol_run/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle", .module = lib_mod },
+                    .{ .name = "sokol", .module = sokol },
+                },
+            }),
+        });
+
+        const run_cmd_25 = b.addRunArtifact(sokol_run);
+        const run_step_25 = b.step("run-example-25", "Sokol run() API example");
+        run_step_25.dependOn(&run_cmd_25.step);
+
+        const full_run_step_25 = b.step("run-25_sokol_run", "Sokol run() API example");
+        full_run_step_25.dependOn(&run_cmd_25.step);
+    }
+
     // Converter tool
     const converter_exe = b.addExecutable(.{
         .name = "labelle-convert",
