@@ -104,6 +104,11 @@ pub const ZgpuBackend = struct {
     // Fullscreen state
     var is_fullscreen: bool = false;
 
+    // GUI render callback (for ImGui integration)
+    // Called during endDrawing() with an active render pass
+    pub const GuiRenderCallback = *const fn (wgpu.RenderPassEncoder) void;
+    var gui_render_callback: ?GuiRenderCallback = null;
+
     // ============================================
     // Helper Functions
     // ============================================
@@ -153,6 +158,22 @@ pub const ZgpuBackend = struct {
     /// Get the graphics context (for direct texture module calls)
     pub fn getGraphicsContext() ?*zgpu.GraphicsContext {
         return gctx;
+    }
+
+    // ============================================
+    // GUI Integration
+    // ============================================
+
+    /// Register a callback to be called during rendering with an active render pass.
+    /// This allows external GUI systems (like ImGui) to render into the same pass.
+    /// The callback receives the wgpu.RenderPassEncoder and should issue draw commands.
+    pub fn registerGuiRenderCallback(callback: GuiRenderCallback) void {
+        gui_render_callback = callback;
+    }
+
+    /// Unregister the GUI render callback.
+    pub fn unregisterGuiRenderCallback() void {
+        gui_render_callback = null;
     }
 
     // ============================================
@@ -603,6 +624,12 @@ pub const ZgpuBackend = struct {
 
             // Clear batch for next frame
             sprites.clear();
+        }
+
+        // Call GUI render callback if registered (for ImGui, etc.)
+        // This allows external GUI systems to render into the same pass
+        if (gui_render_callback) |callback| {
+            callback(render_pass);
         }
 
         render_pass.end();

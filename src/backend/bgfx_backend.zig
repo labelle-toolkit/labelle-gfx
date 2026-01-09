@@ -117,6 +117,11 @@ pub const BgfxBackend = struct {
     threadlocal var last_frame_time: i64 = 0;
     threadlocal var frame_delta: f32 = 1.0 / 60.0;
 
+    // GLFW window pointer for GUI integration (optional, set by application)
+    // bgfx doesn't create windows - this allows applications using GLFW to
+    // pass their window pointer for ImGui or other GUI libraries
+    threadlocal var glfw_window: ?*anyopaque = null;
+
     // View IDs
     const VIEW_ID: bgfx.ViewId = 0;
     const SPRITE_VIEW_ID: bgfx.ViewId = 1;
@@ -836,6 +841,28 @@ pub const BgfxBackend = struct {
         setup2DProjection();
     }
 
+    // =========================================================================
+    // GUI Integration - GLFW Window Access
+    // =========================================================================
+
+    /// Set the GLFW window pointer for GUI integration (e.g., ImGui).
+    /// Call this after creating your GLFW window but before initializing GUI libraries.
+    /// The pointer should be a GLFWwindow* cast to *anyopaque.
+    pub fn setGlfwWindow(window: *anyopaque) void {
+        glfw_window = window;
+    }
+
+    /// Get the GLFW window pointer for GUI integration.
+    /// Returns null if no GLFW window has been set.
+    pub fn getGlfwWindow() ?*anyopaque {
+        return glfw_window;
+    }
+
+    /// Clear the stored GLFW window pointer.
+    pub fn clearGlfwWindow() void {
+        glfw_window = null;
+    }
+
     pub fn closeWindow() void {
         // Clean up debug draw
         if (dd_encoder) |encoder| {
@@ -862,6 +889,9 @@ pub const BgfxBackend = struct {
             bgfx.shutdown();
             bgfx_initialized = false;
         }
+
+        // Clear GLFW window reference
+        glfw_window = null;
     }
 
     /// Always returns false - bgfx doesn't manage window lifecycle.
