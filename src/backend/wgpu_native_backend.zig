@@ -367,6 +367,12 @@ pub const WgpuNativeBackend = struct {
     var surface: ?*wgpu.Surface = null;
     var surface_config: ?wgpu.SurfaceConfiguration = null;
     var allocator: ?std.mem.Allocator = null;
+    var glfw_window: ?*zglfw.Window = null;
+
+    // GUI render callback (for ImGui integration)
+    // Called during endDrawing() with an active render pass
+    pub const GuiRenderCallback = *const fn (*wgpu.RenderPassEncoder) void;
+    var gui_render_callback: ?GuiRenderCallback = null;
 
     // Rendering pipelines
     var shape_pipeline: ?*wgpu.RenderPipeline = null;
@@ -442,6 +448,44 @@ pub const WgpuNativeBackend = struct {
 
     pub fn vector2(x: f32, y: f32) Vector2 {
         return Vector2{ .x = x, .y = y };
+    }
+
+    // ============================================
+    // Context Accessors (for GUI integration)
+    // ============================================
+
+    /// Get the wgpu device (for ImGui backend initialization).
+    pub fn getDevice() ?*wgpu.Device {
+        return device;
+    }
+
+    /// Get the GLFW window (for ImGui input handling).
+    pub fn getWindow() ?*zglfw.Window {
+        return glfw_window;
+    }
+
+    /// Get the swapchain format (for ImGui render pipeline creation).
+    pub fn getSwapchainFormat() wgpu.TextureFormat {
+        if (surface_config) |cfg| {
+            return cfg.format;
+        }
+        return .bgra8_unorm; // Default fallback
+    }
+
+    // ============================================
+    // GUI Integration
+    // ============================================
+
+    /// Register a callback to be called during rendering with an active render pass.
+    /// This allows external GUI systems (like ImGui) to render into the same pass.
+    /// The callback receives the wgpu.RenderPassEncoder and should issue draw commands.
+    pub fn registerGuiRenderCallback(callback: GuiRenderCallback) void {
+        gui_render_callback = callback;
+    }
+
+    /// Unregister the GUI render callback.
+    pub fn unregisterGuiRenderCallback() void {
+        gui_render_callback = null;
     }
 
     // ============================================
@@ -950,6 +994,7 @@ pub const WgpuNativeBackend = struct {
 
     pub fn initWgpuNative(alloc: std.mem.Allocator, window: *zglfw.Window) !void {
         allocator = alloc;
+        glfw_window = window;
 
         // Get framebuffer size
         const fb_size = window.getFramebufferSize();
@@ -1383,6 +1428,10 @@ pub const WgpuNativeBackend = struct {
 
     pub fn closeWindow() void {
         std.log.info("[wgpu_native] Cleaning up resources...", .{});
+
+        // Clear GUI render callback
+        unregisterGuiRenderCallback();
+        glfw_window = null;
 
         // Cleanup batches
         if (shape_batch) |*batch| {
@@ -1843,7 +1892,13 @@ pub const WgpuNativeBackend = struct {
             }
         }
 
-        // 6. End render pass
+        // 6. Call GUI render callback if registered (for ImGui, etc.)
+        // This allows external GUI systems to render into the same pass
+        if (gui_render_callback) |callback| {
+            callback(render_pass);
+        }
+
+        // 7. End render pass
         render_pass.end();
 
         // 7. Submit command buffer
