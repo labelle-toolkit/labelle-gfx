@@ -1118,6 +1118,11 @@ pub const SokolBackend = struct {
     /// Note: This function may never return on some platforms (native).
     /// On Emscripten/WebAssembly, it returns immediately after setting up
     /// the async main loop. All cleanup should be done in the cleanup callback.
+    ///
+    /// Warning: This function is NOT reentrant. Only one sokol application can
+    /// run at a time, which is a limitation of sokol_app itself. Calling run()
+    /// a second time while the first is still active will overwrite the context
+    /// and cause undefined behavior.
     pub fn run(config: RunConfig) void {
         // Use static storage to ensure the context survives across async
         // main loop iterations on Emscripten (where sapp.run returns immediately)
@@ -1156,18 +1161,23 @@ pub const SokolBackend = struct {
     fn internalInit(user_data: ?*anyopaque) callconv(.c) void {
         const context: *RunContext = @ptrCast(@alignCast(user_data));
 
-        // Initialize sokol_gfx
-        sg.setup(.{
-            .environment = sokol.glue.environment(),
-            .logger = .{ .func = sokol.log.func },
-        });
-        sg_initialized = true;
+        // Initialize sokol_gfx (only if not already initialized)
+        // sg_setup() must only be called once per application lifetime
+        if (!sg.isvalid()) {
+            sg.setup(.{
+                .environment = sokol.glue.environment(),
+                .logger = .{ .func = sokol.log.func },
+            });
+            sg_initialized = true;
+        }
 
-        // Initialize sokol_gl
-        sgl.setup(.{
-            .logger = .{ .func = sokol.log.func },
-        });
-        sgl_initialized = true;
+        // Initialize sokol_gl (only if not already initialized)
+        if (!sgl_initialized) {
+            sgl.setup(.{
+                .logger = .{ .func = sokol.log.func },
+            });
+            sgl_initialized = true;
+        }
 
         // Call user's init callback
         if (context.config.init) |init_fn| {
@@ -1220,8 +1230,8 @@ pub const SokolBackend = struct {
         const context: *RunContext = @ptrCast(@alignCast(user_data));
 
         if (context.config.event) |event_fn| {
-            if (event) |e| {
-                event_fn(e.*);
+            if (event != null) {
+                event_fn(event.*);
             }
         }
     }
