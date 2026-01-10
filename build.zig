@@ -29,81 +29,102 @@ pub fn build(b: *std.Build) void {
     const zspec = zspec_dep.module("zspec");
 
     // Sokol dependency (optional backend)
+    // For iOS targets, use dont_link_system_libs since we configure SDK paths manually
     const sokol_dep = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
+        .dont_link_system_libs = is_ios,
     });
     const sokol = sokol_dep.module("sokol");
 
-    // SDL dependency (optional backend)
-    // SDL.zig uses an Sdk pattern - we import its build.zig and call init
+    // iOS SDK path configuration for sokol_clib
+    // Workaround for Zig bug #22704 - sysroot doesn't affect framework search paths
+    if (is_ios) {
+        const ios_sdk_path = std.zig.system.darwin.getSdk(b.allocator, &target.result);
+        if (ios_sdk_path) |sdk| {
+            const sokol_clib = sokol_dep.artifact("sokol_clib");
+            const fw_path = b.pathJoin(&.{ sdk, "System", "Library", "Frameworks" });
+            const subfw_path = b.pathJoin(&.{ sdk, "System", "Library", "SubFrameworks" });
+            const inc_path = b.pathJoin(&.{ sdk, "usr", "include" });
+            const lib_path = b.pathJoin(&.{ sdk, "usr", "lib" });
+
+            sokol_clib.root_module.addSystemIncludePath(.{ .cwd_relative = inc_path });
+            sokol_clib.root_module.addSystemFrameworkPath(.{ .cwd_relative = fw_path });
+            sokol_clib.root_module.addSystemFrameworkPath(.{ .cwd_relative = subfw_path });
+            sokol_clib.root_module.addLibraryPath(.{ .cwd_relative = lib_path });
+        }
+    }
+
+    // Desktop-only dependencies (SDL, bgfx, zglfw, zgpu, wgpu_native)
+    // These are not available on iOS and use C++ which complicates iOS cross-compilation
+    // Note: SDL uses @import("sdl") which is comptime - we need to always import it
+    // but only use it when not on iOS
     const SdlSdk = @import("sdl");
-    const sdl_sdk = SdlSdk.init(b, .{ .dep_name = "sdl" });
-    const sdl = sdl_sdk.getWrapperModule();
+    const sdl_sdk: ?*SdlSdk = if (!is_ios) SdlSdk.init(b, .{ .dep_name = "sdl" }) else null;
+    const sdl: ?*std.Build.Module = if (sdl_sdk) |sdk| sdk.getWrapperModule() else null;
 
-    // bgfx dependency (optional backend)
-    const zbgfx_dep = b.dependency("zbgfx", .{
+    // bgfx dependency (optional backend) - not available on iOS
+    const zbgfx_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("zbgfx", .{
         .target = target,
         .optimize = optimize,
-    });
-    const zbgfx = zbgfx_dep.module("zbgfx");
-    const bgfx_lib = zbgfx_dep.artifact("bgfx");
+    }) else null;
+    const zbgfx: ?*std.Build.Module = if (zbgfx_dep) |dep| dep.module("zbgfx") else null;
+    const bgfx_lib: ?*std.Build.Step.Compile = if (zbgfx_dep) |dep| dep.artifact("bgfx") else null;
 
-    // GLFW dependency (for bgfx/zgpu window management)
-    const zglfw_dep = b.dependency("zglfw", .{
+    // GLFW dependency (for bgfx/zgpu window management) - not available on iOS
+    const zglfw_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("zglfw", .{
         .target = target,
         .optimize = optimize,
-    });
-    const zglfw = zglfw_dep.module("root");
-    const glfw_lib = zglfw_dep.artifact("glfw");
+    }) else null;
+    const zglfw: ?*std.Build.Module = if (zglfw_dep) |dep| dep.module("root") else null;
+    const glfw_lib: ?*std.Build.Step.Compile = if (zglfw_dep) |dep| dep.artifact("glfw") else null;
 
-    // zgpu dependency (WebGPU via Dawn)
-    const zgpu_dep = b.dependency("zgpu", .{
+    // zgpu dependency (WebGPU via Dawn) - not available on iOS
+    const zgpu_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("zgpu", .{
         .target = target,
         .optimize = optimize,
-    });
-    const zgpu = zgpu_dep.module("root");
+    }) else null;
+    const zgpu: ?*std.Build.Module = if (zgpu_dep) |dep| dep.module("root") else null;
 
-    // wgpu_native_zig dependency (lower-level WebGPU bindings)
-    const wgpu_native_dep = b.dependency("wgpu_native_zig", .{
+    // wgpu_native_zig dependency (lower-level WebGPU bindings) - not available on iOS
+    const wgpu_native_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("wgpu_native_zig", .{
         .target = target,
         .optimize = optimize,
-    });
-    const wgpu_native = wgpu_native_dep.module("wgpu");
+    }) else null;
+    const wgpu_native: ?*std.Build.Module = if (wgpu_native_dep) |dep| dep.module("wgpu") else null;
 
     // Main library module - imports depend on target platform
     const lib_mod = b.addModule("labelle", .{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = if (raylib != null) &.{
+        .imports = if (!is_ios) &.{
+            // Desktop build - all backends available
             .{ .name = "zig_utils", .module = zig_utils },
             .{ .name = "raylib", .module = raylib.? },
             .{ .name = "sokol", .module = sokol },
-            .{ .name = "sdl2", .module = sdl },
-            .{ .name = "zbgfx", .module = zbgfx },
-            .{ .name = "zgpu", .module = zgpu },
-            .{ .name = "zglfw", .module = zglfw },
-            .{ .name = "wgpu", .module = wgpu_native },
+            .{ .name = "sdl2", .module = sdl.? },
+            .{ .name = "zbgfx", .module = zbgfx.? },
+            .{ .name = "zgpu", .module = zgpu.? },
+            .{ .name = "zglfw", .module = zglfw.? },
+            .{ .name = "wgpu", .module = wgpu_native.? },
         } else &.{
-            // iOS build - no raylib
+            // iOS build - only sokol backend available
             .{ .name = "zig_utils", .module = zig_utils },
             .{ .name = "sokol", .module = sokol },
-            .{ .name = "sdl2", .module = sdl },
-            .{ .name = "zbgfx", .module = zbgfx },
-            .{ .name = "zgpu", .module = zgpu },
-            .{ .name = "zglfw", .module = zglfw },
-            .{ .name = "wgpu", .module = wgpu_native },
         },
     });
 
     // Build options for conditional compilation
     const build_options = b.addOptions();
     build_options.addOption(bool, "has_raylib", raylib != null);
+    build_options.addOption(bool, "is_ios", is_ios);
     lib_mod.addOptions("build_options", build_options);
 
-    // Add stb_image include path for bgfx backend image loading
-    lib_mod.addIncludePath(zbgfx_dep.path("libs/bimg/3rdparty/stb"));
+    // Add stb_image include path for bgfx backend image loading (desktop only)
+    if (zbgfx_dep) |dep| {
+        lib_mod.addIncludePath(dep.path("libs/bimg/3rdparty/stb"));
+    }
 
     // Add stb_image_write include path for screenshot support (from raylib's external folder)
     // Only available when raylib is included
@@ -114,7 +135,9 @@ pub fn build(b: *std.Build) void {
     // Re-export dependency modules so downstream packages can reuse them
     // This prevents Zig 0.15's "file exists in multiple modules" error
     // by allowing downstream packages to use our module references
-    b.modules.put("sdl", sdl) catch @panic("OOM");
+    if (sdl) |s| {
+        b.modules.put("sdl", s) catch @panic("OOM");
+    }
     if (raylib) |rl| {
         b.modules.put("raylib", rl) catch @panic("OOM");
     }
@@ -127,24 +150,20 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/lib.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = if (raylib != null) &.{
+            .imports = if (!is_ios) &.{
+                // Desktop build - all backends available
                 .{ .name = "zig_utils", .module = zig_utils },
                 .{ .name = "raylib", .module = raylib.? },
                 .{ .name = "sokol", .module = sokol },
-                .{ .name = "sdl2", .module = sdl },
-                .{ .name = "zbgfx", .module = zbgfx },
-                .{ .name = "zgpu", .module = zgpu },
-                .{ .name = "zglfw", .module = zglfw },
-                .{ .name = "wgpu", .module = wgpu_native },
+                .{ .name = "sdl2", .module = sdl.? },
+                .{ .name = "zbgfx", .module = zbgfx.? },
+                .{ .name = "zgpu", .module = zgpu.? },
+                .{ .name = "zglfw", .module = zglfw.? },
+                .{ .name = "wgpu", .module = wgpu_native.? },
             } else &.{
-                // iOS build - no raylib
+                // iOS build - only sokol backend available
                 .{ .name = "zig_utils", .module = zig_utils },
                 .{ .name = "sokol", .module = sokol },
-                .{ .name = "sdl2", .module = sdl },
-                .{ .name = "zbgfx", .module = zbgfx },
-                .{ .name = "zgpu", .module = zgpu },
-                .{ .name = "zglfw", .module = zglfw },
-                .{ .name = "wgpu", .module = wgpu_native },
             },
         }),
     });
@@ -261,15 +280,15 @@ pub fn build(b: *std.Build) void {
         full_run_step.dependOn(&run_cmd.step);
     }
 
-    // SDL backend example (requires SDL linking)
-    {
+    // SDL backend example (requires SDL linking) - desktop only
+    if (!is_ios) {
         const sdl_example_mod = b.createModule(.{
             .root_source_file = b.path("examples/17_sdl_backend/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "labelle", .module = lib_mod },
-                .{ .name = "sdl2", .module = sdl },
+                .{ .name = "sdl2", .module = sdl.? },
             },
         });
 
@@ -279,8 +298,8 @@ pub fn build(b: *std.Build) void {
         });
 
         // Link SDL2 libraries using the SDK
-        sdl_sdk.link(sdl_example, .dynamic, .SDL2);
-        sdl_sdk.link(sdl_example, .dynamic, .SDL2_ttf);
+        sdl_sdk.?.link(sdl_example, .dynamic, .SDL2);
+        sdl_sdk.?.link(sdl_example, .dynamic, .SDL2_ttf);
         // SDL2_image must be linked manually via system library
         sdl_example.linkSystemLibrary("SDL2_image");
 
@@ -312,15 +331,15 @@ pub fn build(b: *std.Build) void {
         run_step.dependOn(&run_cmd.step);
     }
 
-    // Example 21 Fullscreen - SDL backend variant
-    {
+    // Example 21 Fullscreen - SDL backend variant (desktop only)
+    if (!is_ios) {
         const sdl_fullscreen_mod = b.createModule(.{
             .root_source_file = b.path("examples/21_fullscreen/main_sdl.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "labelle", .module = lib_mod },
-                .{ .name = "sdl2", .module = sdl },
+                .{ .name = "sdl2", .module = sdl.? },
             },
         });
 
@@ -329,8 +348,8 @@ pub fn build(b: *std.Build) void {
             .root_module = sdl_fullscreen_mod,
         });
 
-        sdl_sdk.link(sdl_fullscreen, .dynamic, .SDL2);
-        sdl_sdk.link(sdl_fullscreen, .dynamic, .SDL2_ttf);
+        sdl_sdk.?.link(sdl_fullscreen, .dynamic, .SDL2);
+        sdl_sdk.?.link(sdl_fullscreen, .dynamic, .SDL2_ttf);
         sdl_fullscreen.linkSystemLibrary("SDL2_image");
 
         const run_cmd = b.addRunArtifact(sdl_fullscreen);
@@ -361,15 +380,15 @@ pub fn build(b: *std.Build) void {
         full_run_step.dependOn(&run_cmd_22.step);
     }
 
-    // Example 23: bgfx backend with GLFW
-    {
+    // Example 23: bgfx backend with GLFW (desktop only)
+    if (!is_ios) {
         const bgfx_example_mod = b.createModule(.{
             .root_source_file = b.path("examples/23_bgfx_backend/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "zglfw", .module = zglfw },
-                .{ .name = "zbgfx", .module = zbgfx },
+                .{ .name = "zglfw", .module = zglfw.? },
+                .{ .name = "zbgfx", .module = zbgfx.? },
                 .{ .name = "labelle", .module = lib_mod },
             },
         });
@@ -382,8 +401,8 @@ pub fn build(b: *std.Build) void {
         });
 
         // Link bgfx and glfw libraries
-        bgfx_example.linkLibrary(bgfx_lib);
-        bgfx_example.linkLibrary(glfw_lib);
+        bgfx_example.linkLibrary(bgfx_lib.?);
+        bgfx_example.linkLibrary(glfw_lib.?);
 
         const run_cmd_23 = b.addRunArtifact(bgfx_example);
         const run_step_23 = b.step("run-example-23", "bgfx backend example with GLFW");
@@ -393,15 +412,15 @@ pub fn build(b: *std.Build) void {
         full_run_step_23.dependOn(&run_cmd_23.step);
     }
 
-    // Example 24: zgpu backend (WebGPU via Dawn) with GLFW
-    {
+    // Example 24: zgpu backend (WebGPU via Dawn) with GLFW (desktop only)
+    if (!is_ios) {
         const zgpu_example_mod = b.createModule(.{
             .root_source_file = b.path("examples/24_zgpu_backend/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "zglfw", .module = zglfw },
-                .{ .name = "zgpu", .module = zgpu },
+                .{ .name = "zglfw", .module = zglfw.? },
+                .{ .name = "zgpu", .module = zgpu.? },
                 .{ .name = "labelle", .module = lib_mod },
             },
         });
@@ -412,10 +431,10 @@ pub fn build(b: *std.Build) void {
         });
 
         // Link glfw library
-        zgpu_example.linkLibrary(glfw_lib);
+        zgpu_example.linkLibrary(glfw_lib.?);
 
         // Link Dawn (WebGPU) library and its dependencies
-        zgpu_example.linkLibrary(zgpu_dep.artifact("zdawn"));
+        zgpu_example.linkLibrary(zgpu_dep.?.artifact("zdawn"));
 
         // Import zgpu's build.zig to use its helper functions for Dawn library paths
         const zgpu_build = @import("zgpu");
@@ -452,14 +471,14 @@ pub fn build(b: *std.Build) void {
         full_run_step_25.dependOn(&run_cmd_25.step);
     }
 
-    // Example 26: wgpu_native backend (lower-level WebGPU) with GLFW
-    {
+    // Example 26: wgpu_native backend (lower-level WebGPU) with GLFW (desktop only)
+    if (!is_ios) {
         const wgpu_native_example_mod = b.createModule(.{
             .root_source_file = b.path("examples/25_wgpu_native_backend/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "zglfw", .module = zglfw },
+                .{ .name = "zglfw", .module = zglfw.? },
                 .{ .name = "labelle", .module = lib_mod },
             },
         });
@@ -470,7 +489,7 @@ pub fn build(b: *std.Build) void {
         });
 
         // Link glfw library
-        wgpu_native_example.linkLibrary(glfw_lib);
+        wgpu_native_example.linkLibrary(glfw_lib.?);
 
         const run_cmd_26 = b.addRunArtifact(wgpu_native_example);
         const run_step_26 = b.step("run-example-26", "wgpu_native backend example with GLFW");
