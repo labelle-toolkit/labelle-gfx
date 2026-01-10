@@ -993,6 +993,11 @@ pub const WgpuNativeBackend = struct {
     // Window Management (optional)
     // ============================================
 
+    /// Initializes a GLFW window and the WebGPU backend.
+    /// This function assumes ownership of the GLFW lifecycle. It will call `zglfw.init()`
+    /// and `closeWindow()` will call `zglfw.terminate()`.
+    /// If you want to manage the GLFW window and its lifecycle manually,
+    /// create a window yourself and then call `initWgpuNative()`.
     pub fn initWindow(width: i32, height: i32, title: [*:0]const u8) !void {
         // Initialize GLFW
         zglfw.init() catch |err| {
@@ -1025,7 +1030,9 @@ pub const WgpuNativeBackend = struct {
         owns_window = true;
 
         // Initialize WebGPU with the created window
-        initWgpuNative(std.heap.page_allocator, window) catch |err| {
+        // Use pre-configured allocator if set, otherwise fall back to page_allocator
+        const alloc = allocator orelse std.heap.page_allocator;
+        initWgpuNative(alloc, window) catch |err| {
             std.log.err("[wgpu_native] Failed to initialize WebGPU: {}", .{err});
             window.destroy();
             glfw_window = null;
@@ -1053,9 +1060,17 @@ pub const WgpuNativeBackend = struct {
                 .timed_wait_any_max_count = 0,
             },
         }) orelse return error.InstanceCreationFailed;
+        errdefer {
+            instance.?.release();
+            instance = null;
+        }
 
         // 2. Create surface from GLFW window
         surface = try createSurfaceFromGLFW(window);
+        errdefer {
+            surface.?.release();
+            surface = null;
+        }
 
         // 3. Request adapter
         const adapter_opts = wgpu.RequestAdapterOptions{
@@ -1070,6 +1085,10 @@ pub const WgpuNativeBackend = struct {
             return error.AdapterRequestFailed;
         }
         adapter = adapter_response.adapter;
+        errdefer {
+            adapter.?.release();
+            adapter = null;
+        }
 
         // 4. Request device
         const device_descriptor = wgpu.DeviceDescriptor{
@@ -1083,9 +1102,17 @@ pub const WgpuNativeBackend = struct {
             return error.DeviceRequestFailed;
         }
         device = device_response.device;
+        errdefer {
+            device.?.release();
+            device = null;
+        }
 
         // 5. Get queue
         queue = device.?.getQueue();
+        errdefer {
+            queue.?.release();
+            queue = null;
+        }
 
         // 6. Configure surface
         var surface_caps: wgpu.SurfaceCapabilities = undefined;
