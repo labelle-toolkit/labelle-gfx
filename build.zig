@@ -4,6 +4,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Check if targeting iOS (raylib not supported on iOS)
+    const is_ios = target.result.os.tag == .ios;
+
     // Build options
     const convert_atlases = b.option(bool, "convert-atlases", "Convert TexturePacker JSON files to .zon format") orelse false;
 
@@ -11,12 +14,13 @@ pub fn build(b: *std.Build) void {
     const zig_utils_dep = b.dependency("zig_utils", .{});
     const zig_utils = zig_utils_dep.module("zig_utils");
 
-    const raylib_dep = b.dependency("raylib_zig", .{
+    // Raylib dependency - only available on non-iOS platforms
+    const raylib_dep = if (!is_ios) b.dependency("raylib_zig", .{
         .target = target,
         .optimize = optimize,
-    });
-    const raylib = raylib_dep.module("raylib");
-    const raylib_artifact = raylib_dep.artifact("raylib");
+    }) else null;
+    const raylib = if (raylib_dep) |dep| dep.module("raylib") else null;
+    const raylib_artifact = if (raylib_dep) |dep| dep.artifact("raylib") else null;
 
     const zspec_dep = b.dependency("zspec", .{
         .target = target,
@@ -67,14 +71,23 @@ pub fn build(b: *std.Build) void {
     });
     const wgpu_native = wgpu_native_dep.module("wgpu");
 
-    // Main library module
+    // Main library module - imports depend on target platform
     const lib_mod = b.addModule("labelle", .{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
+        .imports = if (raylib != null) &.{
             .{ .name = "zig_utils", .module = zig_utils },
-            .{ .name = "raylib", .module = raylib },
+            .{ .name = "raylib", .module = raylib.? },
+            .{ .name = "sokol", .module = sokol },
+            .{ .name = "sdl2", .module = sdl },
+            .{ .name = "zbgfx", .module = zbgfx },
+            .{ .name = "zgpu", .module = zgpu },
+            .{ .name = "zglfw", .module = zglfw },
+            .{ .name = "wgpu", .module = wgpu_native },
+        } else &.{
+            // iOS build - no raylib
+            .{ .name = "zig_utils", .module = zig_utils },
             .{ .name = "sokol", .module = sokol },
             .{ .name = "sdl2", .module = sdl },
             .{ .name = "zbgfx", .module = zbgfx },
@@ -84,17 +97,27 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Build options for conditional compilation
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "has_raylib", raylib != null);
+    lib_mod.addOptions("build_options", build_options);
+
     // Add stb_image include path for bgfx backend image loading
     lib_mod.addIncludePath(zbgfx_dep.path("libs/bimg/3rdparty/stb"));
 
     // Add stb_image_write include path for screenshot support (from raylib's external folder)
-    lib_mod.addIncludePath(raylib_dep.path("src/external"));
+    // Only available when raylib is included
+    if (raylib_dep) |dep| {
+        lib_mod.addIncludePath(dep.path("src/external"));
+    }
 
     // Re-export dependency modules so downstream packages can reuse them
     // This prevents Zig 0.15's "file exists in multiple modules" error
     // by allowing downstream packages to use our module references
     b.modules.put("sdl", sdl) catch @panic("OOM");
-    b.modules.put("raylib", raylib) catch @panic("OOM");
+    if (raylib) |rl| {
+        b.modules.put("raylib", rl) catch @panic("OOM");
+    }
 
     // Static library for linking
     const lib = b.addLibrary(.{
@@ -104,9 +127,18 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/lib.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
+            .imports = if (raylib != null) &.{
                 .{ .name = "zig_utils", .module = zig_utils },
-                .{ .name = "raylib", .module = raylib },
+                .{ .name = "raylib", .module = raylib.? },
+                .{ .name = "sokol", .module = sokol },
+                .{ .name = "sdl2", .module = sdl },
+                .{ .name = "zbgfx", .module = zbgfx },
+                .{ .name = "zgpu", .module = zgpu },
+                .{ .name = "zglfw", .module = zglfw },
+                .{ .name = "wgpu", .module = wgpu_native },
+            } else &.{
+                // iOS build - no raylib
+                .{ .name = "zig_utils", .module = zig_utils },
                 .{ .name = "sokol", .module = sokol },
                 .{ .name = "sdl2", .module = sdl },
                 .{ .name = "zbgfx", .module = zbgfx },
@@ -116,7 +148,10 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    lib.linkLibrary(raylib_artifact);
+    lib.root_module.addOptions("build_options", build_options);
+    if (raylib_artifact) |artifact| {
+        lib.linkLibrary(artifact);
+    }
     b.installArtifact(lib);
 
     // Examples
@@ -140,15 +175,15 @@ pub fn build(b: *std.Build) void {
         .{ .name = "21_fullscreen", .path = "examples/21_fullscreen/main.zig", .desc = "Fullscreen toggle with screen resize handling" },
     };
 
-    // Example 12: Comptime animations (needs .zon imports)
-    {
+    // Example 12: Comptime animations (needs .zon imports) - raylib only
+    if (raylib != null and raylib_artifact != null) {
         const example_12_mod = b.createModule(.{
             .root_source_file = b.path("examples/12_comptime_animations/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "labelle", .module = lib_mod },
-                .{ .name = "raylib", .module = raylib },
+                .{ .name = "raylib", .module = raylib.? },
             },
         });
 
@@ -164,7 +199,7 @@ pub fn build(b: *std.Build) void {
             .name = "12_comptime_animations",
             .root_module = example_12_mod,
         });
-        example_12.linkLibrary(raylib_artifact);
+        example_12.linkLibrary(raylib_artifact.?);
 
         const run_cmd = b.addRunArtifact(example_12);
         const run_step = b.step("run-example-12", "Comptime animation definitions");
@@ -174,30 +209,33 @@ pub fn build(b: *std.Build) void {
         full_run_step.dependOn(&run_cmd.step);
     }
 
-    for (examples) |example| {
-        const exe = b.addExecutable(.{
-            .name = example.name,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(example.path),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "labelle", .module = lib_mod },
-                    .{ .name = "raylib", .module = raylib },
-                },
-            }),
-        });
-        exe.linkLibrary(raylib_artifact);
+    // Raylib examples - only built on non-iOS platforms
+    if (raylib != null and raylib_artifact != null) {
+        for (examples) |example| {
+            const exe = b.addExecutable(.{
+                .name = example.name,
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path(example.path),
+                    .target = target,
+                    .optimize = optimize,
+                    .imports = &.{
+                        .{ .name = "labelle", .module = lib_mod },
+                        .{ .name = "raylib", .module = raylib.? },
+                    },
+                }),
+            });
+            exe.linkLibrary(raylib_artifact.?);
 
-        const run_cmd = b.addRunArtifact(exe);
-        const step_name = b.fmt("run-example-{s}", .{example.name[0..2]});
-        const run_step = b.step(step_name, example.desc);
-        run_step.dependOn(&run_cmd.step);
+            const run_cmd = b.addRunArtifact(exe);
+            const step_name = b.fmt("run-example-{s}", .{example.name[0..2]});
+            const run_step = b.step(step_name, example.desc);
+            run_step.dependOn(&run_cmd.step);
 
-        // Also add full name version
-        const full_step_name = b.fmt("run-{s}", .{example.name});
-        const full_run_step = b.step(full_step_name, example.desc);
-        full_run_step.dependOn(&run_cmd.step);
+            // Also add full name version
+            const full_step_name = b.fmt("run-{s}", .{example.name});
+            const full_run_step = b.step(full_step_name, example.desc);
+            full_run_step.dependOn(&run_cmd.step);
+        }
     }
 
     // Sokol backend example (requires different linking)
@@ -480,41 +518,46 @@ pub fn build(b: *std.Build) void {
         }
     }
 
-    // Tests with zspec
-    const lib_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tests/lib_test.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "labelle", .module = lib_mod },
-                .{ .name = "raylib", .module = raylib },
-                .{ .name = "zspec", .module = zspec },
-            },
-        }),
-        .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
-    });
+    // Tests with zspec - raylib tests only available on non-iOS
+    if (raylib != null and raylib_artifact != null) {
+        const lib_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tests/lib_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle", .module = lib_mod },
+                    .{ .name = "raylib", .module = raylib.? },
+                    .{ .name = "zspec", .module = zspec },
+                },
+            }),
+            .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
+        });
+        lib_tests.linkLibrary(raylib_artifact.?);
 
-    const run_lib_tests = b.addRunArtifact(lib_tests);
-    const test_step = b.step("test", "Run library tests");
-    test_step.dependOn(&run_lib_tests.step);
+        const run_lib_tests = b.addRunArtifact(lib_tests);
+        const test_step = b.step("test", "Run library tests");
+        test_step.dependOn(&run_lib_tests.step);
+    }
 
-    // Benchmarks
-    const culling_benchmark = b.addExecutable(.{
-        .name = "culling_benchmark",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("benchmarks/culling_benchmark.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "labelle", .module = lib_mod },
-                .{ .name = "raylib", .module = raylib },
-            },
-        }),
-    });
-    culling_benchmark.linkLibrary(raylib_artifact);
+    // Benchmarks - raylib only
+    if (raylib != null and raylib_artifact != null) {
+        const culling_benchmark = b.addExecutable(.{
+            .name = "culling_benchmark",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("benchmarks/culling_benchmark.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle", .module = lib_mod },
+                    .{ .name = "raylib", .module = raylib.? },
+                },
+            }),
+        });
+        culling_benchmark.linkLibrary(raylib_artifact.?);
 
-    const run_culling_benchmark = b.addRunArtifact(culling_benchmark);
-    const bench_culling_step = b.step("bench-culling", "Run viewport culling benchmark");
-    bench_culling_step.dependOn(&run_culling_benchmark.step);
+        const run_culling_benchmark = b.addRunArtifact(culling_benchmark);
+        const bench_culling_step = b.step("bench-culling", "Run viewport culling benchmark");
+        bench_culling_step.dependOn(&run_culling_benchmark.step);
+    }
 }

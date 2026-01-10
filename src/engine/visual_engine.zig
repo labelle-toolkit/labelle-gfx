@@ -29,6 +29,7 @@
 //! ```
 
 const std = @import("std");
+const build_options = @import("build_options");
 const sprite_storage = @import("sprite_storage.zig");
 const shape_storage = @import("shape_storage.zig");
 const z_index_buckets = @import("z_index_buckets.zig");
@@ -37,7 +38,11 @@ const GenericShapeStorage = shape_storage.GenericShapeStorage;
 
 // Backend and rendering imports
 const backend_mod = @import("../backend/backend.zig");
-const raylib_backend = @import("../backend/raylib_backend.zig");
+const raylib_backend = if (build_options.has_raylib)
+    @import("../backend/raylib_backend.zig")
+else
+    struct { pub const RaylibBackend = void; };
+const sokol_backend = @import("../backend/sokol_backend.zig");
 const renderer_mod = @import("../renderer/renderer.zig");
 const texture_manager_mod = @import("../texture/texture_manager.zig");
 const camera_mod = @import("../camera/camera.zig");
@@ -1337,8 +1342,11 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
     };
 }
 
-// Default backend
-const DefaultBackend = backend_mod.Backend(raylib_backend.RaylibBackend);
+// Default backend - raylib on desktop, sokol on iOS
+const DefaultBackend = if (build_options.has_raylib)
+    backend_mod.Backend(raylib_backend.RaylibBackend)
+else
+    backend_mod.Backend(sokol_backend.SokolBackend);
 
-/// Default visual engine with raylib backend and 2000 max sprites
+/// Default visual engine with platform-appropriate backend and 2000 max sprites
 pub const VisualEngine = VisualEngineWith(DefaultBackend, 2000);
