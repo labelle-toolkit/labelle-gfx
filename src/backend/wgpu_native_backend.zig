@@ -368,6 +368,8 @@ pub const WgpuNativeBackend = struct {
     var surface_config: ?wgpu.SurfaceConfiguration = null;
     var allocator: ?std.mem.Allocator = null;
     var glfw_window: ?*zglfw.Window = null;
+    var owns_window: bool = false;
+    var config_flags: backend_mod.ConfigFlags = .{};
 
     // GUI render callback (for ImGui integration)
     // Called during endDrawing() with an active render pass
@@ -991,10 +993,48 @@ pub const WgpuNativeBackend = struct {
     // Window Management (optional)
     // ============================================
 
-    pub fn initWindow(width: i32, height: i32, title: [*:0]const u8) void {
-        _ = title;
-        screen_width = width;
-        screen_height = height;
+    pub fn initWindow(width: i32, height: i32, title: [*:0]const u8) !void {
+        // Initialize GLFW
+        zglfw.init() catch |err| {
+            std.log.err("[wgpu_native] Failed to initialize GLFW: {}", .{err});
+            return error.GlfwInitFailed;
+        };
+
+        // Apply window hints based on config flags
+        if (config_flags.window_hidden) {
+            zglfw.windowHint(.visible, false);
+        }
+        zglfw.windowHint(.resizable, config_flags.window_resizable);
+
+        // Don't use OpenGL - we're using WebGPU
+        zglfw.windowHint(.client_api, .no_api);
+
+        // Create GLFW window
+        const window = zglfw.createWindow(
+            width,
+            height,
+            std.mem.span(title),
+            null,
+        ) catch |err| {
+            std.log.err("[wgpu_native] Failed to create GLFW window: {}", .{err});
+            zglfw.terminate();
+            return error.WindowCreationFailed;
+        };
+
+        glfw_window = window;
+        owns_window = true;
+
+        // Initialize WebGPU with the created window
+        initWgpuNative(std.heap.page_allocator, window) catch |err| {
+            std.log.err("[wgpu_native] Failed to initialize WebGPU: {}", .{err});
+            window.destroy();
+            glfw_window = null;
+            owns_window = false;
+            zglfw.terminate();
+            return err;
+        };
+
+        std.log.info("[wgpu_native] Window and WebGPU initialized ({}x{})", .{ width, height });
     }
 
     pub fn initWgpuNative(alloc: std.mem.Allocator, window: *zglfw.Window) !void {
@@ -1436,7 +1476,6 @@ pub const WgpuNativeBackend = struct {
 
         // Clear GUI render callback
         unregisterGuiRenderCallback();
-        glfw_window = null;
 
         // Cleanup batches
         if (shape_batch) |*batch| {
@@ -1540,17 +1579,30 @@ pub const WgpuNativeBackend = struct {
             adapter = null;
         }
 
-        // Release instance (must be last)
+        // Release instance (must be last WebGPU resource)
         if (instance) |inst| {
             inst.release();
             instance = null;
         }
 
+        // Destroy GLFW window and terminate if we created it
+        if (owns_window) {
+            if (glfw_window) |window| {
+                window.destroy();
+            }
+            zglfw.terminate();
+            owns_window = false;
+        }
+        glfw_window = null;
+
         std.log.info("[wgpu_native] Cleanup complete", .{});
     }
 
     pub fn windowShouldClose() bool {
-        return false;
+        if (glfw_window) |window| {
+            return window.shouldClose();
+        }
+        return true; // No window = should close
     }
 
     pub fn setTargetFPS(fps: i32) void {
@@ -1563,8 +1615,7 @@ pub const WgpuNativeBackend = struct {
     }
 
     pub fn setConfigFlags(flags: backend_mod.ConfigFlags) void {
-        _ = flags;
-        // Configuration happens before window creation
+        config_flags = flags;
     }
 
     pub fn takeScreenshot(filename: [*:0]const u8) void {
