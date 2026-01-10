@@ -58,6 +58,7 @@
 //! ```
 
 const std = @import("std");
+const build_options = @import("build_options");
 
 // Logging
 pub const log = @import("log.zig");
@@ -68,9 +69,18 @@ pub const Backend = backend.Backend;
 pub const BackendError = backend.BackendError;
 pub const ConfigFlags = backend.ConfigFlags;
 
-// Backend implementations
-pub const raylib_backend = @import("backend/raylib_backend.zig");
-pub const RaylibBackend = raylib_backend.RaylibBackend;
+// Backend implementations - raylib is conditional (not available on iOS)
+pub const raylib_backend = if (build_options.has_raylib)
+    @import("backend/raylib_backend.zig")
+else
+    struct {
+        pub const RaylibBackend = void; // Placeholder when raylib not available
+    };
+pub const RaylibBackend = if (build_options.has_raylib)
+    raylib_backend.RaylibBackend
+else
+    void;
+
 pub const mock_backend = @import("backend/mock_backend.zig");
 pub const MockBackend = mock_backend.MockBackend;
 pub const sokol_backend = @import("backend/sokol_backend.zig");
@@ -84,8 +94,11 @@ pub const ZgpuBackend = zgpu_backend.ZgpuBackend;
 pub const wgpu_native_backend = @import("backend/wgpu_native_backend.zig");
 pub const WgpuNativeBackend = wgpu_native_backend.WgpuNativeBackend;
 
-// Default backend (raylib)
-pub const DefaultBackend = Backend(RaylibBackend);
+// Default backend - raylib on desktop, sokol on iOS
+pub const DefaultBackend = if (build_options.has_raylib)
+    Backend(raylib_backend.RaylibBackend)
+else
+    Backend(SokolBackend);
 
 // Engine API (provides UI helpers)
 const engine_mod = @import("engine/engine.zig");
