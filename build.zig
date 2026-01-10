@@ -519,7 +519,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Tests with zspec - raylib tests only available on non-iOS
-    if (raylib != null) {
+    if (raylib != null and raylib_artifact != null) {
         const lib_tests = b.addTest(.{
             .root_module = b.createModule(.{
                 .root_source_file = b.path("tests/lib_test.zig"),
@@ -533,6 +533,7 @@ pub fn build(b: *std.Build) void {
             }),
             .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
         });
+        lib_tests.linkLibrary(raylib_artifact.?);
 
         const run_lib_tests = b.addRunArtifact(lib_tests);
         const test_step = b.step("test", "Run library tests");
