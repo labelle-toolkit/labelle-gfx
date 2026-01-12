@@ -32,12 +32,11 @@ pub fn build(b: *std.Build) void {
     const zspec = zspec_dep.module("zspec");
 
     // Sokol dependency (optional backend)
-    // For iOS targets, use dont_link_system_libs since we configure SDK paths manually
-    // For WASM targets, sokol handles Emscripten setup internally
+    // For iOS/WASM targets, use dont_link_system_libs since we configure SDK/sysroot manually
     const sokol_dep = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
-        .dont_link_system_libs = is_ios,
+        .dont_link_system_libs = is_ios or is_wasm,
     });
     const sokol = sokol_dep.module("sokol");
 
