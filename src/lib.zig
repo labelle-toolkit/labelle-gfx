@@ -85,6 +85,9 @@ pub const mock_backend = @import("backend/mock_backend.zig");
 pub const MockBackend = mock_backend.MockBackend;
 pub const sokol_backend = @import("backend/sokol_backend.zig");
 pub const SokolBackend = sokol_backend.SokolBackend;
+
+// Re-export sokol bindings for direct access (needed for iOS callback architecture)
+pub const sokol = @import("sokol");
 pub const sdl_backend = @import("backend/sdl_backend.zig");
 pub const SdlBackend = sdl_backend.SdlBackend;
 pub const bgfx_backend = @import("backend/bgfx_backend.zig");
