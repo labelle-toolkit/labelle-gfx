@@ -3,11 +3,19 @@
 //! Effect types for visual effects like fade, temporal fade, and flash.
 //! These can be used with VisualEngine or your own rendering system.
 
+const build_options = @import("build_options");
 const backend_mod = @import("../backend/backend.zig");
-const raylib_backend = @import("../backend/raylib_backend.zig");
+const sokol_backend = @import("../backend/sokol_backend.zig");
+const raylib_backend = if (build_options.has_raylib)
+    @import("../backend/raylib_backend.zig")
+else
+    struct { pub const RaylibBackend = void; };
 
-/// Default backend for backwards compatibility
-pub const DefaultBackend = backend_mod.Backend(raylib_backend.RaylibBackend);
+/// Default backend (raylib on desktop, sokol on iOS/WASM)
+pub const DefaultBackend = if (build_options.has_raylib)
+    backend_mod.Backend(raylib_backend.RaylibBackend)
+else
+    backend_mod.Backend(sokol_backend.SokolBackend);
 
 /// Fade effect component
 pub const Fade = struct {

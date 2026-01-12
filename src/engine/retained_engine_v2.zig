@@ -55,8 +55,13 @@ const z_buckets = @import("z_buckets.zig");
 const render_helpers = @import("render_helpers.zig");
 
 // Backend imports
+const build_options = @import("build_options");
 const backend_mod = @import("../backend/backend.zig");
-const raylib_backend = @import("../backend/raylib_backend.zig");
+const sokol_backend = @import("../backend/sokol_backend.zig");
+const raylib_backend = if (build_options.has_raylib)
+    @import("../backend/raylib_backend.zig")
+else
+    struct { pub const RaylibBackend = void; };
 const camera_manager_mod = @import("../camera/camera_manager.zig");
 
 // Re-export common types

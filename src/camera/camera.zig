@@ -3,8 +3,9 @@
 //! Supports viewport culling (frustum culling) to optimize rendering by skipping
 //! entities that are completely outside the visible camera area.
 
+const build_options = @import("build_options");
 const backend_mod = @import("../backend/backend.zig");
-const raylib_backend = @import("../backend/raylib_backend.zig");
+const sokol_backend = @import("../backend/sokol_backend.zig");
 
 /// Screen viewport rectangle (pixel coordinates)
 pub const ScreenViewport = struct {
@@ -252,6 +253,9 @@ pub fn CameraWith(comptime BackendType: type) type {
     };
 }
 
-/// Default camera using raylib backend (backwards compatible)
-pub const DefaultBackend = backend_mod.Backend(raylib_backend.RaylibBackend);
+/// Default camera backend (raylib on desktop, sokol on iOS/WASM)
+pub const DefaultBackend = if (build_options.has_raylib)
+    backend_mod.Backend(@import("../backend/raylib_backend.zig").RaylibBackend)
+else
+    backend_mod.Backend(sokol_backend.SokolBackend);
 pub const Camera = CameraWith(DefaultBackend);

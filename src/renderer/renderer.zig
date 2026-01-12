@@ -24,9 +24,14 @@
 //! visual popping at screen edges.
 
 const std = @import("std");
+const build_options = @import("build_options");
 
 const backend_mod = @import("../backend/backend.zig");
-const raylib_backend = @import("../backend/raylib_backend.zig");
+const sokol_backend = @import("../backend/sokol_backend.zig");
+const raylib_backend = if (build_options.has_raylib)
+    @import("../backend/raylib_backend.zig")
+else
+    struct { pub const RaylibBackend = void; };
 
 const components = @import("../components/components.zig");
 const Render = components.Render;
