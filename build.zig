@@ -7,16 +7,21 @@ pub fn build(b: *std.Build) void {
     // Build options
     const convert_atlases = b.option(bool, "convert-atlases", "Convert TexturePacker JSON files to .zon format") orelse false;
 
+    // Backend selection - determines which graphics backend to compile
+    // This prevents importing unavailable modules (e.g., raylib on iOS)
+    const BackendOption = enum { raylib, sokol, sdl, bgfx, zgpu, mock, all };
+    const backend_option = b.option(BackendOption, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
+
+    // Helper to check if a backend should be included
+    const include_raylib = backend_option == .raylib or backend_option == .all;
+    const include_sokol = backend_option == .sokol or backend_option == .all;
+    const include_sdl = backend_option == .sdl or backend_option == .all;
+    const include_bgfx = backend_option == .bgfx or backend_option == .all;
+    const include_zgpu = backend_option == .zgpu or backend_option == .all;
+
     // Dependencies
     const zig_utils_dep = b.dependency("zig_utils", .{});
     const zig_utils = zig_utils_dep.module("zig_utils");
-
-    const raylib_dep = b.dependency("raylib_zig", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const raylib = raylib_dep.module("raylib");
-    const raylib_artifact = raylib_dep.artifact("raylib");
 
     const zspec_dep = b.dependency("zspec", .{
         .target = target,
@@ -24,360 +29,409 @@ pub fn build(b: *std.Build) void {
     });
     const zspec = zspec_dep.module("zspec");
 
-    // Sokol dependency (optional backend)
-    const sokol_dep = b.dependency("sokol", .{
+    // Backend-specific dependencies (only loaded when needed)
+    // Raylib
+    const raylib_dep = if (include_raylib) b.dependency("raylib_zig", .{
         .target = target,
         .optimize = optimize,
-    });
-    const sokol = sokol_dep.module("sokol");
+    }) else null;
+    const raylib = if (raylib_dep) |dep| dep.module("raylib") else null;
+    const raylib_artifact = if (raylib_dep) |dep| dep.artifact("raylib") else null;
 
-    // SDL dependency (optional backend)
-    // SDL.zig uses an Sdk pattern - we import its build.zig and call init
+    // Sokol
+    const sokol_dep = if (include_sokol) b.dependency("sokol", .{
+        .target = target,
+        .optimize = optimize,
+    }) else null;
+    const sokol = if (sokol_dep) |dep| dep.module("sokol") else null;
+
+    // SDL
     const SdlSdk = @import("sdl");
-    const sdl_sdk = SdlSdk.init(b, .{ .dep_name = "sdl" });
-    const sdl = sdl_sdk.getWrapperModule();
+    const sdl_sdk = if (include_sdl) SdlSdk.init(b, .{ .dep_name = "sdl" }) else null;
+    const sdl = if (sdl_sdk) |sdk| sdk.getWrapperModule() else null;
 
-    // bgfx dependency (optional backend)
-    const zbgfx_dep = b.dependency("zbgfx", .{
+    // bgfx
+    const zbgfx_dep = if (include_bgfx) b.dependency("zbgfx", .{
         .target = target,
         .optimize = optimize,
-    });
-    const zbgfx = zbgfx_dep.module("zbgfx");
-    const bgfx_lib = zbgfx_dep.artifact("bgfx");
+    }) else null;
+    const zbgfx = if (zbgfx_dep) |dep| dep.module("zbgfx") else null;
+    const bgfx_lib = if (zbgfx_dep) |dep| dep.artifact("bgfx") else null;
 
-    // GLFW dependency (for bgfx/zgpu window management)
-    const zglfw_dep = b.dependency("zglfw", .{
+    // GLFW (for bgfx/zgpu window management)
+    const zglfw_dep = if (include_bgfx or include_zgpu) b.dependency("zglfw", .{
         .target = target,
         .optimize = optimize,
-    });
-    const zglfw = zglfw_dep.module("root");
-    const glfw_lib = zglfw_dep.artifact("glfw");
+    }) else null;
+    const zglfw = if (zglfw_dep) |dep| dep.module("root") else null;
+    const glfw_lib = if (zglfw_dep) |dep| dep.artifact("glfw") else null;
 
-    // zgpu dependency (WebGPU via Dawn)
-    const zgpu_dep = b.dependency("zgpu", .{
+    // zgpu (WebGPU via Dawn)
+    const zgpu_dep = if (include_zgpu) b.dependency("zgpu", .{
         .target = target,
         .optimize = optimize,
-    });
-    const zgpu = zgpu_dep.module("root");
+    }) else null;
+    const zgpu = if (zgpu_dep) |dep| dep.module("root") else null;
 
-    // Main library module
+    // Build options for conditional compilation in lib.zig
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "has_raylib", include_raylib);
+    build_options.addOption(bool, "has_sokol", include_sokol);
+    build_options.addOption(bool, "has_sdl", include_sdl);
+    build_options.addOption(bool, "has_bgfx", include_bgfx);
+    build_options.addOption(bool, "has_zgpu", include_zgpu);
+
+    // Main library module with conditional backend imports
     const lib_mod = b.addModule("labelle", .{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
-            .{ .name = "zig_utils", .module = zig_utils },
-            .{ .name = "raylib", .module = raylib },
-            .{ .name = "sokol", .module = sokol },
-            .{ .name = "sdl2", .module = sdl },
-            .{ .name = "zbgfx", .module = zbgfx },
-            .{ .name = "zgpu", .module = zgpu },
-            .{ .name = "zglfw", .module = zglfw },
-        },
     });
 
-    // Add stb_image include path for bgfx backend image loading
-    lib_mod.addIncludePath(zbgfx_dep.path("libs/bimg/3rdparty/stb"));
+    // Add build options module
+    lib_mod.addImport("build_options", build_options.createModule());
+
+    // Always add zig_utils
+    lib_mod.addImport("zig_utils", zig_utils);
+
+    // Conditionally add backend modules
+    if (raylib) |mod| lib_mod.addImport("raylib", mod);
+    if (sokol) |mod| lib_mod.addImport("sokol", mod);
+    if (sdl) |mod| lib_mod.addImport("sdl2", mod);
+    if (zbgfx) |mod| lib_mod.addImport("zbgfx", mod);
+    if (zgpu) |mod| lib_mod.addImport("zgpu", mod);
+    if (zglfw) |mod| lib_mod.addImport("zglfw", mod);
+
+    // Add stb_image include path for bgfx backend image loading (only if bgfx is included)
+    if (zbgfx_dep) |dep| lib_mod.addIncludePath(dep.path("libs/bimg/3rdparty/stb"));
 
     // Add stb_image_write include path for screenshot support (from raylib's external folder)
-    lib_mod.addIncludePath(raylib_dep.path("src/external"));
+    if (raylib_dep) |dep| lib_mod.addIncludePath(dep.path("src/external"));
 
     // Re-export dependency modules so downstream packages can reuse them
     // This prevents Zig 0.15's "file exists in multiple modules" error
     // by allowing downstream packages to use our module references
-    b.modules.put("sdl", sdl) catch @panic("OOM");
-    b.modules.put("raylib", raylib) catch @panic("OOM");
+    if (sdl) |mod| b.modules.put("sdl", mod) catch @panic("OOM");
+    if (raylib) |mod| b.modules.put("raylib", mod) catch @panic("OOM");
 
-    // Static library for linking
-    const lib = b.addLibrary(.{
-        .linkage = .static,
-        .name = "labelle",
-        .root_module = b.createModule(.{
+    // Static library for linking (only built when raylib backend is selected)
+    if (include_raylib) {
+        const lib_root_mod = b.createModule(.{
             .root_source_file = b.path("src/lib.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zig_utils", .module = zig_utils },
-                .{ .name = "raylib", .module = raylib },
-                .{ .name = "sokol", .module = sokol },
-                .{ .name = "sdl2", .module = sdl },
-                .{ .name = "zbgfx", .module = zbgfx },
-            },
-        }),
-    });
-    lib.linkLibrary(raylib_artifact);
-    b.installArtifact(lib);
-
-    // Examples
-    const examples = [_]struct { name: []const u8, path: []const u8, desc: []const u8 }{
-        .{ .name = "01_basic_sprite", .path = "examples/01_basic_sprite/main.zig", .desc = "Basic sprite rendering" },
-        .{ .name = "02_animation", .path = "examples/02_animation/main.zig", .desc = "Animation system" },
-        .{ .name = "03_sprite_atlas", .path = "examples/03_sprite_atlas/main.zig", .desc = "Sprite atlas loading" },
-        .{ .name = "04_camera", .path = "examples/04_camera/main.zig", .desc = "Camera pan and zoom" },
-        .{ .name = "05_ecs_rendering", .path = "examples/05_ecs_rendering/main.zig", .desc = "ECS render systems" },
-        .{ .name = "06_effects", .path = "examples/06_effects/main.zig", .desc = "Visual effects" },
-        .{ .name = "07_with_fixtures", .path = "examples/07_with_fixtures/main.zig", .desc = "TexturePacker fixtures demo" },
-        .{ .name = "08_nested_animations", .path = "examples/08_nested_animations/main.zig", .desc = "Nested animation paths" },
-        .{ .name = "11_visual_engine", .path = "examples/11_visual_engine/main.zig", .desc = "Visual engine with actual rendering" },
-        .{ .name = "13_pivot_points", .path = "examples/13_pivot_points/main.zig", .desc = "Pivot point/anchor support for sprites" },
-        .{ .name = "14_tile_map", .path = "examples/14_tile_map/main.zig", .desc = "Tiled Map Editor (.tmx) support" },
-        .{ .name = "15_shapes", .path = "examples/15_shapes/main.zig", .desc = "Shape primitives (circle, rect, line, triangle, polygon)" },
-        .{ .name = "16_retained_engine", .path = "examples/16_retained_engine.zig", .desc = "Retained mode rendering with EntityId-based API" },
-        .{ .name = "18_multi_camera", .path = "examples/18_multi_camera.zig", .desc = "Multi-camera support for split-screen and minimap" },
-        .{ .name = "19_layers", .path = "examples/19_layers.zig", .desc = "Canvas/Layer system for organized rendering passes" },
-        .{ .name = "20_sprite_sizing", .path = "examples/20_sprite_sizing/main.zig", .desc = "Container-based sprite sizing (stretch, cover, contain, repeat)" },
-        .{ .name = "21_fullscreen", .path = "examples/21_fullscreen/main.zig", .desc = "Fullscreen toggle with screen resize handling" },
-    };
-
-    // Example 12: Comptime animations (needs .zon imports)
-    {
-        const example_12_mod = b.createModule(.{
-            .root_source_file = b.path("examples/12_comptime_animations/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "labelle", .module = lib_mod },
-                .{ .name = "raylib", .module = raylib },
-            },
         });
+        lib_root_mod.addImport("build_options", build_options.createModule());
+        lib_root_mod.addImport("zig_utils", zig_utils);
+        if (raylib) |mod| lib_root_mod.addImport("raylib", mod);
+        if (sokol) |mod| lib_root_mod.addImport("sokol", mod);
+        if (sdl) |mod| lib_root_mod.addImport("sdl2", mod);
+        if (zbgfx) |mod| lib_root_mod.addImport("zbgfx", mod);
 
-        // Add .zon file imports for comptime loading
-        example_12_mod.addImport("characters_frames.zon", b.createModule(.{
-            .root_source_file = b.path("fixtures/output/characters_frames.zon"),
-        }));
-        example_12_mod.addImport("characters_animations.zon", b.createModule(.{
-            .root_source_file = b.path("fixtures/output/characters_animations.zon"),
-        }));
-
-        const example_12 = b.addExecutable(.{
-            .name = "12_comptime_animations",
-            .root_module = example_12_mod,
+        const lib = b.addLibrary(.{
+            .linkage = .static,
+            .name = "labelle",
+            .root_module = lib_root_mod,
         });
-        example_12.linkLibrary(raylib_artifact);
-
-        const run_cmd = b.addRunArtifact(example_12);
-        const run_step = b.step("run-example-12", "Comptime animation definitions");
-        run_step.dependOn(&run_cmd.step);
-
-        const full_run_step = b.step("run-12_comptime_animations", "Comptime animation definitions");
-        full_run_step.dependOn(&run_cmd.step);
+        if (raylib_artifact) |artifact| lib.linkLibrary(artifact);
+        b.installArtifact(lib);
     }
 
-    for (examples) |example| {
-        const exe = b.addExecutable(.{
-            .name = example.name,
-            .root_module = b.createModule(.{
+    // Examples (raylib-based - only built when raylib backend is selected)
+    if (include_raylib) {
+        const raylib_mod = raylib.?;
+        const raylib_art = raylib_artifact.?;
+
+        const examples = [_]struct { name: []const u8, path: []const u8, desc: []const u8 }{
+            .{ .name = "01_basic_sprite", .path = "examples/01_basic_sprite/main.zig", .desc = "Basic sprite rendering" },
+            .{ .name = "02_animation", .path = "examples/02_animation/main.zig", .desc = "Animation system" },
+            .{ .name = "03_sprite_atlas", .path = "examples/03_sprite_atlas/main.zig", .desc = "Sprite atlas loading" },
+            .{ .name = "04_camera", .path = "examples/04_camera/main.zig", .desc = "Camera pan and zoom" },
+            .{ .name = "05_ecs_rendering", .path = "examples/05_ecs_rendering/main.zig", .desc = "ECS render systems" },
+            .{ .name = "06_effects", .path = "examples/06_effects/main.zig", .desc = "Visual effects" },
+            .{ .name = "07_with_fixtures", .path = "examples/07_with_fixtures/main.zig", .desc = "TexturePacker fixtures demo" },
+            .{ .name = "08_nested_animations", .path = "examples/08_nested_animations/main.zig", .desc = "Nested animation paths" },
+            .{ .name = "11_visual_engine", .path = "examples/11_visual_engine/main.zig", .desc = "Visual engine with actual rendering" },
+            .{ .name = "13_pivot_points", .path = "examples/13_pivot_points/main.zig", .desc = "Pivot point/anchor support for sprites" },
+            .{ .name = "14_tile_map", .path = "examples/14_tile_map/main.zig", .desc = "Tiled Map Editor (.tmx) support" },
+            .{ .name = "15_shapes", .path = "examples/15_shapes/main.zig", .desc = "Shape primitives (circle, rect, line, triangle, polygon)" },
+            .{ .name = "16_retained_engine", .path = "examples/16_retained_engine.zig", .desc = "Retained mode rendering with EntityId-based API" },
+            .{ .name = "18_multi_camera", .path = "examples/18_multi_camera.zig", .desc = "Multi-camera support for split-screen and minimap" },
+            .{ .name = "19_layers", .path = "examples/19_layers.zig", .desc = "Canvas/Layer system for organized rendering passes" },
+            .{ .name = "20_sprite_sizing", .path = "examples/20_sprite_sizing/main.zig", .desc = "Container-based sprite sizing (stretch, cover, contain, repeat)" },
+            .{ .name = "21_fullscreen", .path = "examples/21_fullscreen/main.zig", .desc = "Fullscreen toggle with screen resize handling" },
+        };
+
+        // Example 12: Comptime animations (needs .zon imports)
+        {
+            const example_12_mod = b.createModule(.{
+                .root_source_file = b.path("examples/12_comptime_animations/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            });
+            example_12_mod.addImport("labelle", lib_mod);
+            example_12_mod.addImport("raylib", raylib_mod);
+
+            // Add .zon file imports for comptime loading
+            example_12_mod.addImport("characters_frames.zon", b.createModule(.{
+                .root_source_file = b.path("fixtures/output/characters_frames.zon"),
+            }));
+            example_12_mod.addImport("characters_animations.zon", b.createModule(.{
+                .root_source_file = b.path("fixtures/output/characters_animations.zon"),
+            }));
+
+            const example_12 = b.addExecutable(.{
+                .name = "12_comptime_animations",
+                .root_module = example_12_mod,
+            });
+            example_12.linkLibrary(raylib_art);
+
+            const run_cmd = b.addRunArtifact(example_12);
+            const run_step = b.step("run-example-12", "Comptime animation definitions");
+            run_step.dependOn(&run_cmd.step);
+
+            const full_run_step = b.step("run-12_comptime_animations", "Comptime animation definitions");
+            full_run_step.dependOn(&run_cmd.step);
+        }
+
+        for (examples) |example| {
+            const exe_mod = b.createModule(.{
                 .root_source_file = b.path(example.path),
                 .target = target,
                 .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "labelle", .module = lib_mod },
-                    .{ .name = "raylib", .module = raylib },
-                },
-            }),
-        });
-        exe.linkLibrary(raylib_artifact);
+            });
+            exe_mod.addImport("labelle", lib_mod);
+            exe_mod.addImport("raylib", raylib_mod);
 
-        const run_cmd = b.addRunArtifact(exe);
-        const step_name = b.fmt("run-example-{s}", .{example.name[0..2]});
-        const run_step = b.step(step_name, example.desc);
-        run_step.dependOn(&run_cmd.step);
+            const exe = b.addExecutable(.{
+                .name = example.name,
+                .root_module = exe_mod,
+            });
+            exe.linkLibrary(raylib_art);
 
-        // Also add full name version
-        const full_step_name = b.fmt("run-{s}", .{example.name});
-        const full_run_step = b.step(full_step_name, example.desc);
-        full_run_step.dependOn(&run_cmd.step);
-    }
+            const run_cmd = b.addRunArtifact(exe);
+            const step_name = b.fmt("run-example-{s}", .{example.name[0..2]});
+            const run_step = b.step(step_name, example.desc);
+            run_step.dependOn(&run_cmd.step);
 
-    // Sokol backend example (requires different linking)
-    {
-        const sokol_example = b.addExecutable(.{
-            .name = "09_sokol_backend",
-            .root_module = b.createModule(.{
+            // Also add full name version
+            const full_step_name = b.fmt("run-{s}", .{example.name});
+            const full_run_step = b.step(full_step_name, example.desc);
+            full_run_step.dependOn(&run_cmd.step);
+        }
+    } // end raylib examples
+
+    // Sokol backend examples (only built when sokol backend is selected)
+    if (include_sokol) {
+        const sokol_mod = sokol.?;
+
+        // Example 09: Sokol backend
+        {
+            const sokol_example_mod = b.createModule(.{
                 .root_source_file = b.path("examples/09_sokol_backend/main.zig"),
                 .target = target,
                 .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "labelle", .module = lib_mod },
-                    .{ .name = "sokol", .module = sokol },
-                },
-            }),
-        });
+            });
+            sokol_example_mod.addImport("labelle", lib_mod);
+            sokol_example_mod.addImport("sokol", sokol_mod);
 
-        const run_cmd = b.addRunArtifact(sokol_example);
-        const run_step = b.step("run-example-09", "Sokol backend example");
-        run_step.dependOn(&run_cmd.step);
+            const sokol_example = b.addExecutable(.{
+                .name = "09_sokol_backend",
+                .root_module = sokol_example_mod,
+            });
 
-        const full_run_step = b.step("run-09_sokol_backend", "Sokol backend example");
-        full_run_step.dependOn(&run_cmd.step);
-    }
+            const run_cmd = b.addRunArtifact(sokol_example);
+            const run_step = b.step("run-example-09", "Sokol backend example");
+            run_step.dependOn(&run_cmd.step);
 
-    // SDL backend example (requires SDL linking)
-    {
-        const sdl_example_mod = b.createModule(.{
-            .root_source_file = b.path("examples/17_sdl_backend/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "labelle", .module = lib_mod },
-                .{ .name = "sdl2", .module = sdl },
-            },
-        });
+            const full_run_step = b.step("run-09_sokol_backend", "Sokol backend example");
+            full_run_step.dependOn(&run_cmd.step);
+        }
 
-        const sdl_example = b.addExecutable(.{
-            .name = "17_sdl_backend",
-            .root_module = sdl_example_mod,
-        });
-
-        // Link SDL2 libraries using the SDK
-        sdl_sdk.link(sdl_example, .dynamic, .SDL2);
-        sdl_sdk.link(sdl_example, .dynamic, .SDL2_ttf);
-        // SDL2_image must be linked manually via system library
-        sdl_example.linkSystemLibrary("SDL2_image");
-
-        const run_cmd = b.addRunArtifact(sdl_example);
-        const run_step = b.step("run-example-17", "SDL backend example");
-        run_step.dependOn(&run_cmd.step);
-
-        const full_run_step = b.step("run-17_sdl_backend", "SDL backend example");
-        full_run_step.dependOn(&run_cmd.step);
-    }
-
-    // Example 21 Fullscreen - Sokol backend variant
-    {
-        const sokol_fullscreen = b.addExecutable(.{
-            .name = "21_fullscreen_sokol",
-            .root_module = b.createModule(.{
+        // Example 21 Fullscreen - Sokol backend variant
+        {
+            const sokol_fullscreen_mod = b.createModule(.{
                 .root_source_file = b.path("examples/21_fullscreen/main_sokol.zig"),
                 .target = target,
                 .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "labelle", .module = lib_mod },
-                    .{ .name = "sokol", .module = sokol },
-                },
-            }),
-        });
+            });
+            sokol_fullscreen_mod.addImport("labelle", lib_mod);
+            sokol_fullscreen_mod.addImport("sokol", sokol_mod);
 
-        const run_cmd = b.addRunArtifact(sokol_fullscreen);
-        const run_step = b.step("run-example-21-sokol", "Fullscreen example (Sokol backend)");
-        run_step.dependOn(&run_cmd.step);
+            const sokol_fullscreen = b.addExecutable(.{
+                .name = "21_fullscreen_sokol",
+                .root_module = sokol_fullscreen_mod,
+            });
+
+            const run_cmd = b.addRunArtifact(sokol_fullscreen);
+            const run_step = b.step("run-example-21-sokol", "Fullscreen example (Sokol backend)");
+            run_step.dependOn(&run_cmd.step);
+        }
     }
 
-    // Example 21 Fullscreen - SDL backend variant
-    {
-        const sdl_fullscreen_mod = b.createModule(.{
-            .root_source_file = b.path("examples/21_fullscreen/main_sdl.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "labelle", .module = lib_mod },
-                .{ .name = "sdl2", .module = sdl },
-            },
-        });
+    // SDL backend examples (only built when SDL backend is selected)
+    if (include_sdl) {
+        const sdl_mod = sdl.?;
+        const sdk = sdl_sdk.?;
 
-        const sdl_fullscreen = b.addExecutable(.{
-            .name = "21_fullscreen_sdl",
-            .root_module = sdl_fullscreen_mod,
-        });
+        // Example 17: SDL backend
+        {
+            const sdl_example_mod = b.createModule(.{
+                .root_source_file = b.path("examples/17_sdl_backend/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            });
+            sdl_example_mod.addImport("labelle", lib_mod);
+            sdl_example_mod.addImport("sdl2", sdl_mod);
 
-        sdl_sdk.link(sdl_fullscreen, .dynamic, .SDL2);
-        sdl_sdk.link(sdl_fullscreen, .dynamic, .SDL2_ttf);
-        sdl_fullscreen.linkSystemLibrary("SDL2_image");
+            const sdl_example = b.addExecutable(.{
+                .name = "17_sdl_backend",
+                .root_module = sdl_example_mod,
+            });
 
-        const run_cmd = b.addRunArtifact(sdl_fullscreen);
-        const run_step = b.step("run-example-21-sdl", "Fullscreen example (SDL backend)");
-        run_step.dependOn(&run_cmd.step);
-    }
+            // Link SDL2 libraries using the SDK
+            sdk.link(sdl_example, .dynamic, .SDL2);
+            sdk.link(sdl_example, .dynamic, .SDL2_ttf);
+            // SDL2_image must be linked manually via system library
+            sdl_example.linkSystemLibrary("SDL2_image");
 
-    // Example 22: Sokol Shapes - demonstrates all shape rendering functions
-    {
-        const sokol_shapes = b.addExecutable(.{
-            .name = "22_sokol_shapes",
-            .root_module = b.createModule(.{
+            const run_cmd = b.addRunArtifact(sdl_example);
+            const run_step = b.step("run-example-17", "SDL backend example");
+            run_step.dependOn(&run_cmd.step);
+
+            const full_run_step = b.step("run-17_sdl_backend", "SDL backend example");
+            full_run_step.dependOn(&run_cmd.step);
+        }
+
+        // Example 21 Fullscreen - SDL backend variant
+        {
+            const sdl_fullscreen_mod = b.createModule(.{
+                .root_source_file = b.path("examples/21_fullscreen/main_sdl.zig"),
+                .target = target,
+                .optimize = optimize,
+            });
+            sdl_fullscreen_mod.addImport("labelle", lib_mod);
+            sdl_fullscreen_mod.addImport("sdl2", sdl_mod);
+
+            const sdl_fullscreen = b.addExecutable(.{
+                .name = "21_fullscreen_sdl",
+                .root_module = sdl_fullscreen_mod,
+            });
+
+            sdk.link(sdl_fullscreen, .dynamic, .SDL2);
+            sdk.link(sdl_fullscreen, .dynamic, .SDL2_ttf);
+            sdl_fullscreen.linkSystemLibrary("SDL2_image");
+
+            const run_cmd = b.addRunArtifact(sdl_fullscreen);
+            const run_step = b.step("run-example-21-sdl", "Fullscreen example (SDL backend)");
+            run_step.dependOn(&run_cmd.step);
+        }
+    } // end SDL examples
+
+    // Sokol shapes example (requires sokol backend)
+    if (include_sokol) {
+        const sokol_mod = sokol.?;
+
+        // Example 22: Sokol Shapes - demonstrates all shape rendering functions
+        {
+            const sokol_shapes_mod = b.createModule(.{
                 .root_source_file = b.path("examples/22_sokol_shapes/main.zig"),
                 .target = target,
                 .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "labelle", .module = lib_mod },
-                    .{ .name = "sokol", .module = sokol },
-                },
-            }),
-        });
+            });
+            sokol_shapes_mod.addImport("labelle", lib_mod);
+            sokol_shapes_mod.addImport("sokol", sokol_mod);
 
-        const run_cmd_22 = b.addRunArtifact(sokol_shapes);
-        const run_step_22 = b.step("run-example-22", "Sokol shapes example");
-        run_step_22.dependOn(&run_cmd_22.step);
+            const sokol_shapes = b.addExecutable(.{
+                .name = "22_sokol_shapes",
+                .root_module = sokol_shapes_mod,
+            });
 
-        const full_run_step = b.step("run-22_sokol_shapes", "Sokol shapes example");
-        full_run_step.dependOn(&run_cmd_22.step);
+            const run_cmd_22 = b.addRunArtifact(sokol_shapes);
+            const run_step_22 = b.step("run-example-22", "Sokol shapes example");
+            run_step_22.dependOn(&run_cmd_22.step);
+
+            const full_run_step = b.step("run-22_sokol_shapes", "Sokol shapes example");
+            full_run_step.dependOn(&run_cmd_22.step);
+        }
     }
 
-    // Example 23: bgfx backend with GLFW
-    {
-        const bgfx_example_mod = b.createModule(.{
-            .root_source_file = b.path("examples/23_bgfx_backend/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zglfw", .module = zglfw },
-                .{ .name = "zbgfx", .module = zbgfx },
-                .{ .name = "labelle", .module = lib_mod },
-            },
-        });
+    // bgfx backend example (only built when bgfx backend is selected)
+    if (include_bgfx) {
+        const zglfw_mod = zglfw.?;
+        const zbgfx_mod = zbgfx.?;
+        const bgfx_artifact = bgfx_lib.?;
+        const glfw_artifact = glfw_lib.?;
 
-        // Note: stb_image include path is provided via lib_mod (labelle module)
+        // Example 23: bgfx backend with GLFW
+        {
+            const bgfx_example_mod = b.createModule(.{
+                .root_source_file = b.path("examples/23_bgfx_backend/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            });
+            bgfx_example_mod.addImport("zglfw", zglfw_mod);
+            bgfx_example_mod.addImport("zbgfx", zbgfx_mod);
+            bgfx_example_mod.addImport("labelle", lib_mod);
 
-        const bgfx_example = b.addExecutable(.{
-            .name = "23_bgfx_backend",
-            .root_module = bgfx_example_mod,
-        });
+            const bgfx_example = b.addExecutable(.{
+                .name = "23_bgfx_backend",
+                .root_module = bgfx_example_mod,
+            });
 
-        // Link bgfx and glfw libraries
-        bgfx_example.linkLibrary(bgfx_lib);
-        bgfx_example.linkLibrary(glfw_lib);
+            // Link bgfx and glfw libraries
+            bgfx_example.linkLibrary(bgfx_artifact);
+            bgfx_example.linkLibrary(glfw_artifact);
 
-        const run_cmd_23 = b.addRunArtifact(bgfx_example);
-        const run_step_23 = b.step("run-example-23", "bgfx backend example with GLFW");
-        run_step_23.dependOn(&run_cmd_23.step);
+            const run_cmd_23 = b.addRunArtifact(bgfx_example);
+            const run_step_23 = b.step("run-example-23", "bgfx backend example with GLFW");
+            run_step_23.dependOn(&run_cmd_23.step);
 
-        const full_run_step_23 = b.step("run-23_bgfx_backend", "bgfx backend example with GLFW");
-        full_run_step_23.dependOn(&run_cmd_23.step);
+            const full_run_step_23 = b.step("run-23_bgfx_backend", "bgfx backend example with GLFW");
+            full_run_step_23.dependOn(&run_cmd_23.step);
+        }
     }
 
-    // Example 24: zgpu backend (WebGPU via Dawn) with GLFW
-    {
-        const zgpu_example_mod = b.createModule(.{
-            .root_source_file = b.path("examples/24_zgpu_backend/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zglfw", .module = zglfw },
-                .{ .name = "zgpu", .module = zgpu },
-                .{ .name = "labelle", .module = lib_mod },
-            },
-        });
+    // zgpu backend example (only built when zgpu backend is selected)
+    if (include_zgpu) {
+        const zglfw_mod = zglfw.?;
+        const zgpu_mod = zgpu.?;
+        const glfw_artifact = glfw_lib.?;
+        const zgpu_dependency = zgpu_dep.?;
 
-        const zgpu_example = b.addExecutable(.{
-            .name = "24_zgpu_backend",
-            .root_module = zgpu_example_mod,
-        });
+        // Example 24: zgpu backend (WebGPU via Dawn) with GLFW
+        {
+            const zgpu_example_mod = b.createModule(.{
+                .root_source_file = b.path("examples/24_zgpu_backend/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            });
+            zgpu_example_mod.addImport("zglfw", zglfw_mod);
+            zgpu_example_mod.addImport("zgpu", zgpu_mod);
+            zgpu_example_mod.addImport("labelle", lib_mod);
 
-        // Link glfw library
-        zgpu_example.linkLibrary(glfw_lib);
+            const zgpu_example = b.addExecutable(.{
+                .name = "24_zgpu_backend",
+                .root_module = zgpu_example_mod,
+            });
 
-        // Link Dawn (WebGPU) library and its dependencies
-        zgpu_example.linkLibrary(zgpu_dep.artifact("zdawn"));
+            // Link glfw library
+            zgpu_example.linkLibrary(glfw_artifact);
 
-        // Import zgpu's build.zig to use its helper functions for Dawn library paths
-        const zgpu_build = @import("zgpu");
-        zgpu_build.addLibraryPathsTo(zgpu_example);
+            // Link Dawn (WebGPU) library and its dependencies
+            zgpu_example.linkLibrary(zgpu_dependency.artifact("zdawn"));
 
-        const run_cmd_24 = b.addRunArtifact(zgpu_example);
-        const run_step_24 = b.step("run-example-24", "zgpu backend example with GLFW");
-        run_step_24.dependOn(&run_cmd_24.step);
+            // Import zgpu's build.zig to use its helper functions for Dawn library paths
+            const zgpu_build = @import("zgpu");
+            zgpu_build.addLibraryPathsTo(zgpu_example);
 
-        const full_run_step_24 = b.step("run-24_zgpu_backend", "zgpu backend example with GLFW");
-        full_run_step_24.dependOn(&run_cmd_24.step);
+            const run_cmd_24 = b.addRunArtifact(zgpu_example);
+            const run_step_24 = b.step("run-example-24", "zgpu backend example with GLFW");
+            run_step_24.dependOn(&run_cmd_24.step);
+
+            const full_run_step_24 = b.step("run-24_zgpu_backend", "zgpu backend example with GLFW");
+            full_run_step_24.dependOn(&run_cmd_24.step);
+        }
     }
 
     // Converter tool
@@ -412,47 +466,48 @@ pub fn build(b: *std.Build) void {
             convert_cmd.addArg(atlas.json);
             convert_cmd.addArg("-o");
             convert_cmd.addArg(atlas.zon);
-
-            // Make the library depend on conversion
-            lib.step.dependOn(&convert_cmd.step);
         }
     }
 
-    // Tests with zspec
-    const lib_tests = b.addTest(.{
-        .root_module = b.createModule(.{
+    // Tests with zspec (only when raylib backend is available for now)
+    if (include_raylib) {
+        const raylib_mod = raylib.?;
+
+        const test_mod = b.createModule(.{
             .root_source_file = b.path("tests/lib_test.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "labelle", .module = lib_mod },
-                .{ .name = "raylib", .module = raylib },
-                .{ .name = "zspec", .module = zspec },
-            },
-        }),
-        .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
-    });
+        });
+        test_mod.addImport("labelle", lib_mod);
+        test_mod.addImport("raylib", raylib_mod);
+        test_mod.addImport("zspec", zspec);
 
-    const run_lib_tests = b.addRunArtifact(lib_tests);
-    const test_step = b.step("test", "Run library tests");
-    test_step.dependOn(&run_lib_tests.step);
+        const lib_tests = b.addTest(.{
+            .root_module = test_mod,
+            .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
+        });
 
-    // Benchmarks
-    const culling_benchmark = b.addExecutable(.{
-        .name = "culling_benchmark",
-        .root_module = b.createModule(.{
+        const run_lib_tests = b.addRunArtifact(lib_tests);
+        const test_step = b.step("test", "Run library tests");
+        test_step.dependOn(&run_lib_tests.step);
+
+        // Benchmarks (also require raylib)
+        const bench_mod = b.createModule(.{
             .root_source_file = b.path("benchmarks/culling_benchmark.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "labelle", .module = lib_mod },
-                .{ .name = "raylib", .module = raylib },
-            },
-        }),
-    });
-    culling_benchmark.linkLibrary(raylib_artifact);
+        });
+        bench_mod.addImport("labelle", lib_mod);
+        bench_mod.addImport("raylib", raylib_mod);
 
-    const run_culling_benchmark = b.addRunArtifact(culling_benchmark);
-    const bench_culling_step = b.step("bench-culling", "Run viewport culling benchmark");
-    bench_culling_step.dependOn(&run_culling_benchmark.step);
+        const culling_benchmark = b.addExecutable(.{
+            .name = "culling_benchmark",
+            .root_module = bench_mod,
+        });
+        culling_benchmark.linkLibrary(raylib_artifact.?);
+
+        const run_culling_benchmark = b.addRunArtifact(culling_benchmark);
+        const bench_culling_step = b.step("bench-culling", "Run viewport culling benchmark");
+        bench_culling_step.dependOn(&run_culling_benchmark.step);
+    }
 }

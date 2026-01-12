@@ -58,6 +58,7 @@
 //! ```
 
 const std = @import("std");
+const build_options = @import("build_options");
 
 // Logging
 pub const log = @import("log.zig");
@@ -68,22 +69,56 @@ pub const Backend = backend.Backend;
 pub const BackendError = backend.BackendError;
 pub const ConfigFlags = backend.ConfigFlags;
 
-// Backend implementations
-pub const raylib_backend = @import("backend/raylib_backend.zig");
-pub const RaylibBackend = raylib_backend.RaylibBackend;
+// Backend implementations - conditionally compiled based on build options
+// This prevents importing unavailable modules (e.g., raylib on iOS when using sokol)
+
+// Raylib backend (default on desktop)
+pub const raylib_backend = if (build_options.has_raylib) @import("backend/raylib_backend.zig") else struct {
+    pub const RaylibBackend = void;
+};
+pub const RaylibBackend = if (build_options.has_raylib) raylib_backend.RaylibBackend else void;
+
+// Mock backend (always available for testing)
 pub const mock_backend = @import("backend/mock_backend.zig");
 pub const MockBackend = mock_backend.MockBackend;
-pub const sokol_backend = @import("backend/sokol_backend.zig");
-pub const SokolBackend = sokol_backend.SokolBackend;
-pub const sdl_backend = @import("backend/sdl_backend.zig");
-pub const SdlBackend = sdl_backend.SdlBackend;
-pub const bgfx_backend = @import("backend/bgfx_backend.zig");
-pub const BgfxBackend = bgfx_backend.BgfxBackend;
-pub const zgpu_backend = @import("backend/zgpu_backend.zig");
-pub const ZgpuBackend = zgpu_backend.ZgpuBackend;
 
-// Default backend (raylib)
-pub const DefaultBackend = Backend(RaylibBackend);
+// Sokol backend (for iOS, macOS, web)
+pub const sokol_backend = if (build_options.has_sokol) @import("backend/sokol_backend.zig") else struct {
+    pub const SokolBackend = void;
+};
+pub const SokolBackend = if (build_options.has_sokol) sokol_backend.SokolBackend else void;
+
+// SDL backend
+pub const sdl_backend = if (build_options.has_sdl) @import("backend/sdl_backend.zig") else struct {
+    pub const SdlBackend = void;
+};
+pub const SdlBackend = if (build_options.has_sdl) sdl_backend.SdlBackend else void;
+
+// bgfx backend
+pub const bgfx_backend = if (build_options.has_bgfx) @import("backend/bgfx_backend.zig") else struct {
+    pub const BgfxBackend = void;
+};
+pub const BgfxBackend = if (build_options.has_bgfx) bgfx_backend.BgfxBackend else void;
+
+// zgpu backend (WebGPU via Dawn)
+pub const zgpu_backend = if (build_options.has_zgpu) @import("backend/zgpu_backend.zig") else struct {
+    pub const ZgpuBackend = void;
+};
+pub const ZgpuBackend = if (build_options.has_zgpu) zgpu_backend.ZgpuBackend else void;
+
+// Default backend selection based on what's available
+pub const DefaultBackend = if (build_options.has_raylib)
+    Backend(raylib_backend.RaylibBackend)
+else if (build_options.has_sokol)
+    Backend(sokol_backend.SokolBackend)
+else if (build_options.has_sdl)
+    Backend(sdl_backend.SdlBackend)
+else if (build_options.has_bgfx)
+    Backend(bgfx_backend.BgfxBackend)
+else if (build_options.has_zgpu)
+    Backend(zgpu_backend.ZgpuBackend)
+else
+    Backend(MockBackend);
 
 // Engine API (provides UI helpers)
 const engine_mod = @import("engine/engine.zig");

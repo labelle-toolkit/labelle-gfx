@@ -121,6 +121,7 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
         pub const LayerMaskType = Renderer.LayerMaskType;
         pub const SplitScreenLayout = camera_manager_mod.SplitScreenLayout;
         pub const CameraType = Cameras.CameraType;
+        pub const CameraManagerType = Cameras.CameraManagerType;
 
         // Re-export visual types from subsystem
         pub const getDefaultLayer = visual_types.VisualTypes(LayerEnum).getDefaultLayer;
