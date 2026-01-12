@@ -1,6 +1,6 @@
 .{
     .name = .labelle_gfx,
-    .version = "0.30.0",
+    .version = "0.31.0",
     .fingerprint = 0x348f3b5370979d59,
     .minimum_zig_version = "0.15.1",
 
