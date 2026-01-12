@@ -483,7 +483,15 @@ pub const SokolBackend = struct {
     /// storage mode, this may fail or return incorrect data. A more robust approach
     /// would use a blit encoder to copy to a shared buffer, but that requires more
     /// complex Metal command buffer management.
-    fn takeScreenshotMetal(filename: [*:0]const u8) void {
+    /// Only compiled on macOS where Metal APIs are available.
+    const takeScreenshotMetal = if (builtin.os.tag == .macos) takeScreenshotMetalImpl else takeScreenshotMetalStub;
+
+    fn takeScreenshotMetalStub(filename: [*:0]const u8) void {
+        _ = filename;
+        std.log.warn("takeScreenshotMetal is only implemented on macOS", .{});
+    }
+
+    fn takeScreenshotMetalImpl(filename: [*:0]const u8) void {
         const width: usize = @intCast(getScreenWidth());
         const height: usize = @intCast(getScreenHeight());
 
