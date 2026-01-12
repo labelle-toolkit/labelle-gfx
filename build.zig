@@ -7,6 +7,9 @@ pub fn build(b: *std.Build) void {
     // Check if targeting iOS (raylib not supported on iOS)
     const is_ios = target.result.os.tag == .ios;
 
+    // Check if targeting WASM/Emscripten (only sokol backend supported)
+    const is_wasm = target.result.os.tag == .emscripten or target.result.cpu.arch == .wasm32;
+
     // Build options
     const convert_atlases = b.option(bool, "convert-atlases", "Convert TexturePacker JSON files to .zon format") orelse false;
 
@@ -14,8 +17,8 @@ pub fn build(b: *std.Build) void {
     const zig_utils_dep = b.dependency("zig_utils", .{});
     const zig_utils = zig_utils_dep.module("zig_utils");
 
-    // Raylib dependency - only available on non-iOS platforms
-    const raylib_dep = if (!is_ios) b.dependency("raylib_zig", .{
+    // Raylib dependency - only available on desktop platforms (not iOS or WASM)
+    const raylib_dep = if (!is_ios and !is_wasm) b.dependency("raylib_zig", .{
         .target = target,
         .optimize = optimize,
     }) else null;
@@ -30,6 +33,7 @@ pub fn build(b: *std.Build) void {
 
     // Sokol dependency (optional backend)
     // For iOS targets, use dont_link_system_libs since we configure SDK paths manually
+    // For WASM targets, sokol handles Emscripten setup internally
     const sokol_dep = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
@@ -56,38 +60,39 @@ pub fn build(b: *std.Build) void {
     }
 
     // Desktop-only dependencies (SDL, bgfx, zglfw, zgpu, wgpu_native)
-    // These are not available on iOS and use C++ which complicates iOS cross-compilation
+    // These are not available on iOS/WASM and use C++ which complicates cross-compilation
     // Note: SDL uses @import("sdl") which is comptime - we need to always import it
-    // but only use it when not on iOS
+    // but only use it when on desktop
+    const is_desktop = !is_ios and !is_wasm;
     const SdlSdk = @import("sdl");
-    const sdl_sdk: ?*SdlSdk = if (!is_ios) SdlSdk.init(b, .{ .dep_name = "sdl" }) else null;
+    const sdl_sdk: ?*SdlSdk = if (is_desktop) SdlSdk.init(b, .{ .dep_name = "sdl" }) else null;
     const sdl: ?*std.Build.Module = if (sdl_sdk) |sdk| sdk.getWrapperModule() else null;
 
-    // bgfx dependency (optional backend) - not available on iOS
-    const zbgfx_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("zbgfx", .{
+    // bgfx dependency (optional backend) - desktop only
+    const zbgfx_dep: ?*std.Build.Dependency = if (is_desktop) b.dependency("zbgfx", .{
         .target = target,
         .optimize = optimize,
     }) else null;
     const zbgfx: ?*std.Build.Module = if (zbgfx_dep) |dep| dep.module("zbgfx") else null;
     const bgfx_lib: ?*std.Build.Step.Compile = if (zbgfx_dep) |dep| dep.artifact("bgfx") else null;
 
-    // GLFW dependency (for bgfx/zgpu window management) - not available on iOS
-    const zglfw_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("zglfw", .{
+    // GLFW dependency (for bgfx/zgpu window management) - desktop only
+    const zglfw_dep: ?*std.Build.Dependency = if (is_desktop) b.dependency("zglfw", .{
         .target = target,
         .optimize = optimize,
     }) else null;
     const zglfw: ?*std.Build.Module = if (zglfw_dep) |dep| dep.module("root") else null;
     const glfw_lib: ?*std.Build.Step.Compile = if (zglfw_dep) |dep| dep.artifact("glfw") else null;
 
-    // zgpu dependency (WebGPU via Dawn) - not available on iOS
-    const zgpu_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("zgpu", .{
+    // zgpu dependency (WebGPU via Dawn) - desktop only
+    const zgpu_dep: ?*std.Build.Dependency = if (is_desktop) b.dependency("zgpu", .{
         .target = target,
         .optimize = optimize,
     }) else null;
     const zgpu: ?*std.Build.Module = if (zgpu_dep) |dep| dep.module("root") else null;
 
-    // wgpu_native_zig dependency (lower-level WebGPU bindings) - not available on iOS
-    const wgpu_native_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("wgpu_native_zig", .{
+    // wgpu_native_zig dependency (lower-level WebGPU bindings) - desktop only
+    const wgpu_native_dep: ?*std.Build.Dependency = if (is_desktop) b.dependency("wgpu_native_zig", .{
         .target = target,
         .optimize = optimize,
     }) else null;
@@ -98,7 +103,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = if (!is_ios) &.{
+        .imports = if (is_desktop) &.{
             // Desktop build - all backends available
             .{ .name = "zig_utils", .module = zig_utils },
             .{ .name = "raylib", .module = raylib.? },
@@ -109,7 +114,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zglfw", .module = zglfw.? },
             .{ .name = "wgpu", .module = wgpu_native.? },
         } else &.{
-            // iOS build - only sokol backend available
+            // iOS/WASM build - only sokol backend available
             .{ .name = "zig_utils", .module = zig_utils },
             .{ .name = "sokol", .module = sokol },
         },
@@ -119,6 +124,7 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption(bool, "has_raylib", raylib != null);
     build_options.addOption(bool, "is_ios", is_ios);
+    build_options.addOption(bool, "is_wasm", is_wasm);
     lib_mod.addOptions("build_options", build_options);
 
     // Add stb_image include path for bgfx backend image loading (desktop only)
@@ -150,7 +156,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/lib.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = if (!is_ios) &.{
+            .imports = if (is_desktop) &.{
                 // Desktop build - all backends available
                 .{ .name = "zig_utils", .module = zig_utils },
                 .{ .name = "raylib", .module = raylib.? },
@@ -161,7 +167,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "zglfw", .module = zglfw.? },
                 .{ .name = "wgpu", .module = wgpu_native.? },
             } else &.{
-                // iOS build - only sokol backend available
+                // iOS/WASM build - only sokol backend available
                 .{ .name = "zig_utils", .module = zig_utils },
                 .{ .name = "sokol", .module = sokol },
             },
@@ -281,7 +287,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // SDL backend example (requires SDL linking) - desktop only
-    if (!is_ios) {
+    if (is_desktop) {
         const sdl_example_mod = b.createModule(.{
             .root_source_file = b.path("examples/17_sdl_backend/main.zig"),
             .target = target,
@@ -332,7 +338,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Example 21 Fullscreen - SDL backend variant (desktop only)
-    if (!is_ios) {
+    if (is_desktop) {
         const sdl_fullscreen_mod = b.createModule(.{
             .root_source_file = b.path("examples/21_fullscreen/main_sdl.zig"),
             .target = target,
@@ -381,7 +387,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Example 23: bgfx backend with GLFW (desktop only)
-    if (!is_ios) {
+    if (is_desktop) {
         const bgfx_example_mod = b.createModule(.{
             .root_source_file = b.path("examples/23_bgfx_backend/main.zig"),
             .target = target,
@@ -413,7 +419,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Example 24: zgpu backend (WebGPU via Dawn) with GLFW (desktop only)
-    if (!is_ios) {
+    if (is_desktop) {
         const zgpu_example_mod = b.createModule(.{
             .root_source_file = b.path("examples/24_zgpu_backend/main.zig"),
             .target = target,
@@ -472,7 +478,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Example 26: wgpu_native backend (lower-level WebGPU) with GLFW (desktop only)
-    if (!is_ios) {
+    if (is_desktop) {
         const wgpu_native_example_mod = b.createModule(.{
             .root_source_file = b.path("examples/25_wgpu_native_backend/main.zig"),
             .target = target,
