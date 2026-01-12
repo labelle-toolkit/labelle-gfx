@@ -36,6 +36,7 @@
 //! ```
 
 const std = @import("std");
+const build_options = @import("build_options");
 const log = @import("../log.zig").engine;
 
 // Import subsystems
@@ -56,8 +57,25 @@ const render_helpers = @import("render_helpers.zig");
 
 // Backend imports
 const backend_mod = @import("../backend/backend.zig");
-const raylib_backend = @import("../backend/raylib_backend.zig");
 const camera_manager_mod = @import("../camera/camera_manager.zig");
+
+// Backend implementations - conditionally compiled based on build options
+const raylib_backend = if (build_options.has_raylib) @import("../backend/raylib_backend.zig") else struct {
+    pub const RaylibBackend = void;
+};
+const mock_backend = @import("../backend/mock_backend.zig");
+const sokol_backend = if (build_options.has_sokol) @import("../backend/sokol_backend.zig") else struct {
+    pub const SokolBackend = void;
+};
+const sdl_backend = if (build_options.has_sdl) @import("../backend/sdl_backend.zig") else struct {
+    pub const SdlBackend = void;
+};
+const bgfx_backend = if (build_options.has_bgfx) @import("../backend/bgfx_backend.zig") else struct {
+    pub const BgfxBackend = void;
+};
+const zgpu_backend = if (build_options.has_zgpu) @import("../backend/zgpu_backend.zig") else struct {
+    pub const ZgpuBackend = void;
+};
 
 // Re-export common types
 pub const EntityId = types.EntityId;
@@ -503,7 +521,19 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
 // Default Engine V2 Alias
 // ============================================
 
-const DefaultBackend = backend_mod.Backend(raylib_backend.RaylibBackend);
+// Default backend selection based on what's available (matches lib.zig)
+const DefaultBackend = if (build_options.has_raylib)
+    backend_mod.Backend(raylib_backend.RaylibBackend)
+else if (build_options.has_sokol)
+    backend_mod.Backend(sokol_backend.SokolBackend)
+else if (build_options.has_sdl)
+    backend_mod.Backend(sdl_backend.SdlBackend)
+else if (build_options.has_bgfx)
+    backend_mod.Backend(bgfx_backend.BgfxBackend)
+else if (build_options.has_zgpu)
+    backend_mod.Backend(zgpu_backend.ZgpuBackend)
+else
+    backend_mod.Backend(mock_backend.MockBackend);
 
-/// Default retained engine V2 with raylib backend and DefaultLayers.
+/// Default retained engine V2 with the selected backend and DefaultLayers.
 pub const RetainedEngineV2 = RetainedEngineWithV2(DefaultBackend, DefaultLayers);

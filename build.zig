@@ -127,6 +127,8 @@ pub fn build(b: *std.Build) void {
         if (sokol) |mod| lib_root_mod.addImport("sokol", mod);
         if (sdl) |mod| lib_root_mod.addImport("sdl2", mod);
         if (zbgfx) |mod| lib_root_mod.addImport("zbgfx", mod);
+        if (zgpu) |mod| lib_root_mod.addImport("zgpu", mod);
+        if (zglfw) |mod| lib_root_mod.addImport("zglfw", mod);
 
         const lib = b.addLibrary(.{
             .linkage = .static,
@@ -461,12 +463,19 @@ pub fn build(b: *std.Build) void {
             .{ .json = "fixtures/output/tiles.json", .zon = "fixtures/output/tiles_frames.zon" },
         };
 
+        // Create a step for atlas conversion
+        const convert_atlases_step = b.step("convert-atlases", "Convert fixture JSON atlas files to .zon format");
+
         for (fixture_atlases) |atlas| {
             const convert_cmd = b.addRunArtifact(converter_exe);
             convert_cmd.addArg(atlas.json);
             convert_cmd.addArg("-o");
             convert_cmd.addArg(atlas.zon);
+            convert_atlases_step.dependOn(&convert_cmd.step);
         }
+
+        // Make the default install step depend on atlas conversion
+        b.getInstallStep().dependOn(convert_atlases_step);
     }
 
     // Tests with zspec (only when raylib backend is available for now)
