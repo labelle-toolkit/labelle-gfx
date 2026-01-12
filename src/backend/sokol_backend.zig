@@ -455,12 +455,11 @@ pub const SokolBackend = struct {
     pub fn takeScreenshot(filename: [*:0]const u8) void {
         const backend = sg.queryBackend();
         switch (backend) {
-            .METAL => {
-                if (comptime builtin.os.tag == .macos) {
-                    takeScreenshotMetal(filename);
-                } else {
-                    std.log.warn("Metal backend detected but not on macOS - screenshot not supported", .{});
-                }
+            .METAL_MACOS => {
+                takeScreenshotMetal(filename);
+            },
+            .METAL_IOS, .METAL_SIMULATOR => {
+                std.log.warn("takeScreenshot not yet implemented for iOS Metal backend", .{});
             },
             .GLCORE, .GLES3 => {
                 if (comptime (builtin.os.tag == .linux or builtin.os.tag == .windows)) {
