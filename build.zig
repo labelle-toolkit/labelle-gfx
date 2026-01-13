@@ -4,8 +4,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Check if targeting iOS (raylib not supported on iOS)
+    // Check if targeting iOS, WASM, or Android (some backends not supported)
     const is_ios = target.result.os.tag == .ios;
+    const is_wasm = target.result.os.tag == .emscripten;
+    const is_android = target.result.os.tag == .linux and target.result.abi == .android;
+    const is_restricted_target = is_ios or is_wasm or is_android;
 
     // Build options
     const convert_atlases = b.option(bool, "convert-atlases", "Convert TexturePacker JSON files to .zon format") orelse false;
@@ -14,13 +17,14 @@ pub fn build(b: *std.Build) void {
     const zig_utils_dep = b.dependency("zig_utils", .{});
     const zig_utils = zig_utils_dep.module("zig_utils");
 
-    // Raylib dependency - only available on non-iOS platforms
-    const raylib_dep = if (!is_ios) b.dependency("raylib_zig", .{
+    // Raylib dependency - available on desktop and WASM (not iOS/Android)
+    const raylib_dep = if (!is_ios and !is_android) b.dependency("raylib_zig", .{
         .target = target,
         .optimize = optimize,
     }) else null;
     const raylib = if (raylib_dep) |dep| dep.module("raylib") else null;
-    const raylib_artifact = if (raylib_dep) |dep| dep.artifact("raylib") else null;
+    // raylib artifact only available on native targets, WASM uses emcc
+    const raylib_artifact = if (raylib_dep != null and !is_wasm) raylib_dep.?.artifact("raylib") else null;
 
     const zspec_dep = b.dependency("zspec", .{
         .target = target,
@@ -29,11 +33,12 @@ pub fn build(b: *std.Build) void {
     const zspec = zspec_dep.module("zspec");
 
     // Sokol dependency (optional backend)
-    // For iOS targets, use dont_link_system_libs since we configure SDK paths manually
+    // For iOS/Android targets, use dont_link_system_libs since we configure SDK paths manually
     const sokol_dep = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
-        .dont_link_system_libs = is_ios,
+        .dont_link_system_libs = is_ios or is_android,
+        .gles3 = is_android, // Use GLES3 on Android
     });
     const sokol = sokol_dep.module("sokol");
 
@@ -55,39 +60,81 @@ pub fn build(b: *std.Build) void {
         }
     }
 
+    // Android NDK path configuration for sokol_clib
+    if (is_android) {
+        const android_home = std.process.getEnvVarOwned(b.allocator, "ANDROID_HOME") catch null;
+        if (android_home) |home| {
+            const sokol_clib = sokol_dep.artifact("sokol_clib");
+
+            // Detect host OS for NDK toolchain
+            const builtin = @import("builtin");
+            const host_tag: []const u8 = switch (builtin.os.tag) {
+                .macos => "darwin-x86_64",
+                .linux => "linux-x86_64",
+                .windows => "windows-x86_64",
+                else => "linux-x86_64",
+            };
+
+            // Find NDK version (use most recent if available)
+            const ndk_dir = b.pathJoin(&.{ home, "ndk" });
+            var ndk_version: ?[]const u8 = null;
+            if (std.fs.openDirAbsolute(ndk_dir, .{ .iterate = true })) |dir| {
+                var d = dir;
+                var iter = d.iterate();
+                while (iter.next() catch null) |entry| {
+                    if (entry.kind == .directory) {
+                        ndk_version = b.allocator.dupe(u8, entry.name) catch null;
+                    }
+                }
+            } else |_| {}
+
+            if (ndk_version) |ndk_ver| {
+                const sysroot = b.pathJoin(&.{ home, "ndk", ndk_ver, "toolchains", "llvm", "prebuilt", host_tag, "sysroot" });
+                const inc_path = b.pathJoin(&.{ sysroot, "usr", "include" });
+                // Architecture-specific includes (for asm/types.h etc.)
+                const arch_inc_path = b.pathJoin(&.{ sysroot, "usr", "include", "aarch64-linux-android" });
+                const lib_path = b.pathJoin(&.{ sysroot, "usr", "lib", "aarch64-linux-android", "34" });
+
+                sokol_clib.root_module.addSystemIncludePath(.{ .cwd_relative = arch_inc_path });
+                sokol_clib.root_module.addSystemIncludePath(.{ .cwd_relative = inc_path });
+                sokol_clib.root_module.addLibraryPath(.{ .cwd_relative = lib_path });
+            }
+        }
+    }
+
     // Desktop-only dependencies (SDL, bgfx, zglfw, zgpu, wgpu_native)
-    // These are not available on iOS and use C++ which complicates iOS cross-compilation
+    // These are not available on iOS/WASM and use C++ which complicates cross-compilation
     // Note: SDL uses @import("sdl") which is comptime - we need to always import it
-    // but only use it when not on iOS
+    // but only use it when not on restricted targets
     const SdlSdk = @import("sdl");
-    const sdl_sdk: ?*SdlSdk = if (!is_ios) SdlSdk.init(b, .{ .dep_name = "sdl" }) else null;
+    const sdl_sdk: ?*SdlSdk = if (!is_restricted_target) SdlSdk.init(b, .{ .dep_name = "sdl" }) else null;
     const sdl: ?*std.Build.Module = if (sdl_sdk) |sdk| sdk.getWrapperModule() else null;
 
-    // bgfx dependency (optional backend) - not available on iOS
-    const zbgfx_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("zbgfx", .{
+    // bgfx dependency (optional backend) - not available on iOS/WASM
+    const zbgfx_dep: ?*std.Build.Dependency = if (!is_restricted_target) b.dependency("zbgfx", .{
         .target = target,
         .optimize = optimize,
     }) else null;
     const zbgfx: ?*std.Build.Module = if (zbgfx_dep) |dep| dep.module("zbgfx") else null;
     const bgfx_lib: ?*std.Build.Step.Compile = if (zbgfx_dep) |dep| dep.artifact("bgfx") else null;
 
-    // GLFW dependency (for bgfx/zgpu window management) - not available on iOS
-    const zglfw_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("zglfw", .{
+    // GLFW dependency (for bgfx/zgpu window management) - not available on iOS/WASM
+    const zglfw_dep: ?*std.Build.Dependency = if (!is_restricted_target) b.dependency("zglfw", .{
         .target = target,
         .optimize = optimize,
     }) else null;
     const zglfw: ?*std.Build.Module = if (zglfw_dep) |dep| dep.module("root") else null;
     const glfw_lib: ?*std.Build.Step.Compile = if (zglfw_dep) |dep| dep.artifact("glfw") else null;
 
-    // zgpu dependency (WebGPU via Dawn) - not available on iOS
-    const zgpu_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("zgpu", .{
+    // zgpu dependency (WebGPU via Dawn) - not available on iOS/WASM
+    const zgpu_dep: ?*std.Build.Dependency = if (!is_restricted_target) b.dependency("zgpu", .{
         .target = target,
         .optimize = optimize,
     }) else null;
     const zgpu: ?*std.Build.Module = if (zgpu_dep) |dep| dep.module("root") else null;
 
-    // wgpu_native_zig dependency (lower-level WebGPU bindings) - not available on iOS
-    const wgpu_native_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("wgpu_native_zig", .{
+    // wgpu_native_zig dependency (lower-level WebGPU bindings) - not available on iOS/WASM
+    const wgpu_native_dep: ?*std.Build.Dependency = if (!is_restricted_target) b.dependency("wgpu_native_zig", .{
         .target = target,
         .optimize = optimize,
     }) else null;
@@ -98,7 +145,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = if (!is_ios) &.{
+        .imports = if (!is_restricted_target) &.{
             // Desktop build - all backends available
             .{ .name = "zig_utils", .module = zig_utils },
             .{ .name = "raylib", .module = raylib.? },
@@ -108,6 +155,15 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zgpu", .module = zgpu.? },
             .{ .name = "zglfw", .module = zglfw.? },
             .{ .name = "wgpu", .module = wgpu_native.? },
+        } else if (is_wasm) &.{
+            // WASM build - raylib and sokol available
+            .{ .name = "zig_utils", .module = zig_utils },
+            .{ .name = "raylib", .module = raylib.? },
+            .{ .name = "sokol", .module = sokol },
+        } else if (is_android) &.{
+            // Android build - only sokol backend available
+            .{ .name = "zig_utils", .module = zig_utils },
+            .{ .name = "sokol", .module = sokol },
         } else &.{
             // iOS build - only sokol backend available
             .{ .name = "zig_utils", .module = zig_utils },
@@ -119,6 +175,8 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption(bool, "has_raylib", raylib != null);
     build_options.addOption(bool, "is_ios", is_ios);
+    build_options.addOption(bool, "is_wasm", is_wasm);
+    build_options.addOption(bool, "is_android", is_android);
     lib_mod.addOptions("build_options", build_options);
 
     // Add stb_image include path for bgfx backend image loading (desktop only)
@@ -141,6 +199,7 @@ pub fn build(b: *std.Build) void {
     if (raylib) |rl| {
         b.modules.put("raylib", rl) catch @panic("OOM");
     }
+    b.modules.put("sokol", sokol) catch @panic("OOM");
 
     // Static library for linking
     const lib = b.addLibrary(.{
@@ -150,7 +209,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/lib.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = if (!is_ios) &.{
+            .imports = if (!is_restricted_target) &.{
                 // Desktop build - all backends available
                 .{ .name = "zig_utils", .module = zig_utils },
                 .{ .name = "raylib", .module = raylib.? },
@@ -160,6 +219,15 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "zgpu", .module = zgpu.? },
                 .{ .name = "zglfw", .module = zglfw.? },
                 .{ .name = "wgpu", .module = wgpu_native.? },
+            } else if (is_wasm) &.{
+                // WASM build - raylib and sokol available
+                .{ .name = "zig_utils", .module = zig_utils },
+                .{ .name = "raylib", .module = raylib.? },
+                .{ .name = "sokol", .module = sokol },
+            } else if (is_android) &.{
+                // Android build - only sokol backend available
+                .{ .name = "zig_utils", .module = zig_utils },
+                .{ .name = "sokol", .module = sokol },
             } else &.{
                 // iOS build - only sokol backend available
                 .{ .name = "zig_utils", .module = zig_utils },
@@ -281,7 +349,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // SDL backend example (requires SDL linking) - desktop only
-    if (!is_ios) {
+    if (!is_restricted_target) {
         const sdl_example_mod = b.createModule(.{
             .root_source_file = b.path("examples/17_sdl_backend/main.zig"),
             .target = target,
@@ -332,7 +400,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Example 21 Fullscreen - SDL backend variant (desktop only)
-    if (!is_ios) {
+    if (!is_restricted_target) {
         const sdl_fullscreen_mod = b.createModule(.{
             .root_source_file = b.path("examples/21_fullscreen/main_sdl.zig"),
             .target = target,
@@ -381,7 +449,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Example 23: bgfx backend with GLFW (desktop only)
-    if (!is_ios) {
+    if (!is_restricted_target) {
         const bgfx_example_mod = b.createModule(.{
             .root_source_file = b.path("examples/23_bgfx_backend/main.zig"),
             .target = target,
@@ -413,7 +481,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Example 24: zgpu backend (WebGPU via Dawn) with GLFW (desktop only)
-    if (!is_ios) {
+    if (!is_restricted_target) {
         const zgpu_example_mod = b.createModule(.{
             .root_source_file = b.path("examples/24_zgpu_backend/main.zig"),
             .target = target,
@@ -472,7 +540,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Example 26: wgpu_native backend (lower-level WebGPU) with GLFW (desktop only)
-    if (!is_ios) {
+    if (!is_restricted_target) {
         const wgpu_native_example_mod = b.createModule(.{
             .root_source_file = b.path("examples/25_wgpu_native_backend/main.zig"),
             .target = target,
