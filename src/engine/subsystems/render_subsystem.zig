@@ -288,8 +288,8 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
             const result = resources.findSprite(visual.sprite_name) orelse return null;
             const sprite = result.sprite;
 
-            const scaled_width = @as(f32, @floatFromInt(sprite.width)) * visual.scale;
-            const scaled_height = @as(f32, @floatFromInt(sprite.height)) * visual.scale;
+            const scaled_width = @as(f32, @floatFromInt(sprite.width)) * visual.scale_x;
+            const scaled_height = @as(f32, @floatFromInt(sprite.height)) * visual.scale_y;
             const pivot_origin = visual.pivot.getOrigin(scaled_width, scaled_height, visual.pivot_x, visual.pivot_y);
 
             return .{
@@ -423,7 +423,8 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
                 visual.rotation,
                 visual.flip_x,
                 visual.flip_y,
-                visual.scale,
+                visual.scale_x,
+                visual.scale_y,
                 tint,
                 screen_vp,
             );
@@ -455,7 +456,8 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
                     lookup.src_rect.width,
                     lookup.src_rect.height,
                     pos,
-                    visual.scale,
+                    visual.scale_x,
+                    visual.scale_y,
                     visual.pivot,
                     visual.pivot_x,
                     visual.pivot_y,

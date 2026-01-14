@@ -55,7 +55,8 @@ test "repeat mode enables scissor clipping" {
         .size_mode = .repeat,
         .container = Container.size(100, 100),
         .pivot = .top_left,
-        .scale = 1.0,
+        .scale_x = 1.0,
+        .scale_y = 1.0,
     }, .{ .x = 50, .y = 50 });
 
     // Render the scene
@@ -81,7 +82,8 @@ test "repeat mode scissor has correct coordinates for screen-space" {
         .size_mode = .repeat,
         .container = Container.size(200, 150),
         .pivot = .top_left,
-        .scale = 1.0,
+        .scale_x = 1.0,
+        .scale_y = 1.0,
         .layer = .ui, // screen-space layer
     }, .{ .x = 100, .y = 100 });
 
@@ -113,7 +115,8 @@ test "repeat mode uses normalized pivot for top_left" {
         .size_mode = .repeat,
         .container = Container.size(100, 100),
         .pivot = .top_left, // Should use (0, 0) not (0.5, 0.5)
-        .scale = 1.0,
+        .scale_x = 1.0,
+        .scale_y = 1.0,
         .layer = .ui,
     }, .{ .x = 50, .y = 50 });
 
@@ -143,7 +146,8 @@ test "repeat mode uses normalized pivot for center" {
         .size_mode = .repeat,
         .container = Container.size(100, 100),
         .pivot = .center, // Should use (0.5, 0.5)
-        .scale = 1.0,
+        .scale_x = 1.0,
+        .scale_y = 1.0,
         .layer = .ui,
     }, .{ .x = 100, .y = 100 });
 
@@ -173,7 +177,8 @@ test "repeat mode uses normalized pivot for bottom_right" {
         .size_mode = .repeat,
         .container = Container.size(100, 100),
         .pivot = .bottom_right, // Should use (1.0, 1.0)
-        .scale = 1.0,
+        .scale_x = 1.0,
+        .scale_y = 1.0,
         .layer = .ui,
     }, .{ .x = 200, .y = 200 });
 

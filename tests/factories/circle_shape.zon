@@ -1,7 +1,9 @@
 .{
     .shape = .{ .circle = .{ .radius = 50 } },
+    .scale_x = 1.0,
+    .scale_y = 1.0,
     .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
-    .z_index = 128,
+    .z_index = 0,
     .rotation = 0,
     .visible = true,
     .layer = .world,

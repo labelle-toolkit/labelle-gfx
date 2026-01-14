@@ -2,6 +2,10 @@
 //!
 //! Provides O(1) insertion and natural depth ordering for render items
 //! using Z_INDEX_BUCKET_COUNT buckets (one per z-index value).
+//!
+//! Z-index values are i16 to support relative z-indexing (parent + child offset).
+//! Internally mapped to 256 buckets via offset: bucket = clamp(z + 128, 0, 255)
+//! This gives effective range of -128 to 127 with proper ordering.
 
 const std = @import("std");
 const types = @import("types.zig");
@@ -12,8 +16,18 @@ const EntityId = types.EntityId;
 // Configuration
 // ============================================
 
-/// Number of z-index buckets. This provides one bucket per possible u8 z-index value.
-pub const Z_INDEX_BUCKET_COUNT: u16 = std.math.maxInt(u8) + 1;
+/// Number of z-index buckets. Uses 256 buckets for O(1) access.
+pub const Z_INDEX_BUCKET_COUNT: u16 = 256;
+
+/// Offset added to z-index to map i16 to bucket index.
+/// z=-128 maps to bucket 0, z=0 maps to bucket 128, z=127 maps to bucket 255.
+pub const Z_INDEX_OFFSET: i16 = 128;
+
+/// Convert i16 z-index to u8 bucket index with clamping.
+pub fn zToBucket(z: i16) u8 {
+    const offset_z = z + Z_INDEX_OFFSET;
+    return @intCast(std.math.clamp(offset_z, 0, 255));
+}
 
 // ============================================
 // Render Item for Z-Index Buckets
@@ -53,13 +67,15 @@ pub const ZBuckets = struct {
         }
     }
 
-    pub fn insert(self: *ZBuckets, item: RenderItem, z: u8) !void {
-        try self.buckets[z].append(self.allocator, item);
+    pub fn insert(self: *ZBuckets, item: RenderItem, z: i16) !void {
+        const bucket_idx = zToBucket(z);
+        try self.buckets[bucket_idx].append(self.allocator, item);
         self.total_count += 1;
     }
 
-    pub fn remove(self: *ZBuckets, item: RenderItem, z: u8) bool {
-        const bucket = &self.buckets[z];
+    pub fn remove(self: *ZBuckets, item: RenderItem, z: i16) bool {
+        const bucket_idx = zToBucket(z);
+        const bucket = &self.buckets[bucket_idx];
         for (bucket.items, 0..) |existing, i| {
             if (existing.eql(item)) {
                 _ = bucket.swapRemove(i);
@@ -70,13 +86,22 @@ pub const ZBuckets = struct {
         return false;
     }
 
-    pub fn changeZIndex(self: *ZBuckets, item: RenderItem, old_z: u8, new_z: u8) !void {
-        if (old_z == new_z) return;
+    pub fn changeZIndex(self: *ZBuckets, item: RenderItem, old_z: i16, new_z: i16) !void {
+        const old_bucket = zToBucket(old_z);
+        const new_bucket = zToBucket(new_z);
+        if (old_bucket == new_bucket) return;
+
+        // Insert to new bucket first to prevent data loss if allocation fails
+        const bucket_items = &self.buckets[new_bucket];
+        try bucket_items.append(self.allocator, item);
+
+        // Now remove from old bucket (safe since insert succeeded)
         const removed = self.remove(item, old_z);
         if (!removed) {
+            // Item wasn't in old bucket - remove from new bucket and return error
+            _ = bucket_items.pop();
             return error.ItemNotFound;
         }
-        try self.insert(item, new_z);
     }
 
     pub fn clear(self: *ZBuckets) void {

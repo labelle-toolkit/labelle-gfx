@@ -82,10 +82,11 @@ pub fn color(r: u8, g: u8, b: u8, a: u8) Color {
 pub fn spriteVisual() SpriteVisual {
     return .{
         .sprite_name = "test_sprite",
-        .scale = 1.0,
+        .scale_x = 1.0,
+        .scale_y = 1.0,
         .rotation = 0,
         .tint = Color.white,
-        .z_index = 128,
+        .z_index = 0,
         .flip_x = false,
         .flip_y = false,
         .visible = true,
@@ -109,8 +110,10 @@ pub fn spriteVisualWithName(name: []const u8) SpriteVisual {
 pub fn circleShape(radius: f32) ShapeVisual {
     return .{
         .shape = .{ .circle = .{ .radius = radius } },
+        .scale_x = 1.0,
+        .scale_y = 1.0,
         .color = Color.white,
-        .z_index = 128,
+        .z_index = 0,
         .rotation = 0,
         .visible = true,
         .layer = .world,
@@ -121,8 +124,10 @@ pub fn circleShape(radius: f32) ShapeVisual {
 pub fn rectangleShape(width: f32, height: f32) ShapeVisual {
     return .{
         .shape = .{ .rectangle = .{ .width = width, .height = height } },
+        .scale_x = 1.0,
+        .scale_y = 1.0,
         .color = Color.white,
-        .z_index = 128,
+        .z_index = 0,
         .rotation = 0,
         .visible = true,
         .layer = .world,
@@ -133,8 +138,10 @@ pub fn rectangleShape(width: f32, height: f32) ShapeVisual {
 pub fn lineShape(end_x: f32, end_y: f32, thickness: f32) ShapeVisual {
     return .{
         .shape = .{ .line = .{ .end = .{ .x = end_x, .y = end_y }, .thickness = thickness } },
+        .scale_x = 1.0,
+        .scale_y = 1.0,
         .color = Color.white,
-        .z_index = 128,
+        .z_index = 0,
         .rotation = 0,
         .visible = true,
         .layer = .world,
@@ -147,7 +154,7 @@ pub fn textVisual() TextVisual {
         .text = "Test",
         .size = 16,
         .color = Color.white,
-        .z_index = 128,
+        .z_index = 0,
         .visible = true,
         .layer = .world,
     };
@@ -159,7 +166,7 @@ pub fn textVisualWithText(comptime text: [:0]const u8) TextVisual {
         .text = text,
         .size = 16,
         .color = Color.white,
-        .z_index = 128,
+        .z_index = 0,
         .visible = true,
         .layer = .world,
     };
@@ -214,8 +221,8 @@ pub const FactoryTests = struct {
     test "spriteVisual creates default sprite" {
         const sprite = spriteVisual();
         try expect.toBeTrue(std.mem.eql(u8, sprite.sprite_name, "test_sprite"));
-        try expect.equal(@as(f32, 1.0), sprite.scale);
-        try expect.equal(@as(u8, 128), sprite.z_index);
+        try expect.equal(@as(f32, 1.0), sprite.scale_x);
+        try expect.equal(@as(i16, 0), sprite.z_index);
     }
 
     test "spriteVisualWithName creates sprite with custom name" {
@@ -272,14 +279,15 @@ pub const FactoryTests = struct {
     test "SpriteVisualFactory creates sprite with defaults" {
         const sprite = SpriteVisualFactory.build(.{});
         try expect.toBeTrue(std.mem.eql(u8, sprite.sprite_name, "test_sprite"));
-        try expect.equal(@as(f32, 1.0), sprite.scale);
-        try expect.equal(@as(u8, 128), sprite.z_index);
+        try expect.equal(@as(f32, 1.0), sprite.scale_x);
+        try expect.equal(@as(i16, 0), sprite.z_index);
     }
 
     test "SpriteVisualFactory allows overriding fields" {
-        const sprite = SpriteVisualFactory.build(.{ .sprite_name = "player", .scale = 2.0 });
+        const sprite = SpriteVisualFactory.build(.{ .sprite_name = "player", .scale_x = 2.0, .scale_y = 0.5 });
         try expect.toBeTrue(std.mem.eql(u8, sprite.sprite_name, "player"));
-        try expect.equal(@as(f32, 2.0), sprite.scale);
+        try expect.equal(@as(f32, 2.0), sprite.scale_x);
+        try expect.equal(@as(f32, 0.5), sprite.scale_y);
     }
 
     test "CircleShapeFactory creates circle with defaults" {
@@ -290,12 +298,12 @@ pub const FactoryTests = struct {
             },
             else => return error.UnexpectedShape,
         }
-        try expect.equal(@as(u8, 128), shape.z_index);
+        try expect.equal(@as(i16, 0), shape.z_index);
     }
 
     test "CircleShapeFactory allows overriding z_index" {
         const shape = CircleShapeFactory.build(.{ .z_index = 200 });
-        try expect.equal(@as(u8, 200), shape.z_index);
+        try expect.equal(@as(i16, 200), shape.z_index);
     }
 
     test "RectangleShapeFactory creates rectangle with defaults" {
