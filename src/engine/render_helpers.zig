@@ -330,11 +330,12 @@ pub fn RenderHelpers(comptime Backend: type) type {
             p: SizedSpriteParams,
             sprite_w: f32,
             sprite_h: f32,
-            scale: f32,
+            scale_x: f32,
+            scale_y: f32,
             screen_viewport: ?ScreenViewport,
         ) void {
-            const scaled_w = sprite_w * scale;
-            const scaled_h = sprite_h * scale;
+            const scaled_w = sprite_w * scale_x;
+            const scaled_h = sprite_h * scale_y;
 
             if (scaled_w <= 0 or scaled_h <= 0) {
                 log.warn("Skipping repeat render: non-positive tile dimensions ({d}x{d})", .{ scaled_w, scaled_h });
@@ -415,7 +416,8 @@ pub fn RenderHelpers(comptime Backend: type) type {
             rotation: f32,
             flip_x: bool,
             flip_y: bool,
-            scale: f32,
+            scale_x: f32,
+            scale_y: f32,
             tint: Backend.Color,
             screen_viewport: ?ScreenViewport,
         ) void {
@@ -449,7 +451,7 @@ pub fn RenderHelpers(comptime Backend: type) type {
                 .stretch => renderStretchMode(p),
                 .cover => renderCoverMode(p, sprite_x, sprite_y, sprite_w, sprite_h, flip_x, flip_y),
                 .contain, .scale_down => renderContainMode(p, sprite_w, sprite_h, size_mode),
-                .repeat => renderRepeatMode(p, sprite_w, sprite_h, scale, screen_viewport),
+                .repeat => renderRepeatMode(p, sprite_w, sprite_h, scale_x, scale_y, screen_viewport),
             }
         }
 
@@ -461,7 +463,8 @@ pub fn RenderHelpers(comptime Backend: type) type {
             sprite_w: f32,
             sprite_h: f32,
             pos: Position,
-            scale: f32,
+            scale_x: f32,
+            scale_y: f32,
             pivot: Pivot,
             pivot_x: f32,
             pivot_y: f32,
@@ -470,8 +473,8 @@ pub fn RenderHelpers(comptime Backend: type) type {
             flip_y: bool,
             tint: Backend.Color,
         ) void {
-            const scaled_width = sprite_w * scale;
-            const scaled_height = sprite_h * scale;
+            const scaled_width = sprite_w * scale_x;
+            const scaled_height = sprite_h * scale_y;
 
             // Apply flipping by negating source rect dimensions
             const flipped_src = Backend.Rectangle{

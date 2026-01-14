@@ -1,10 +1,11 @@
 .{
     .texture = .invalid,
     .sprite_name = "test_sprite",
-    .scale = 1.0,
+    .scale_x = 1.0,
+    .scale_y = 1.0,
     .rotation = 0,
     .tint = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
-    .z_index = 128,
+    .z_index = 0,
     .flip_x = false,
     .flip_y = false,
     .visible = true,
