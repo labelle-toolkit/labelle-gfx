@@ -284,9 +284,10 @@ pub const FactoryTests = struct {
     }
 
     test "SpriteVisualFactory allows overriding fields" {
-        const sprite = SpriteVisualFactory.build(.{ .sprite_name = "player", .scale_x = 2.0 });
+        const sprite = SpriteVisualFactory.build(.{ .sprite_name = "player", .scale_x = 2.0, .scale_y = 0.5 });
         try expect.toBeTrue(std.mem.eql(u8, sprite.sprite_name, "player"));
         try expect.equal(@as(f32, 2.0), sprite.scale_x);
+        try expect.equal(@as(f32, 0.5), sprite.scale_y);
     }
 
     test "CircleShapeFactory creates circle with defaults" {

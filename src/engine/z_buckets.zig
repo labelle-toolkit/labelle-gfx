@@ -90,11 +90,18 @@ pub const ZBuckets = struct {
         const old_bucket = zToBucket(old_z);
         const new_bucket = zToBucket(new_z);
         if (old_bucket == new_bucket) return;
+
+        // Insert to new bucket first to prevent data loss if allocation fails
+        const bucket_items = &self.buckets[new_bucket];
+        try bucket_items.append(self.allocator, item);
+
+        // Now remove from old bucket (safe since insert succeeded)
         const removed = self.remove(item, old_z);
         if (!removed) {
+            // Item wasn't in old bucket - remove from new bucket and return error
+            _ = bucket_items.pop();
             return error.ItemNotFound;
         }
-        try self.insert(item, new_z);
     }
 
     pub fn clear(self: *ZBuckets) void {
