@@ -69,7 +69,9 @@ const mtl = if (builtin.os.tag == .macos) @cImport({
     @cInclude("objc/message.h");
 }) else struct {};
 
-const gl = if (builtin.os.tag == .linux or builtin.os.tag == .windows) @cImport({
+// Desktop Linux only - exclude Android (which has os.tag == .linux but abi == .android)
+const is_desktop_linux = builtin.os.tag == .linux and builtin.abi != .android;
+const gl = if (is_desktop_linux or builtin.os.tag == .windows) @cImport({
     @cInclude("GL/gl.h");
 }) else struct {};
 
@@ -462,7 +464,7 @@ pub const SokolBackend = struct {
                 std.log.warn("takeScreenshot not yet implemented for iOS Metal backend", .{});
             },
             .GLCORE, .GLES3 => {
-                if (comptime (builtin.os.tag == .linux or builtin.os.tag == .windows)) {
+                if (comptime (is_desktop_linux or builtin.os.tag == .windows)) {
                     takeScreenshotGL(filename);
                 } else {
                     std.log.warn("GL backend detected but GL headers not available on this platform", .{});
