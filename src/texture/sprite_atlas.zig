@@ -92,7 +92,7 @@ pub fn SpriteAtlasWith(comptime BackendType: type) type {
             defer file.close();
 
             const file_size = try file.getEndPos();
-            const file_data = try self.allocator.alloc(u8, file_size);
+            const file_data = try self.allocator.alloc(u8, @intCast(file_size));
             defer self.allocator.free(file_data);
 
             _ = try file.readAll(file_data);
