@@ -41,7 +41,7 @@ pub fn loadImage(allocator: std.mem.Allocator, path: [:0]const u8) !ImageData {
     defer file.close();
 
     const file_size = file.getEndPos() catch return error.FileReadError;
-    const file_data = allocator.alloc(u8, file_size) catch return error.OutOfMemory;
+    const file_data = allocator.alloc(u8, @intCast(file_size)) catch return error.OutOfMemory;
     defer allocator.free(file_data);
 
     const bytes_read = file.readAll(file_data) catch return error.FileReadError;

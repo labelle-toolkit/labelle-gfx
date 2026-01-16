@@ -512,7 +512,7 @@ pub const WgpuNativeBackend = struct {
         defer file.close();
 
         const file_size = try file.getEndPos();
-        const file_data = try alloc.alloc(u8, file_size);
+        const file_data = try alloc.alloc(u8, @intCast(file_size));
         defer alloc.free(file_data);
 
         const bytes_read = try file.readAll(file_data);

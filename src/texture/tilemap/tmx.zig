@@ -219,7 +219,7 @@ pub const TileMap = struct {
         defer file.close();
 
         const file_size = try file.getEndPos();
-        const content = try allocator.alloc(u8, file_size);
+        const content = try allocator.alloc(u8, @intCast(file_size));
         defer allocator.free(content);
 
         _ = try file.readAll(content);
