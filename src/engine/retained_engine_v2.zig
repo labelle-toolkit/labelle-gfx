@@ -471,7 +471,7 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
         /// Use for in-game debug visualizations like collision bounds, paths, etc.
         pub fn drawShapeWorld(self: *Self, shape: Shape, world_pos: Position, color: Color) void {
             const camera = self.cameras.getCamera();
-            BackendType.beginMode2D(camera.getBackendCamera());
+            BackendType.beginMode2D(camera.toBackend());
             Helpers.renderShape(shape, world_pos, color, 0);
             BackendType.endMode2D();
         }
@@ -479,7 +479,7 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
         /// Draw a shape immediately in world space with rotation.
         pub fn drawShapeWorldRotated(self: *Self, shape: Shape, world_pos: Position, color: Color, rotation: f32) void {
             const camera = self.cameras.getCamera();
-            BackendType.beginMode2D(camera.getBackendCamera());
+            BackendType.beginMode2D(camera.toBackend());
             Helpers.renderShape(shape, world_pos, color, rotation);
             BackendType.endMode2D();
         }
