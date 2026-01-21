@@ -102,7 +102,7 @@ pub fn build(b: *std.Build) void {
         }
     }
 
-    // Desktop-only dependencies (SDL, bgfx, zglfw, zgpu, wgpu_native)
+    // Desktop-only dependencies (SDL, bgfx, zglfw, wgpu_native)
     // These are not available on iOS/WASM and use C++ which complicates cross-compilation
     // Note: SDL uses @import("sdl") which is comptime - we need to always import it
     // but only use it when not on restricted targets
@@ -118,20 +118,13 @@ pub fn build(b: *std.Build) void {
     const zbgfx: ?*std.Build.Module = if (zbgfx_dep) |dep| dep.module("zbgfx") else null;
     const bgfx_lib: ?*std.Build.Step.Compile = if (zbgfx_dep) |dep| dep.artifact("bgfx") else null;
 
-    // GLFW dependency (for bgfx/zgpu window management) - not available on iOS/WASM
+    // GLFW dependency (for bgfx window management) - not available on iOS/WASM
     const zglfw_dep: ?*std.Build.Dependency = if (!is_restricted_target) b.dependency("zglfw", .{
         .target = target,
         .optimize = optimize,
     }) else null;
     const zglfw: ?*std.Build.Module = if (zglfw_dep) |dep| dep.module("root") else null;
     const glfw_lib: ?*std.Build.Step.Compile = if (zglfw_dep) |dep| dep.artifact("glfw") else null;
-
-    // zgpu dependency (WebGPU via Dawn) - not available on iOS/WASM
-    const zgpu_dep: ?*std.Build.Dependency = if (!is_restricted_target) b.dependency("zgpu", .{
-        .target = target,
-        .optimize = optimize,
-    }) else null;
-    const zgpu: ?*std.Build.Module = if (zgpu_dep) |dep| dep.module("root") else null;
 
     // wgpu_native_zig dependency (lower-level WebGPU bindings) - not available on iOS/WASM
     const wgpu_native_dep: ?*std.Build.Dependency = if (!is_restricted_target) b.dependency("wgpu_native_zig", .{
@@ -152,7 +145,6 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sokol", .module = sokol },
             .{ .name = "sdl2", .module = sdl.? },
             .{ .name = "zbgfx", .module = zbgfx.? },
-            .{ .name = "zgpu", .module = zgpu.? },
             .{ .name = "zglfw", .module = zglfw.? },
             .{ .name = "wgpu", .module = wgpu_native.? },
         } else if (is_wasm) &.{
@@ -216,7 +208,6 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "sokol", .module = sokol },
                 .{ .name = "sdl2", .module = sdl.? },
                 .{ .name = "zbgfx", .module = zbgfx.? },
-                .{ .name = "zgpu", .module = zgpu.? },
                 .{ .name = "zglfw", .module = zglfw.? },
                 .{ .name = "wgpu", .module = wgpu_native.? },
             } else if (is_wasm) &.{
@@ -478,42 +469,6 @@ pub fn build(b: *std.Build) void {
 
         const full_run_step_23 = b.step("run-23_bgfx_backend", "bgfx backend example with GLFW");
         full_run_step_23.dependOn(&run_cmd_23.step);
-    }
-
-    // Example 24: zgpu backend (WebGPU via Dawn) with GLFW (desktop only)
-    if (!is_restricted_target) {
-        const zgpu_example_mod = b.createModule(.{
-            .root_source_file = b.path("examples/24_zgpu_backend/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zglfw", .module = zglfw.? },
-                .{ .name = "zgpu", .module = zgpu.? },
-                .{ .name = "labelle", .module = lib_mod },
-            },
-        });
-
-        const zgpu_example = b.addExecutable(.{
-            .name = "24_zgpu_backend",
-            .root_module = zgpu_example_mod,
-        });
-
-        // Link glfw library
-        zgpu_example.linkLibrary(glfw_lib.?);
-
-        // Link Dawn (WebGPU) library and its dependencies
-        zgpu_example.linkLibrary(zgpu_dep.?.artifact("zdawn"));
-
-        // Import zgpu's build.zig to use its helper functions for Dawn library paths
-        const zgpu_build = @import("zgpu");
-        zgpu_build.addLibraryPathsTo(zgpu_example);
-
-        const run_cmd_24 = b.addRunArtifact(zgpu_example);
-        const run_step_24 = b.step("run-example-24", "zgpu backend example with GLFW");
-        run_step_24.dependOn(&run_cmd_24.step);
-
-        const full_run_step_24 = b.step("run-24_zgpu_backend", "zgpu backend example with GLFW");
-        full_run_step_24.dependOn(&run_cmd_24.step);
     }
 
     // Example 25: Sokol Run API - simplified sokol application runner
