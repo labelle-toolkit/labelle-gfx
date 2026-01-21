@@ -240,9 +240,11 @@ pub const SpatialGrid = struct {
             if (same) return; // No cell change
         }
 
-        // Slow path: remove and re-insert
-        self.remove(id, old_bounds);
+        // Slow path: insert first, then remove
+        // This ensures atomicity: if insert fails, entity remains in old cells.
+        // If insert succeeds but leaves duplicates in overlapping cells, remove() will clean them up.
         try self.insert(id, new_bounds);
+        self.remove(id, old_bounds);
     }
 
     /// Query all entities in cells overlapping the viewport

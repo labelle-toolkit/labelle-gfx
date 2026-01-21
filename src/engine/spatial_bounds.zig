@@ -13,7 +13,23 @@ pub const Position = types.Position;
 pub const Pivot = types.Pivot;
 
 /// Default sprite dimensions when actual size is unknown (conservative estimate)
-pub const DEFAULT_SPRITE_SIZE: f32 = 256.0;
+/// This should be larger than most sprites to avoid incorrect culling.
+/// Actual sprite dimensions should be provided when available via Resources.
+pub const DEFAULT_SPRITE_SIZE: f32 = 512.0;
+
+/// Get sprite dimensions from resource lookup.
+/// Returns null if sprite not found, allowing fallback to DEFAULT_SPRITE_SIZE.
+pub fn getSpriteDimensions(resources: anytype, sprite_name: []const u8) ?struct { width: f32, height: f32 } {
+    if (sprite_name.len == 0) return null;
+
+    const result = resources.findSprite(sprite_name) orelse return null;
+    const sprite = result.sprite;
+
+    return .{
+        .width = @floatFromInt(sprite.width),
+        .height = @floatFromInt(sprite.height),
+    };
+}
 
 /// Calculate bounds for a sprite visual.
 /// If sprite dimensions are unknown, uses DEFAULT_SPRITE_SIZE as conservative estimate.

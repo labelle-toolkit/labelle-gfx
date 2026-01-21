@@ -320,10 +320,13 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
             // Update spatial grid for world-space layers
             if (visual.layer.config().space == .world) {
                 const layer_idx = @intFromEnum(visual.layer);
+
+                // Look up actual sprite dimensions for accurate bounds
+                const dims = spatial_bounds.getSpriteDimensions(&self.resources, visual.sprite_name);
                 const bounds = spatial_bounds.calculateSpriteBounds(
                     pos,
-                    null, // sprite dimensions unknown at creation time
-                    null,
+                    if (dims) |d| d.width else null,
+                    if (dims) |d| d.height else null,
                     visual.scale_x,
                     visual.scale_y,
                     visual.pivot,
@@ -370,10 +373,11 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
                         if (layer_changed) {
                             if (old_is_world) {
                                 const old_layer_idx = @intFromEnum(old.layer);
+                                const old_dims = spatial_bounds.getSpriteDimensions(&self.resources, old.sprite_name);
                                 const old_bounds = spatial_bounds.calculateSpriteBounds(
                                     entry.position,
-                                    null,
-                                    null,
+                                    if (old_dims) |d| d.width else null,
+                                    if (old_dims) |d| d.height else null,
                                     old.scale_x,
                                     old.scale_y,
                                     old.pivot,
@@ -384,10 +388,11 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
                             }
                             if (new_is_world) {
                                 const new_layer_idx = @intFromEnum(visual.layer);
+                                const new_dims = spatial_bounds.getSpriteDimensions(&self.resources, visual.sprite_name);
                                 const new_bounds = spatial_bounds.calculateSpriteBounds(
                                     entry.position,
-                                    null,
-                                    null,
+                                    if (new_dims) |d| d.width else null,
+                                    if (new_dims) |d| d.height else null,
                                     visual.scale_x,
                                     visual.scale_y,
                                     visual.pivot,
@@ -400,27 +405,32 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
                         // Handle bounds change (same layer)
                         else if (bounds_changed and new_is_world) {
                             const layer_idx = @intFromEnum(visual.layer);
+                            const old_dims = spatial_bounds.getSpriteDimensions(&self.resources, old.sprite_name);
                             const old_bounds = spatial_bounds.calculateSpriteBounds(
                                 entry.position,
-                                null,
-                                null,
+                                if (old_dims) |d| d.width else null,
+                                if (old_dims) |d| d.height else null,
                                 old.scale_x,
                                 old.scale_y,
                                 old.pivot,
                                 old.pivot_x,
                                 old.pivot_y,
                             );
+                            const new_dims = spatial_bounds.getSpriteDimensions(&self.resources, visual.sprite_name);
                             const new_bounds = spatial_bounds.calculateSpriteBounds(
                                 entry.position,
-                                null,
-                                null,
+                                if (new_dims) |d| d.width else null,
+                                if (new_dims) |d| d.height else null,
                                 visual.scale_x,
                                 visual.scale_y,
                                 visual.pivot,
                                 visual.pivot_x,
                                 visual.pivot_y,
                             );
-                            self.renderer.spatial_indices[layer_idx].update(id, old_bounds, new_bounds) catch {};
+                            // If spatial grid update fails, log but don't abort (visual is already updated)
+                            self.renderer.spatial_indices[layer_idx].update(id, old_bounds, new_bounds) catch |err| {
+                                log.err("Failed to update sprite bounds in spatial grid for entity {}: {}", .{ id.toInt(), err });
+                            };
                         }
                     }
                 }
@@ -433,10 +443,11 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
                 if (visual.layer.config().space == .world) {
                     if (self.visuals.getSpriteEntry(id)) |entry| {
                         const layer_idx = @intFromEnum(visual.layer);
+                        const dims = spatial_bounds.getSpriteDimensions(&self.resources, visual.sprite_name);
                         const bounds = spatial_bounds.calculateSpriteBounds(
                             entry.position,
-                            null,
-                            null,
+                            if (dims) |d| d.width else null,
+                            if (dims) |d| d.height else null,
                             visual.scale_x,
                             visual.scale_y,
                             visual.pivot,
@@ -510,7 +521,10 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
                             const layer_idx = @intFromEnum(visual.layer);
                             const old_bounds = spatial_bounds.calculateShapeBounds(BackendType, entry.position, old.shape, old.scale_x, old.scale_y);
                             const new_bounds = spatial_bounds.calculateShapeBounds(BackendType, entry.position, visual.shape, visual.scale_x, visual.scale_y);
-                            self.renderer.spatial_indices[layer_idx].update(id, old_bounds, new_bounds) catch {};
+                            // If spatial grid update fails, log but don't abort (visual is already updated)
+                            self.renderer.spatial_indices[layer_idx].update(id, old_bounds, new_bounds) catch |err| {
+                                log.err("Failed to update shape bounds in spatial grid for entity {}: {}", .{ id.toInt(), err });
+                            };
                         }
                     }
                 }
@@ -564,10 +578,11 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
             if (self.visuals.getSprite(id)) |visual| {
                 if (visual.layer.config().space == .world and old_pos != null) {
                     const layer_idx = @intFromEnum(visual.layer);
+                    const dims = spatial_bounds.getSpriteDimensions(&self.resources, visual.sprite_name);
                     const old_bounds = spatial_bounds.calculateSpriteBounds(
                         old_pos.?,
-                        null,
-                        null,
+                        if (dims) |d| d.width else null,
+                        if (dims) |d| d.height else null,
                         visual.scale_x,
                         visual.scale_y,
                         visual.pivot,
@@ -576,8 +591,8 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
                     );
                     const new_bounds = spatial_bounds.calculateSpriteBounds(
                         pos,
-                        null,
-                        null,
+                        if (dims) |d| d.width else null,
+                        if (dims) |d| d.height else null,
                         visual.scale_x,
                         visual.scale_y,
                         visual.pivot,
