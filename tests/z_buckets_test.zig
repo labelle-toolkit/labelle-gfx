@@ -125,3 +125,38 @@ test "ZBuckets: multiple changeZIndex operations preserve count" {
     try testing.expect(buckets.remove(item3, 100));
     try testing.expectEqual(@as(usize, 0), buckets.total_count);
 }
+
+test "ZBuckets: iterator yields items in z-index order after moves" {
+    var buckets = ZBuckets.init(testing.allocator);
+    defer buckets.deinit();
+
+    // Insert items at various z-indices
+    const item_z10 = RenderItem{ .entity_id = EntityId.from(10), .item_type = .sprite };
+    const item_z50 = RenderItem{ .entity_id = EntityId.from(50), .item_type = .shape };
+    const item_z30 = RenderItem{ .entity_id = EntityId.from(30), .item_type = .text };
+
+    try buckets.insert(item_z50, 50);
+    try buckets.insert(item_z10, 10);
+    try buckets.insert(item_z30, 30);
+
+    // Move item from z=50 to z=20 (between 10 and 30)
+    try buckets.changeZIndex(item_z50, 50, 20);
+
+    // Iterate and verify order: z=10, z=20 (was 50), z=30
+    var iter = buckets.iterator();
+    var results: [3]RenderItem = undefined;
+    var i: usize = 0;
+    while (iter.next()) |item| {
+        results[i] = item;
+        i += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 3), i);
+
+    // First should be z=10 (entity 10)
+    try testing.expectEqual(EntityId.from(10), results[0].entity_id);
+    // Second should be z=20 (entity 50, moved from z=50)
+    try testing.expectEqual(EntityId.from(50), results[1].entity_id);
+    // Third should be z=30 (entity 30)
+    try testing.expectEqual(EntityId.from(30), results[2].entity_id);
+}

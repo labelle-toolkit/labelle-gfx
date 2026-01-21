@@ -74,12 +74,21 @@ pub const ZBuckets = struct {
     }
 
     pub fn remove(self: *ZBuckets, item: RenderItem, z: i16) bool {
+        if (self.removeFromBucket(item, z)) {
+            self.total_count -= 1;
+            return true;
+        }
+        return false;
+    }
+
+    /// Remove item from bucket without updating total_count.
+    /// Used internally by changeZIndex to avoid count manipulation.
+    fn removeFromBucket(self: *ZBuckets, item: RenderItem, z: i16) bool {
         const bucket_idx = zToBucket(z);
         const bucket = &self.buckets[bucket_idx];
         for (bucket.items, 0..) |existing, i| {
             if (existing.eql(item)) {
                 _ = bucket.swapRemove(i);
-                self.total_count -= 1;
                 return true;
             }
         }
@@ -95,17 +104,12 @@ pub const ZBuckets = struct {
         const bucket_items = &self.buckets[new_bucket];
         try bucket_items.append(self.allocator, item);
 
-        // Now remove from old bucket (safe since insert succeeded)
-        const removed = self.remove(item, old_z);
-        if (!removed) {
+        // Remove from old bucket without touching total_count (we're moving, not removing)
+        if (!self.removeFromBucket(item, old_z)) {
             // Item wasn't in old bucket - remove from new bucket and return error
             _ = bucket_items.pop();
             return error.ItemNotFound;
         }
-
-        // Restore total_count: remove() decremented it, but we're moving the item,
-        // not actually removing it. The item count is unchanged.
-        self.total_count += 1;
     }
 
     pub fn clear(self: *ZBuckets) void {
@@ -155,5 +159,3 @@ pub const ZBuckets = struct {
         return Iterator.init(self);
     }
 };
-
-// Tests are in tests/z_buckets_test.zig
