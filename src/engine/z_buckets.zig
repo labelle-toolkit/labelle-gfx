@@ -46,18 +46,21 @@ pub const RenderItem = struct {
 
 /// Z-index bucket storage for RetainedEngine.
 /// Uses Z_INDEX_BUCKET_COUNT buckets for O(1) insertion and natural depth ordering.
+/// Maintains a bitset of non-empty buckets for O(num_non_empty_buckets) iteration.
 pub const ZBuckets = struct {
     const Bucket = std.ArrayListUnmanaged(RenderItem);
 
     buckets: [Z_INDEX_BUCKET_COUNT]Bucket,
     allocator: std.mem.Allocator,
     total_count: usize,
+    non_empty: std.StaticBitSet(Z_INDEX_BUCKET_COUNT),
 
     pub fn init(allocator: std.mem.Allocator) ZBuckets {
         return ZBuckets{
             .buckets = [_]Bucket{.{}} ** Z_INDEX_BUCKET_COUNT,
             .allocator = allocator,
             .total_count = 0,
+            .non_empty = std.StaticBitSet(Z_INDEX_BUCKET_COUNT).initEmpty(),
         };
     }
 
@@ -71,6 +74,7 @@ pub const ZBuckets = struct {
         const bucket_idx = zToBucket(z);
         try self.buckets[bucket_idx].append(self.allocator, item);
         self.total_count += 1;
+        self.non_empty.set(bucket_idx);
     }
 
     pub fn remove(self: *ZBuckets, item: RenderItem, z: i16) bool {
@@ -89,6 +93,10 @@ pub const ZBuckets = struct {
         for (bucket.items, 0..) |existing, i| {
             if (existing.eql(item)) {
                 _ = bucket.swapRemove(i);
+                // Clear non_empty bit if bucket is now empty
+                if (bucket.items.len == 0) {
+                    self.non_empty.unset(bucket_idx);
+                }
                 return true;
             }
         }
@@ -103,11 +111,16 @@ pub const ZBuckets = struct {
         // Insert to new bucket first to prevent data loss if allocation fails
         const bucket_items = &self.buckets[new_bucket];
         try bucket_items.append(self.allocator, item);
+        self.non_empty.set(new_bucket);
 
         // Remove from old bucket without touching total_count (we're moving, not removing)
         if (!self.removeFromBucket(item, old_z)) {
             // Item wasn't in old bucket - remove from new bucket and return error
             _ = bucket_items.pop();
+            // If we just emptied the new bucket, clear its bit
+            if (bucket_items.items.len == 0) {
+                self.non_empty.unset(new_bucket);
+            }
             return error.ItemNotFound;
         }
     }
@@ -117,41 +130,48 @@ pub const ZBuckets = struct {
             bucket.clearRetainingCapacity();
         }
         self.total_count = 0;
+        self.non_empty = std.StaticBitSet(Z_INDEX_BUCKET_COUNT).initEmpty();
     }
 
     pub const Iterator = struct {
         buckets: *const [Z_INDEX_BUCKET_COUNT]Bucket,
-        z: u16,
+        non_empty: *const std.StaticBitSet(Z_INDEX_BUCKET_COUNT),
+        z: ?usize,
         idx: usize,
 
         pub fn init(storage: *const ZBuckets) Iterator {
-            var iter = Iterator{
+            return Iterator{
                 .buckets = &storage.buckets,
-                .z = 0,
+                .non_empty = &storage.non_empty,
+                .z = storage.non_empty.findFirstSet(),
                 .idx = 0,
             };
-            iter.skipEmptyBuckets();
-            return iter;
         }
 
         pub fn next(self: *Iterator) ?RenderItem {
-            while (self.z < Z_INDEX_BUCKET_COUNT) {
-                const bucket = &self.buckets[self.z];
+            while (self.z) |z_val| {
+                const bucket = &self.buckets[z_val];
                 if (self.idx < bucket.items.len) {
                     const item = bucket.items[self.idx];
                     self.idx += 1;
                     return item;
                 }
-                self.z += 1;
+                // Move to next non-empty bucket (start search from z_val + 1)
                 self.idx = 0;
+                if (z_val + 1 < Z_INDEX_BUCKET_COUNT) {
+                    var iter = self.non_empty.iterator(.{});
+                    self.z = null;
+                    while (iter.next()) |bit| {
+                        if (bit > z_val) {
+                            self.z = bit;
+                            break;
+                        }
+                    }
+                } else {
+                    self.z = null;
+                }
             }
             return null;
-        }
-
-        fn skipEmptyBuckets(self: *Iterator) void {
-            while (self.z < Z_INDEX_BUCKET_COUNT and self.buckets[self.z].items.len == 0) {
-                self.z += 1;
-            }
         }
     };
 

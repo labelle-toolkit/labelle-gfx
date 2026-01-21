@@ -160,3 +160,35 @@ test "ZBuckets: iterator yields items in z-index order after moves" {
     // Third should be z=30 (entity 30)
     try testing.expectEqual(EntityId.from(30), results[2].entity_id);
 }
+
+test "ZBuckets: iterator with sparse buckets skips empty ranges" {
+    var buckets = ZBuckets.init(testing.allocator);
+    defer buckets.deinit();
+
+    // Insert items with large gaps between z-indices to test bitset optimization
+    // Only buckets -128, 0, 50, and 127 will be non-empty (4 out of 256 buckets)
+    const item1 = RenderItem{ .entity_id = EntityId.from(1), .item_type = .sprite };
+    const item2 = RenderItem{ .entity_id = EntityId.from(2), .item_type = .shape };
+    const item3 = RenderItem{ .entity_id = EntityId.from(3), .item_type = .text };
+    const item4 = RenderItem{ .entity_id = EntityId.from(4), .item_type = .sprite };
+
+    try buckets.insert(item1, -128); // bucket 0
+    try buckets.insert(item2, 0); // bucket 128
+    try buckets.insert(item3, 50); // bucket 178
+    try buckets.insert(item4, 127); // bucket 255
+
+    // Iterator should skip 252 empty buckets and only visit 4 non-empty ones
+    var iter = buckets.iterator();
+    var count: usize = 0;
+    var last_id: u32 = 0;
+    while (iter.next()) |item| {
+        count += 1;
+        // Verify items are in ascending entity ID order (which matches z-order)
+        const current_id = item.entity_id.toInt();
+        try testing.expect(current_id > last_id);
+        last_id = current_id;
+    }
+
+    try testing.expectEqual(@as(usize, 4), count);
+    try testing.expectEqual(@as(u32, 4), last_id);
+}
