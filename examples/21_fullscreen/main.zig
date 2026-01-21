@@ -38,7 +38,8 @@ pub fn main() !void {
         .size_mode = .repeat,
         .container = .viewport, // Uses current screen dimensions
         .pivot = .top_left,
-        .scale = 2.0,
+        .scale_x = 2.0,
+        .scale_y = 2.0,
         .tint = .{ .r = 50, .g = 50, .b = 70, .a = 255 },
         .z_index = 1,
         .layer = .background, // Screen-space layer - not affected by camera
@@ -48,7 +49,8 @@ pub fn main() !void {
     engine.createSprite(EntityId.from(2), .{
         .sprite_name = "idle_0001",
         .pivot = .center,
-        .scale = 4.0,
+        .scale_x = 4.0,
+        .scale_y = 4.0,
         .z_index = 10,
     }, .{ .x = 400, .y = 300 });
 

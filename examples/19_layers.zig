@@ -182,18 +182,20 @@ pub fn main() !void {
     std.debug.print("Total entities: {}\n", .{entity_id - 1});
 
     var frame_count: u32 = 0;
-    var camera_x: f32 = 0;
-    var camera_y: f32 = 0;
+
+    // Center camera on the player (400, 300) and oscillate around that
+    const player_x: f32 = 400;
+    const player_y: f32 = 300;
 
     // Game loop
     while (engine.isRunning()) {
         frame_count += 1;
 
-        // Move camera in a circle to demonstrate parallax
-        camera_x = @sin(@as(f32, @floatFromInt(frame_count)) * 0.02) * 150;
-        camera_y = @cos(@as(f32, @floatFromInt(frame_count)) * 0.015) * 100;
+        // Move camera in a circle around the player to demonstrate parallax
+        const offset_x = @sin(@as(f32, @floatFromInt(frame_count)) * 0.02) * 150;
+        const offset_y = @cos(@as(f32, @floatFromInt(frame_count)) * 0.015) * 100;
 
-        engine.setCameraPosition(camera_x, camera_y);
+        engine.setCameraPosition(player_x + offset_x, player_y + offset_y);
 
         // Pulse the UI indicator
         const pulse = (@sin(@as(f32, @floatFromInt(frame_count)) * 0.1) + 1.0) * 0.5;

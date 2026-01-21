@@ -3,11 +3,11 @@
 //! Implements the backend interface using wgpu_native_zig (lower-level WebGPU bindings).
 //! Uses direct wgpu-native API calls for minimal overhead and maximum control.
 //!
-//! Key differences from zgpu backend:
+//! Key features:
 //! - Direct wgpu-native bindings via extern fn (no high-level abstractions)
-//! - Lower overhead with cleaner Zig-native types
-//! - More control over rendering pipeline
-//! - Simpler codebase tailored for labelle-gfx
+//! - Low overhead with clean Zig-native types
+//! - Full control over rendering pipeline
+//! - Tailored for labelle-gfx
 //!
 //! Implemented features:
 //! - Basic rendering setup (instance, adapter, device, surface)
@@ -21,7 +21,7 @@
 //! - BindGroup caching for improved performance
 //!
 //! Not yet implemented:
-//! - Text rendering (intentionally left out like zgpu)
+//! - Text rendering
 //! - Screenshot capture (API in place, async readback TODO)
 //!
 

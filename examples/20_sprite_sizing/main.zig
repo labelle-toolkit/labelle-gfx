@@ -43,7 +43,8 @@ pub fn main() !void {
         .size_mode = .repeat,
         .container = .camera_viewport, // Uses camera's world-space bounds
         .pivot = .top_left,
-        .scale = 3.0,
+        .scale_x = 3.0,
+        .scale_y = 3.0,
         .tint = .{ .r = 40, .g = 40, .b = 60, .a = 255 }, // Subtle tint for background
         .z_index = 1, // Behind everything else
         .layer = .world,
@@ -107,7 +108,8 @@ pub fn main() !void {
     engine.createSprite(EntityId.from(5), .{
         .sprite_name = "idle_0001",
         .size_mode = .repeat,
-        .scale = 2.0, // Each tile is 2x size (64x64)
+        .scale_x = 2.0, // Each tile is 2x size (64x64)
+        .scale_y = 2.0,
         .container = Container.size(container_w * 2, container_h),
         .pivot = .top_left,
         .z_index = 10,
