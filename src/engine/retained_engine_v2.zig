@@ -317,10 +317,17 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
         }
 
         pub fn updateSprite(self: *Self, id: EntityId, visual: SpriteVisual) void {
+            // Invalidate cache if sprite_name changes
+            if (self.visuals.getSprite(id)) |old_visual| {
+                if (!std.mem.eql(u8, old_visual.sprite_name, visual.sprite_name)) {
+                    self.renderer.invalidateSpriteCache(id);
+                }
+            }
             self.visuals.updateSprite(id, visual, self.renderer.getLayerBuckets());
         }
 
         pub fn destroySprite(self: *Self, id: EntityId) void {
+            self.renderer.invalidateSpriteCache(id);
             self.visuals.destroySprite(id, self.renderer.getLayerBuckets());
         }
 

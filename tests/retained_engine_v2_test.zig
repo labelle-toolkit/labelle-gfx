@@ -615,3 +615,41 @@ test "V2 renderer sprite cache handles multiple entities" {
     try testing.expect(engine.renderer.sprite_cache.get(id1) != null);
     try testing.expect(engine.renderer.sprite_cache.get(id2) != null);
 }
+
+test "V2 renderer sprite cache invalidates on sprite name change" {
+    var engine = try MockEngineV2.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    try engine.resources.loadSprite("sprite_a", "a.png");
+    try engine.resources.loadSprite("sprite_b", "b.png");
+
+    const id = gfx.EntityId.from(1);
+
+    // Create sprite with sprite_a
+    engine.createSprite(id, .{ .sprite_name = "sprite_a", .layer = .world }, .{ .x = 100, .y = 100 });
+
+    // Render to populate cache
+    engine.beginFrame();
+    engine.renderer.render(&engine.visuals, &engine.cameras, &engine.resources);
+    engine.endFrame();
+
+    // Cache should exist for sprite_a
+    const cached_before = engine.renderer.sprite_cache.get(id);
+    try testing.expect(cached_before != null);
+
+    // Change sprite_name to sprite_b (cache should be invalidated)
+    engine.updateSprite(id, .{ .sprite_name = "sprite_b", .layer = .world });
+
+    // Cache should be cleared after sprite_name change
+    const cached_after = engine.renderer.sprite_cache.get(id);
+    try testing.expect(cached_after == null);
+
+    // Render again to repopulate cache with new sprite
+    engine.beginFrame();
+    engine.renderer.render(&engine.visuals, &engine.cameras, &engine.resources);
+    engine.endFrame();
+
+    // Cache should exist again with new sprite data
+    const cached_new = engine.renderer.sprite_cache.get(id);
+    try testing.expect(cached_new != null);
+}
