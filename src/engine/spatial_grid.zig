@@ -141,17 +141,28 @@ pub const SpatialGrid = struct {
         const min_coord = self.worldToCell(bounds.x, bounds.y);
         const max_coord = self.worldToCell(bounds.x + bounds.w, bounds.y + bounds.h);
 
-        // Clamp to reasonable multi-cell limit (e.g., 4×4 = 16 cells max)
-        const x_span = @min(max_coord.x - min_coord.x + 1, 4);
-        const y_span = @min(max_coord.y - min_coord.y + 1, 4);
+        // Calculate actual span
+        const x_span_raw = max_coord.x - min_coord.x + 1;
+        const y_span_raw = max_coord.y - min_coord.y + 1;
+
+        // For entities larger than 4×4 cells, we only register them in a 4×4 grid
+        // centered on the entity. This is a trade-off: very large entities (>1024×1024px)
+        // may occasionally be culled at viewport edges, but we avoid unbounded memory usage.
+        // Most game entities are smaller than this threshold.
+        const x_span = @min(x_span_raw, 4);
+        const y_span = @min(y_span_raw, 4);
+
+        // If entity is very large, center the 4×4 registration on the entity's center
+        const x_offset = if (x_span_raw > 4) @divTrunc(x_span_raw - 4, 2) else 0;
+        const y_offset = if (y_span_raw > 4) @divTrunc(y_span_raw - 4, 2) else 0;
 
         var cy: i32 = 0;
         while (cy < y_span) : (cy += 1) {
             var cx: i32 = 0;
             while (cx < x_span) : (cx += 1) {
                 const coord = CellCoord{
-                    .x = min_coord.x + cx,
-                    .y = min_coord.y + cy,
+                    .x = min_coord.x + cx + x_offset,
+                    .y = min_coord.y + cy + y_offset,
                 };
                 out_cells[out_len.*] = coord;
                 out_len.* += 1;

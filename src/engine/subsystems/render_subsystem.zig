@@ -277,8 +277,12 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
                         // Now iterate z-buckets in order, rendering only visible entities
                         var iter = self.layer_buckets[layer_idx].iterator();
                         while (iter.next()) |item| {
-                            // Skip if not in visible set
-                            if (!visible_set.contains(item.entity_id)) continue;
+                            // Text entities are not in spatial grid (they're typically UI/overlays)
+                            // so we always render them if visible
+                            const skip_spatial_check = item.item_type == .text;
+
+                            // Skip if not in visible set (unless it's text)
+                            if (!skip_spatial_check and !visible_set.contains(item.entity_id)) continue;
                             if (!isItemVisible(visuals, item)) continue;
 
                             switch (item.item_type) {
