@@ -116,7 +116,8 @@ pub fn main() !void {
     entity_id += 1;
     engine.createSprite(player_id, .{
         .sprite_name = "hero/idle_0001",
-        .scale = 4.0,
+        .scale_x = 4.0,
+        .scale_y = 4.0,
         .z_index = 10,
         .tint = Color.white,
         .layer = .world, // Moves with camera

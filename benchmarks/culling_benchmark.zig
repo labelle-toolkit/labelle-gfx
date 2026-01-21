@@ -62,8 +62,7 @@ fn runBenchmark(
 
             const sprite = try engine.addSprite(.{
                 .sprite_name = "coin",
-                .x = sprite_x,
-                .y = sprite_y,
+                .position = .{ .x = sprite_x, .y = sprite_y },
                 .z_index = ZIndex.items,
                 .scale = 1.0,
             });
