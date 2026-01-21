@@ -25,7 +25,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Initialize raylib window
-    gfx.DefaultBackend.initWindow(800, 600, "Example 14: Tiled Map Editor");
+    try gfx.DefaultBackend.initWindow(800, 600, "Example 14: Tiled Map Editor");
     defer gfx.DefaultBackend.closeWindow();
     gfx.DefaultBackend.setTargetFPS(60);
 
