@@ -102,6 +102,10 @@ pub const ZBuckets = struct {
             _ = bucket_items.pop();
             return error.ItemNotFound;
         }
+
+        // Restore total_count: remove() decremented it, but we're moving the item,
+        // not actually removing it. The item count is unchanged.
+        self.total_count += 1;
     }
 
     pub fn clear(self: *ZBuckets) void {
@@ -151,3 +155,5 @@ pub const ZBuckets = struct {
         return Iterator.init(self);
     }
 };
+
+// Tests are in tests/z_buckets_test.zig
