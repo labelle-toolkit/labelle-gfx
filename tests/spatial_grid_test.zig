@@ -19,7 +19,7 @@ test "SpatialGrid: worldToCell converts correctly" {
     try testing.expectEqual(@as(i32, 0), grid.worldToCell(0, 0).y);
 
     try testing.expectEqual(@as(i32, 1), grid.worldToCell(100, 0).x);
-    try testing.expectEqual(@as(i32, 2), grid.worldToCell(250, 350).y);
+    try testing.expectEqual(@as(i32, 3), grid.worldToCell(250, 350).y);
 
     // Negative coordinates
     try testing.expectEqual(@as(i32, -1), grid.worldToCell(-50, 0).x);
