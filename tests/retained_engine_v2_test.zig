@@ -522,3 +522,96 @@ test "V2 layer buckets shared correctly" {
     // (The sprite count reflects this)
     try testing.expectEqual(@as(usize, 1), engine.visuals.spriteCount());
 }
+
+// ============================================================================
+// Sprite Cache Tests
+// ============================================================================
+
+test "V2 renderer sprite cache avoids repeated lookups" {
+    var engine = try MockEngineV2.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Load an atlas
+    try engine.resources.loadSprite("test_sprite", "test.png");
+
+    const id = gfx.EntityId.from(1);
+    engine.visuals.createSprite(id, .{ .sprite_name = "test_sprite", .layer = .world }, .{ .x = 100, .y = 100 }, engine.getLayerBuckets());
+
+    // First render populates cache
+    engine.beginFrame();
+    engine.renderer.render(&engine.visuals, &engine.cameras, &engine.resources);
+    engine.endFrame();
+
+    // Check cache was populated
+    const cached = engine.renderer.sprite_cache.get(id);
+    try testing.expect(cached != null);
+    try testing.expectEqual(engine.resources.atlas_version, cached.?.atlas_version);
+
+    // Second render should use cache (version unchanged)
+    engine.beginFrame();
+    engine.renderer.render(&engine.visuals, &engine.cameras, &engine.resources);
+    engine.endFrame();
+
+    // Cache should still be valid
+    const cached2 = engine.renderer.sprite_cache.get(id);
+    try testing.expect(cached2 != null);
+    try testing.expectEqual(engine.resources.atlas_version, cached2.?.atlas_version);
+}
+
+test "V2 renderer sprite cache invalidates on atlas reload" {
+    var engine = try MockEngineV2.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Load initial atlas
+    try engine.resources.loadSprite("test_sprite", "test.png");
+    const initial_version = engine.resources.atlas_version;
+
+    const id = gfx.EntityId.from(1);
+    engine.visuals.createSprite(id, .{ .sprite_name = "test_sprite", .layer = .world }, .{ .x = 100, .y = 100 }, engine.getLayerBuckets());
+
+    // First render populates cache
+    engine.beginFrame();
+    engine.renderer.render(&engine.visuals, &engine.cameras, &engine.resources);
+    engine.endFrame();
+
+    const cached = engine.renderer.sprite_cache.get(id);
+    try testing.expect(cached != null);
+    try testing.expectEqual(initial_version, cached.?.atlas_version);
+
+    // Reload atlas (simulates hot-reload)
+    try engine.resources.loadSprite("test_sprite2", "test2.png");
+    const new_version = engine.resources.atlas_version;
+    try testing.expect(new_version != initial_version);
+
+    // Next render should detect stale cache and refresh
+    engine.beginFrame();
+    engine.renderer.render(&engine.visuals, &engine.cameras, &engine.resources);
+    engine.endFrame();
+
+    // Cache should be updated with new version
+    const cached_after_reload = engine.renderer.sprite_cache.get(id);
+    try testing.expect(cached_after_reload != null);
+    try testing.expectEqual(new_version, cached_after_reload.?.atlas_version);
+}
+
+test "V2 renderer sprite cache handles multiple entities" {
+    var engine = try MockEngineV2.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    try engine.resources.loadSprite("sprite_a", "a.png");
+    try engine.resources.loadSprite("sprite_b", "b.png");
+
+    const id1 = gfx.EntityId.from(1);
+    const id2 = gfx.EntityId.from(2);
+
+    engine.visuals.createSprite(id1, .{ .sprite_name = "sprite_a", .layer = .world }, .{ .x = 100, .y = 100 }, engine.getLayerBuckets());
+    engine.visuals.createSprite(id2, .{ .sprite_name = "sprite_b", .layer = .world }, .{ .x = 200, .y = 200 }, engine.getLayerBuckets());
+
+    // Render populates cache for both
+    engine.beginFrame();
+    engine.renderer.render(&engine.visuals, &engine.cameras, &engine.resources);
+    engine.endFrame();
+
+    try testing.expect(engine.renderer.sprite_cache.get(id1) != null);
+    try testing.expect(engine.renderer.sprite_cache.get(id2) != null);
+}

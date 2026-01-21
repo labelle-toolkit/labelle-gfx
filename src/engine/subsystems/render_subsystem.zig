@@ -68,6 +68,15 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
         pub const LayerMaskType = LMask;
         pub const HelperType = Helpers;
 
+        /// Cached sprite lookup with version tracking
+        const CachedSpriteLookup = struct {
+            texture: BackendType.Texture,
+            sprite_x: u32,
+            sprite_y: u32,
+            src_rect: BackendType.Rectangle,
+            atlas_version: u32,
+        };
+
         // Per-layer z-index bucket storage
         layer_buckets: [layer_count]ZBuckets,
 
@@ -79,6 +88,10 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
 
         // Single-camera layer mask
         single_camera_layer_mask: LMask,
+
+        // Sprite lookup cache: EntityId -> CachedSpriteLookup
+        sprite_cache: std.AutoHashMap(EntityId, CachedSpriteLookup),
+        allocator: std.mem.Allocator,
 
         pub fn init(allocator: std.mem.Allocator) Self {
             var layer_buckets: [layer_count]ZBuckets = undefined;
@@ -102,6 +115,8 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
                 .layer_visibility = layer_visibility,
                 .camera_layer_masks = camera_layer_masks,
                 .single_camera_layer_mask = LMask.all(),
+                .sprite_cache = std.AutoHashMap(EntityId, CachedSpriteLookup).init(allocator),
+                .allocator = allocator,
             };
         }
 
@@ -109,6 +124,7 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
             for (&self.layer_buckets) |*bucket| {
                 bucket.deinit();
             }
+            self.sprite_cache.deinit();
         }
 
         // ==================== Layer Buckets Access ====================
@@ -225,8 +241,8 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
 
                     switch (item.item_type) {
                         .sprite => {
-                            if (cfg.space == .screen or shouldRenderSpriteInViewport(visuals, resources, item.entity_id, cam_vp)) {
-                                renderSprite(visuals, resources, item.entity_id, cam_viewport_rect, camera);
+                            if (cfg.space == .screen or self.shouldRenderSpriteInViewport(visuals, resources, item.entity_id, cam_vp)) {
+                                self.renderSprite(visuals, resources, item.entity_id, cam_viewport_rect, camera);
                             }
                         },
                         .shape => {
@@ -277,6 +293,8 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
         /// Returns null if the sprite cannot be found in resources.
         /// Note: Reuses Helpers.ShapeBounds which has identical structure (x, y, w, h).
         fn getSpriteWorldBounds(
+            self: *Self,
+            entity_id: EntityId,
             entry: Visuals.SpriteEntry,
             resources: *Resources,
         ) ?Helpers.ShapeBounds {
@@ -285,11 +303,13 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
 
             if (visual.sprite_name.len == 0) return null;
 
-            const result = resources.findSprite(visual.sprite_name) orelse return null;
-            const sprite = result.sprite;
+            // Use cached lookup for dimensions
+            const lookup = self.lookupSpriteWithCache(resources, entity_id, visual.sprite_name) orelse return null;
+            const sprite_width = lookup.src_rect.width;
+            const sprite_height = lookup.src_rect.height;
 
-            const scaled_width = @as(f32, @floatFromInt(sprite.width)) * visual.scale_x;
-            const scaled_height = @as(f32, @floatFromInt(sprite.height)) * visual.scale_y;
+            const scaled_width = sprite_width * visual.scale_x;
+            const scaled_height = sprite_height * visual.scale_y;
             const pivot_origin = visual.pivot.getOrigin(scaled_width, scaled_height, visual.pivot_x, visual.pivot_y);
 
             return .{
@@ -303,13 +323,14 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
         /// Check if a sprite should be rendered based on viewport culling.
         /// Returns true if visible, or if bounds cannot be determined (conservative).
         fn shouldRenderSpriteInViewport(
+            self: *Self,
             visuals: *const Visuals,
             resources: *Resources,
             id: EntityId,
             viewport: Camera.ViewportRect,
         ) bool {
             const entry = visuals.getSpriteEntry(id) orelse return false;
-            const bounds = getSpriteWorldBounds(entry, resources) orelse return true;
+            const bounds = self.getSpriteWorldBounds(id, entry, resources) orelse return true;
             return viewport.overlapsRect(bounds.x, bounds.y, bounds.w, bounds.h);
         }
 
@@ -333,17 +354,59 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
             src_rect: BackendType.Rectangle,
         };
 
-        /// Look up sprite atlas data from resources.
-        fn lookupSprite(resources: *Resources, sprite_name: []const u8) ?SpriteLookup {
+        /// Look up sprite atlas data from resources with caching.
+        /// Uses entity ID as cache key and invalidates on atlas version change.
+        fn lookupSpriteWithCache(
+            self: *Self,
+            resources: *Resources,
+            entity_id: EntityId,
+            sprite_name: []const u8,
+        ) ?SpriteLookup {
             if (sprite_name.len == 0) return null;
+
+            const current_version = resources.getAtlasVersion();
+
+            // Check cache
+            if (self.sprite_cache.get(entity_id)) |cached| {
+                if (cached.atlas_version == current_version) {
+                    // Cache hit - return without string lookup
+                    return .{
+                        .texture = cached.texture,
+                        .sprite_x = cached.sprite_x,
+                        .sprite_y = cached.sprite_y,
+                        .src_rect = cached.src_rect,
+                    };
+                }
+                // Cache stale - will be updated below
+            }
+
+            // Cache miss or stale - do full lookup
             const result = resources.findSprite(sprite_name) orelse return null;
             const sprite = result.sprite;
-            return .{
+            const lookup = SpriteLookup{
                 .texture = result.atlas.texture,
                 .sprite_x = sprite.x,
                 .sprite_y = sprite.y,
                 .src_rect = Helpers.createSrcRect(sprite.x, sprite.y, sprite.width, sprite.height),
             };
+
+            // Update cache
+            self.sprite_cache.put(entity_id, .{
+                .texture = lookup.texture,
+                .sprite_x = lookup.sprite_x,
+                .sprite_y = lookup.sprite_y,
+                .src_rect = lookup.src_rect,
+                .atlas_version = current_version,
+            }) catch {
+                // Cache insertion failed - not critical, just skip caching
+            };
+
+            return lookup;
+        }
+
+        /// Invalidate sprite cache entry for an entity (call when sprite_name changes)
+        pub fn invalidateSpriteCache(self: *Self, entity_id: EntityId) void {
+            _ = self.sprite_cache.remove(entity_id);
         }
 
         /// Calculate scissor bounds for repeat mode clipping.
@@ -436,6 +499,7 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
 
         /// Main sprite rendering entry point.
         fn renderSprite(
+            self: *Self,
             visuals: *const Visuals,
             resources: *Resources,
             id: EntityId,
@@ -447,7 +511,7 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
             const pos = entry.position;
             const tint = BackendType.color(visual.tint.r, visual.tint.g, visual.tint.b, visual.tint.a);
 
-            const lookup = lookupSprite(resources, visual.sprite_name) orelse return;
+            const lookup = self.lookupSpriteWithCache(resources, id, visual.sprite_name) orelse return;
 
             if (visual.size_mode == .none) {
                 Helpers.renderBasicSprite(
