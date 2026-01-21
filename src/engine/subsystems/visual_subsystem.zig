@@ -19,6 +19,7 @@ const ZBuckets = z_buckets.ZBuckets;
 /// Creates a VisualSubsystem parameterized by layer type.
 pub fn VisualSubsystem(comptime LayerEnum: type) type {
     const layer_count = layer_mod.layerCount(LayerEnum);
+    _ = layer_count; // Used for validation
     const VisualTypesFor = visual_types.VisualTypes(LayerEnum);
 
     return struct {
@@ -60,15 +61,15 @@ pub fn VisualSubsystem(comptime LayerEnum: type) type {
 
         // ==================== Sprite Management ====================
 
-        pub fn createSprite(self: *Self, id: EntityId, visual: SpriteVisual, pos: Position, layer_buckets: *[layer_count]ZBuckets) void {
+        pub fn createSprite(self: *Self, id: EntityId, visual: SpriteVisual, pos: Position, layer_buckets: []ZBuckets) void {
             self.sprites.create(id, visual, pos, layer_buckets);
         }
 
-        pub fn updateSprite(self: *Self, id: EntityId, visual: SpriteVisual, layer_buckets: *[layer_count]ZBuckets) void {
+        pub fn updateSprite(self: *Self, id: EntityId, visual: SpriteVisual, layer_buckets: []ZBuckets) void {
             self.sprites.update(id, visual, layer_buckets);
         }
 
-        pub fn destroySprite(self: *Self, id: EntityId, layer_buckets: *[layer_count]ZBuckets) void {
+        pub fn destroySprite(self: *Self, id: EntityId, layer_buckets: []ZBuckets) void {
             self.sprites.destroy(id, layer_buckets);
         }
 
@@ -82,15 +83,15 @@ pub fn VisualSubsystem(comptime LayerEnum: type) type {
 
         // ==================== Shape Management ====================
 
-        pub fn createShape(self: *Self, id: EntityId, visual: ShapeVisual, pos: Position, layer_buckets: *[layer_count]ZBuckets) void {
+        pub fn createShape(self: *Self, id: EntityId, visual: ShapeVisual, pos: Position, layer_buckets: []ZBuckets) void {
             self.shapes.create(id, visual, pos, layer_buckets);
         }
 
-        pub fn updateShape(self: *Self, id: EntityId, visual: ShapeVisual, layer_buckets: *[layer_count]ZBuckets) void {
+        pub fn updateShape(self: *Self, id: EntityId, visual: ShapeVisual, layer_buckets: []ZBuckets) void {
             self.shapes.update(id, visual, layer_buckets);
         }
 
-        pub fn destroyShape(self: *Self, id: EntityId, layer_buckets: *[layer_count]ZBuckets) void {
+        pub fn destroyShape(self: *Self, id: EntityId, layer_buckets: []ZBuckets) void {
             self.shapes.destroy(id, layer_buckets);
         }
 
@@ -104,15 +105,15 @@ pub fn VisualSubsystem(comptime LayerEnum: type) type {
 
         // ==================== Text Management ====================
 
-        pub fn createText(self: *Self, id: EntityId, visual: TextVisual, pos: Position, layer_buckets: *[layer_count]ZBuckets) void {
+        pub fn createText(self: *Self, id: EntityId, visual: TextVisual, pos: Position, layer_buckets: []ZBuckets) void {
             self.texts.create(id, visual, pos, layer_buckets);
         }
 
-        pub fn updateText(self: *Self, id: EntityId, visual: TextVisual, layer_buckets: *[layer_count]ZBuckets) void {
+        pub fn updateText(self: *Self, id: EntityId, visual: TextVisual, layer_buckets: []ZBuckets) void {
             self.texts.update(id, visual, layer_buckets);
         }
 
-        pub fn destroyText(self: *Self, id: EntityId, layer_buckets: *[layer_count]ZBuckets) void {
+        pub fn destroyText(self: *Self, id: EntityId, layer_buckets: []ZBuckets) void {
             self.texts.destroy(id, layer_buckets);
         }
 

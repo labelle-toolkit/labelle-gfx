@@ -53,6 +53,7 @@ pub const layer_mod = @import("layer.zig");
 pub const visual_types = @import("visual_types.zig");
 const z_buckets = @import("z_buckets.zig");
 const render_helpers = @import("render_helpers.zig");
+const spatial_bounds = @import("spatial_bounds.zig");
 
 // Backend imports
 const backend_mod = @import("../backend/backend.zig");
@@ -104,6 +105,7 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
     }
 
     const layer_count = layer_mod.layerCount(LayerEnum);
+    _ = layer_count; // Used for type validation
 
     // Create subsystem types
     const Visuals = visual_subsystem.VisualSubsystem(LayerEnum);
@@ -163,7 +165,7 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
         // These provide a flatter API for common operations
 
         /// Get layer buckets for visual creation (needed by visuals subsystem)
-        pub fn getLayerBuckets(self: *Self) *[layer_count]z_buckets.ZBuckets {
+        pub fn getLayerBuckets(self: *Self) []z_buckets.ZBuckets {
             return self.renderer.getLayerBuckets();
         }
 
@@ -314,6 +316,22 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
 
         pub fn createSprite(self: *Self, id: EntityId, visual: SpriteVisual, pos: Position) void {
             self.visuals.createSprite(id, visual, pos, self.renderer.getLayerBuckets());
+
+            // Update spatial grid for world-space layers
+            if (visual.layer.config().space == .world) {
+                const layer_idx = @intFromEnum(visual.layer);
+                const bounds = spatial_bounds.calculateSpriteBounds(
+                    pos,
+                    null, // sprite dimensions unknown at creation time
+                    null,
+                    visual.scale_x,
+                    visual.scale_y,
+                    visual.pivot,
+                    visual.pivot_x,
+                    visual.pivot_y,
+                );
+                self.renderer.spatial_indices[layer_idx].insert(id, bounds) catch {};
+            }
         }
 
         pub fn updateSprite(self: *Self, id: EntityId, visual: SpriteVisual) void {
@@ -327,6 +345,26 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
         }
 
         pub fn destroySprite(self: *Self, id: EntityId) void {
+            // Get visual info before destroying to know which spatial grid to update
+            if (self.visuals.getSprite(id)) |visual| {
+                if (visual.layer.config().space == .world) {
+                    if (self.visuals.getSpriteEntry(id)) |entry| {
+                        const layer_idx = @intFromEnum(visual.layer);
+                        const bounds = spatial_bounds.calculateSpriteBounds(
+                            entry.position,
+                            null,
+                            null,
+                            visual.scale_x,
+                            visual.scale_y,
+                            visual.pivot,
+                            visual.pivot_x,
+                            visual.pivot_y,
+                        );
+                        self.renderer.spatial_indices[layer_idx].remove(id, bounds);
+                    }
+                }
+            }
+
             self.renderer.invalidateSpriteCache(id);
             self.visuals.destroySprite(id, self.renderer.getLayerBuckets());
         }
@@ -339,6 +377,13 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
 
         pub fn createShape(self: *Self, id: EntityId, visual: ShapeVisual, pos: Position) void {
             self.visuals.createShape(id, visual, pos, self.renderer.getLayerBuckets());
+
+            // Update spatial grid for world-space layers
+            if (visual.layer.config().space == .world) {
+                const layer_idx = @intFromEnum(visual.layer);
+                const bounds = spatial_bounds.calculateShapeBounds(BackendType, pos, visual.shape, visual.scale_x, visual.scale_y);
+                self.renderer.spatial_indices[layer_idx].insert(id, bounds) catch {};
+            }
         }
 
         pub fn updateShape(self: *Self, id: EntityId, visual: ShapeVisual) void {
@@ -346,6 +391,17 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
         }
 
         pub fn destroyShape(self: *Self, id: EntityId) void {
+            // Get visual info before destroying to know which spatial grid to update
+            if (self.visuals.getShape(id)) |visual| {
+                if (visual.layer.config().space == .world) {
+                    if (self.visuals.getShapeEntry(id)) |entry| {
+                        const layer_idx = @intFromEnum(visual.layer);
+                        const bounds = spatial_bounds.calculateShapeBounds(BackendType, entry.position, visual.shape, visual.scale_x, visual.scale_y);
+                        self.renderer.spatial_indices[layer_idx].remove(id, bounds);
+                    }
+                }
+            }
+
             self.visuals.destroyShape(id, self.renderer.getLayerBuckets());
         }
 
@@ -374,6 +430,47 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
         // -------------------- Position Management --------------------
 
         pub fn updatePosition(self: *Self, id: EntityId, pos: Position) void {
+            // Get old position and visual info before updating
+            const old_pos = self.visuals.getPosition(id);
+
+            // Check if it's a sprite in world-space layer
+            if (self.visuals.getSprite(id)) |visual| {
+                if (visual.layer.config().space == .world and old_pos != null) {
+                    const layer_idx = @intFromEnum(visual.layer);
+                    const old_bounds = spatial_bounds.calculateSpriteBounds(
+                        old_pos.?,
+                        null,
+                        null,
+                        visual.scale_x,
+                        visual.scale_y,
+                        visual.pivot,
+                        visual.pivot_x,
+                        visual.pivot_y,
+                    );
+                    const new_bounds = spatial_bounds.calculateSpriteBounds(
+                        pos,
+                        null,
+                        null,
+                        visual.scale_x,
+                        visual.scale_y,
+                        visual.pivot,
+                        visual.pivot_x,
+                        visual.pivot_y,
+                    );
+                    self.renderer.spatial_indices[layer_idx].update(id, old_bounds, new_bounds) catch {};
+                }
+            }
+            // Check if it's a shape in world-space layer
+            else if (self.visuals.getShape(id)) |visual| {
+                if (visual.layer.config().space == .world and old_pos != null) {
+                    const layer_idx = @intFromEnum(visual.layer);
+                    const old_bounds = spatial_bounds.calculateShapeBounds(BackendType, old_pos.?, visual.shape, visual.scale_x, visual.scale_y);
+                    const new_bounds = spatial_bounds.calculateShapeBounds(BackendType, pos, visual.shape, visual.scale_x, visual.scale_y);
+                    self.renderer.spatial_indices[layer_idx].update(id, old_bounds, new_bounds) catch {};
+                }
+            }
+            // Text entities don't use spatial grid (conservative decision - they're often UI)
+
             self.visuals.updatePosition(id, pos);
         }
 

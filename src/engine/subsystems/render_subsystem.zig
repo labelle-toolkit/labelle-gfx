@@ -33,6 +33,7 @@ const std = @import("std");
 const types = @import("../types.zig");
 const layer_mod = @import("../layer.zig");
 const z_buckets = @import("../z_buckets.zig");
+const spatial_grid_mod = @import("../spatial_grid.zig");
 const render_helpers = @import("../render_helpers.zig");
 const camera_mod = @import("../../camera/camera.zig");
 const camera_manager_mod = @import("../../camera/camera_manager.zig");
@@ -48,6 +49,7 @@ pub const SizeMode = types.SizeMode;
 
 const ZBuckets = z_buckets.ZBuckets;
 const RenderItem = z_buckets.RenderItem;
+const SpatialGrid = spatial_grid_mod.SpatialGrid;
 
 /// Creates a RenderSubsystem parameterized by backend and layer types.
 pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) type {
@@ -80,6 +82,9 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
         // Per-layer z-index bucket storage
         layer_buckets: [layer_count]ZBuckets,
 
+        // Per-layer spatial indices for viewport culling
+        spatial_indices: [layer_count]SpatialGrid,
+
         // Layer visibility (can be toggled at runtime)
         layer_visibility: [layer_count]bool,
 
@@ -99,6 +104,11 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
                 bucket.* = ZBuckets.init(allocator);
             }
 
+            var spatial_indices: [layer_count]SpatialGrid = undefined;
+            for (&spatial_indices) |*grid| {
+                grid.* = SpatialGrid.init(allocator, SpatialGrid.DEFAULT_CELL_SIZE);
+            }
+
             var layer_visibility: [layer_count]bool = undefined;
             inline for (0..layer_count) |i| {
                 const layer: LayerEnum = @enumFromInt(i);
@@ -112,6 +122,7 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
 
             return .{
                 .layer_buckets = layer_buckets,
+                .spatial_indices = spatial_indices,
                 .layer_visibility = layer_visibility,
                 .camera_layer_masks = camera_layer_masks,
                 .single_camera_layer_mask = LMask.all(),
@@ -124,13 +135,20 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
             for (&self.layer_buckets) |*bucket| {
                 bucket.deinit();
             }
+            for (&self.spatial_indices) |*grid| {
+                grid.deinit();
+            }
             self.sprite_cache.deinit();
         }
 
         // ==================== Layer Buckets Access ====================
 
-        pub fn getLayerBuckets(self: *Self) *[layer_count]ZBuckets {
+        pub fn getLayerBuckets(self: *Self) []ZBuckets {
             return &self.layer_buckets;
+        }
+
+        pub fn getSpatialIndices(self: *Self) []SpatialGrid {
+            return &self.spatial_indices;
         }
 
         // ==================== Layer Management ====================
@@ -233,29 +251,85 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
 
                 if (cfg.space == .world) {
                     beginCameraModeWithParallax(camera, cfg.parallax_x, cfg.parallax_y);
-                }
 
-                var iter = self.layer_buckets[layer_idx].iterator();
-                while (iter.next()) |item| {
-                    if (!isItemVisible(visuals, item)) continue;
+                    // World-space layers: Use spatial grid if populated, otherwise fall back to full iteration
+                    const use_spatial_grid = self.spatial_indices[layer_idx].occupiedCellCount() > 0;
 
-                    switch (item.item_type) {
-                        .sprite => {
-                            if (cfg.space == .screen or self.shouldRenderSpriteInViewport(visuals, resources, item.entity_id, cam_vp)) {
-                                self.renderSprite(visuals, resources, item.entity_id, cam_viewport_rect, camera);
+                    if (use_spatial_grid) {
+                        const viewport_rect = spatial_grid_mod.Rect{
+                            .x = cam_vp.x,
+                            .y = cam_vp.y,
+                            .w = cam_vp.width,
+                            .h = cam_vp.height,
+                        };
+
+                        // Collect visible entity IDs into a set
+                        var visible_set = std.AutoHashMap(EntityId, void).init(self.allocator);
+                        defer visible_set.deinit();
+
+                        var spatial_iter = self.spatial_indices[layer_idx].query(viewport_rect);
+                        defer spatial_iter.deinit();
+
+                        while (spatial_iter.next()) |entity_id| {
+                            visible_set.put(entity_id, {}) catch {};
+                        }
+
+                        // Now iterate z-buckets in order, rendering only visible entities
+                        var iter = self.layer_buckets[layer_idx].iterator();
+                        while (iter.next()) |item| {
+                            // Skip if not in visible set
+                            if (!visible_set.contains(item.entity_id)) continue;
+                            if (!isItemVisible(visuals, item)) continue;
+
+                            switch (item.item_type) {
+                                .sprite => {
+                                    if (self.shouldRenderSpriteInViewport(visuals, resources, item.entity_id, cam_vp)) {
+                                        self.renderSprite(visuals, resources, item.entity_id, cam_viewport_rect, camera);
+                                    }
+                                },
+                                .shape => {
+                                    if (shouldRenderShapeInViewport(visuals, item.entity_id, cam_vp)) {
+                                        renderShape(visuals, item.entity_id);
+                                    }
+                                },
+                                .text => renderText(visuals, item.entity_id),
                             }
-                        },
-                        .shape => {
-                            if (cfg.space == .screen or shouldRenderShapeInViewport(visuals, item.entity_id, cam_vp)) {
-                                renderShape(visuals, item.entity_id);
+                        }
+                    } else {
+                        // Fallback: Spatial grid not populated, render all entities
+                        var iter = self.layer_buckets[layer_idx].iterator();
+                        while (iter.next()) |item| {
+                            if (!isItemVisible(visuals, item)) continue;
+
+                            switch (item.item_type) {
+                                .sprite => {
+                                    if (self.shouldRenderSpriteInViewport(visuals, resources, item.entity_id, cam_vp)) {
+                                        self.renderSprite(visuals, resources, item.entity_id, cam_viewport_rect, camera);
+                                    }
+                                },
+                                .shape => {
+                                    if (shouldRenderShapeInViewport(visuals, item.entity_id, cam_vp)) {
+                                        renderShape(visuals, item.entity_id);
+                                    }
+                                },
+                                .text => renderText(visuals, item.entity_id),
                             }
-                        },
-                        .text => renderText(visuals, item.entity_id),
+                        }
                     }
-                }
 
-                if (cfg.space == .world) {
                     BackendType.endMode2D();
+                } else {
+                    // Screen-space layers: Render all entities (no spatial culling)
+                    var iter = self.layer_buckets[layer_idx].iterator();
+                    while (iter.next()) |item| {
+                        if (!isItemVisible(visuals, item)) continue;
+
+                        switch (item.item_type) {
+                            .sprite => self.renderSprite(visuals, resources, item.entity_id, cam_viewport_rect, camera),
+                            .shape => renderShape(visuals, item.entity_id),
+                            .text => renderText(visuals, item.entity_id),
+                        }
+                    }
                 }
             }
         }

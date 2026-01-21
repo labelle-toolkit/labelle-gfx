@@ -16,6 +16,7 @@ pub const tilemap_test = @import("tilemap_test.zig");
 pub const z_index_buckets_test = @import("z_index_buckets_test.zig");
 pub const z_buckets_test = @import("z_buckets_test.zig");
 pub const paged_sparse_set_test = @import("paged_sparse_set_test.zig");
+pub const spatial_grid_test = @import("spatial_grid_test.zig");
 pub const layer_test = @import("layer_test.zig");
 pub const types_test = @import("types_test.zig");
 pub const sizing_modes_test = @import("sizing_modes_test.zig");
