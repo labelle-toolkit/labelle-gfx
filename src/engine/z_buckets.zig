@@ -135,17 +135,20 @@ pub const ZBuckets = struct {
 
     pub const Iterator = struct {
         buckets: *const [Z_INDEX_BUCKET_COUNT]Bucket,
-        non_empty: *const std.StaticBitSet(Z_INDEX_BUCKET_COUNT),
+        bitset_iter: std.StaticBitSet(Z_INDEX_BUCKET_COUNT).Iterator(.{}),
         z: ?usize,
         idx: usize,
 
         pub fn init(storage: *const ZBuckets) Iterator {
-            return Iterator{
+            var iter = Iterator{
                 .buckets = &storage.buckets,
-                .non_empty = &storage.non_empty,
-                .z = storage.non_empty.findFirstSet(),
+                .bitset_iter = storage.non_empty.iterator(.{}),
+                .z = null,
                 .idx = 0,
             };
+            // Get first non-empty bucket
+            iter.z = iter.bitset_iter.next();
+            return iter;
         }
 
         pub fn next(self: *Iterator) ?RenderItem {
@@ -156,20 +159,9 @@ pub const ZBuckets = struct {
                     self.idx += 1;
                     return item;
                 }
-                // Move to next non-empty bucket (start search from z_val + 1)
+                // Move to next non-empty bucket using the maintained bitset iterator
                 self.idx = 0;
-                if (z_val + 1 < Z_INDEX_BUCKET_COUNT) {
-                    var iter = self.non_empty.iterator(.{});
-                    self.z = null;
-                    while (iter.next()) |bit| {
-                        if (bit > z_val) {
-                            self.z = bit;
-                            break;
-                        }
-                    }
-                } else {
-                    self.z = null;
-                }
+                self.z = self.bitset_iter.next();
             }
             return null;
         }
