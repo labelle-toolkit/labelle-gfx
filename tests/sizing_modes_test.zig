@@ -18,7 +18,7 @@ const MockEngine = gfx.RetainedEngineWith(gfx.Backend(MockBackend), gfx.DefaultL
 
 // Mock frame data for testing (single 32x32 sprite)
 const test_frames = .{
-    .@"test_sprite" = .{
+    .test_sprite = .{
         .x = 0,
         .y = 0,
         .w = 32,
@@ -57,6 +57,7 @@ test "repeat mode enables scissor clipping" {
         .pivot = .top_left,
         .scale_x = 1.0,
         .scale_y = 1.0,
+        .layer = .ui, // Use screen-space layer for consistent test behavior
     }, .{ .x = 50, .y = 50 });
 
     // Render the scene

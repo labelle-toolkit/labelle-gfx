@@ -213,6 +213,8 @@ pub const subsystems = struct {
 pub const engine = struct {
     pub const sparse_set = @import("engine/sparse_set.zig");
     pub const paged_sparse_set = @import("engine/paged_sparse_set.zig");
+    pub const spatial_grid = @import("engine/spatial_grid.zig");
+    pub const spatial_bounds = @import("engine/spatial_bounds.zig");
     pub const visual_storage = @import("engine/visual_storage.zig");
 };
 pub const sprite_storage = @import("engine/sprite_storage.zig");
@@ -221,6 +223,8 @@ pub const z_index_buckets = @import("engine/z_index_buckets.zig");
 pub const z_buckets = @import("engine/z_buckets.zig");
 pub const sparse_set = @import("engine/sparse_set.zig");
 pub const paged_sparse_set = @import("engine/paged_sparse_set.zig");
+pub const spatial_grid = @import("engine/spatial_grid.zig");
+pub const spatial_bounds = @import("engine/spatial_bounds.zig");
 pub const scene = @import("engine/scene.zig");
 pub const animation_def = @import("animation_def.zig");
 pub const layer = @import("engine/layer.zig");

@@ -170,4 +170,15 @@ pub const ZBuckets = struct {
     pub fn iterator(self: *const ZBuckets) Iterator {
         return Iterator.init(self);
     }
+
+    /// Find an item by entity ID across all buckets (needed for spatial grid lookups).
+    /// Returns null if entity not found.
+    /// O(n) operation - should only be used with spatial grid queries that limit search space.
+    pub fn find(self: *const ZBuckets, id: EntityId) ?RenderItem {
+        var iter = self.iterator();
+        while (iter.next()) |item| {
+            if (item.entity_id == id) return item;
+        }
+        return null;
+    }
 };
