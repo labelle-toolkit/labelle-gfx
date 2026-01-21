@@ -217,6 +217,7 @@ pub const engine = struct {
 pub const sprite_storage = @import("engine/sprite_storage.zig");
 pub const shape_storage = @import("engine/shape_storage.zig");
 pub const z_index_buckets = @import("engine/z_index_buckets.zig");
+pub const z_buckets = @import("engine/z_buckets.zig");
 pub const scene = @import("engine/scene.zig");
 pub const animation_def = @import("animation_def.zig");
 pub const layer = @import("engine/layer.zig");
