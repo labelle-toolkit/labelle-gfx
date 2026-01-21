@@ -63,9 +63,6 @@ pub fn PagedSparseSetWith(comptime T: type, comptime page_size: usize, comptime 
         /// Page type: fixed-size array of sparse indices
         const Page = [page_size]usize;
 
-        /// Number of pages needed to cover max_entity_id
-        const PAGE_COUNT: usize = (max_entity_id + page_size) / page_size;
-
         pub const Error = error{
             /// EntityId exceeds the configured maximum limit
             EntityIdTooLarge,
