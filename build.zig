@@ -339,15 +339,21 @@ pub fn build(b: *std.Build) void {
         full_run_step.dependOn(&run_cmd.step);
     }
 
-    // SDL backend example (requires SDL linking) - desktop only
-    if (!is_restricted_target) {
+    // SDL backend example - DISABLED on macOS due to duplicate dylib linking issue
+    // On macOS, SDL2 gets linked twice: once through the sdl2 wrapper module in labelle,
+    // and again as a transitive dependency of SDL2_ttf. This causes dyld to fail with
+    // "duplicate linked dylib" error at runtime.
+    // TODO: Fix requires either:
+    // 1. Using SDL.zig's native bindings instead of wrapper (requires rewrite of sdl_backend.zig)
+    // 2. Not importing sdl2 in lib_mod and having SDL examples create their own module
+    // 3. Fixing SDL.zig to not auto-link when used as an intermediate module
+    if (!is_restricted_target and target.result.os.tag != .macos) {
         const sdl_example_mod = b.createModule(.{
             .root_source_file = b.path("examples/17_sdl_backend/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "labelle", .module = lib_mod },
-                .{ .name = "sdl2", .module = sdl.? },
             },
         });
 
@@ -356,10 +362,9 @@ pub fn build(b: *std.Build) void {
             .root_module = sdl_example_mod,
         });
 
-        // Link SDL2 libraries using the SDK
+        // Link SDL2 libraries
         sdl_sdk.?.link(sdl_example, .dynamic, .SDL2);
         sdl_sdk.?.link(sdl_example, .dynamic, .SDL2_ttf);
-        // SDL2_image must be linked manually via system library
         sdl_example.linkSystemLibrary("SDL2_image");
 
         const run_cmd = b.addRunArtifact(sdl_example);
@@ -390,15 +395,15 @@ pub fn build(b: *std.Build) void {
         run_step.dependOn(&run_cmd.step);
     }
 
-    // Example 21 Fullscreen - SDL backend variant (desktop only)
-    if (!is_restricted_target) {
+    // Example 21 Fullscreen - SDL backend variant
+    // DISABLED on macOS due to duplicate dylib linking issue (see example 17 comment)
+    if (!is_restricted_target and target.result.os.tag != .macos) {
         const sdl_fullscreen_mod = b.createModule(.{
             .root_source_file = b.path("examples/21_fullscreen/main_sdl.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "labelle", .module = lib_mod },
-                .{ .name = "sdl2", .module = sdl.? },
             },
         });
 
@@ -407,6 +412,7 @@ pub fn build(b: *std.Build) void {
             .root_module = sdl_fullscreen_mod,
         });
 
+        // Link SDL2 libraries
         sdl_sdk.?.link(sdl_fullscreen, .dynamic, .SDL2);
         sdl_sdk.?.link(sdl_fullscreen, .dynamic, .SDL2_ttf);
         sdl_fullscreen.linkSystemLibrary("SDL2_image");
