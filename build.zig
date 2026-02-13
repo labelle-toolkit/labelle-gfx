@@ -504,7 +504,8 @@ pub fn build(b: *std.Build) void {
     }
 
     // Example 26: wgpu_native backend (lower-level WebGPU) with GLFW (desktop only)
-    if (wgpu_native_dep != null) {
+    // Only available when wgpu dependency is resolved (requires lazy dep fetch)
+    if (wgpu_native != null) {
         const wgpu_native_example_mod = b.createModule(.{
             .root_source_file = b.path("examples/25_wgpu_native_backend/main.zig"),
             .target = target,
