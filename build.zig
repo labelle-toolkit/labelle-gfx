@@ -161,12 +161,13 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sokol", .module = sokol },
         },
     });
-    // wgpu is lazy — only add when the dependency was fetched
+    // wgpu is a lazy dependency — only add the import when it was resolved
     if (wgpu_native) |m| lib_mod.addImport("wgpu", m);
 
     // Build options for conditional compilation
     const build_options = b.addOptions();
     build_options.addOption(bool, "has_raylib", raylib != null);
+    build_options.addOption(bool, "has_wgpu", wgpu_native != null);
     build_options.addOption(bool, "is_ios", is_ios);
     build_options.addOption(bool, "is_wasm", is_wasm);
     build_options.addOption(bool, "is_android", is_android);
