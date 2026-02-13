@@ -34,7 +34,19 @@ jobs:
             libwayland-dev \
             libxkbcommon-dev \
             libasound2-dev \
-            xvfb
+            xvfb \
+            git-lfs
+
+      - name: Setup Git LFS
+        run: git lfs install
+
+      - name: Cache Zig dependencies
+        uses: actions/cache@v4
+        with:
+          path: .zig-cache
+          key: zig-cache-bgfx-${{ runner.os }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-cache-bgfx-${{ runner.os }}-
 
       - name: Build bgfx example
         run: |

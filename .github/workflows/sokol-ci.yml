@@ -34,10 +34,38 @@ jobs:
             libwayland-dev \
             libxkbcommon-dev \
             libasound2-dev \
-            xvfb
+            xvfb \
+            git-lfs
+
+      - name: Setup Git LFS
+        run: git lfs install
+
+      - name: Cache Zig dependencies
+        uses: actions/cache@v4
+        with:
+          path: .zig-cache
+          key: zig-cache-sokol-${{ runner.os }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-cache-sokol-${{ runner.os }}-
 
       - name: Build library
-        run: zig build
+        run: |
+          set -euo pipefail
+          success=0
+          for attempt in 1 2 3; do
+            if zig build; then
+              success=1
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Build attempt $attempt failed, retrying in 10s..."
+              sleep 10
+            fi
+          done
+          if [ "$success" -ne 1 ]; then
+            echo "::error::Build failed after 3 attempts."
+            exit 1
+          fi
 
       - name: Run sokol example
         run: |

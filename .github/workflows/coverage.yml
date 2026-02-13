@@ -35,7 +35,19 @@ jobs:
             libxrender-dev \
             libwayland-dev \
             libxkbcommon-dev \
-            libasound2-dev
+            libasound2-dev \
+            git-lfs
+
+      - name: Setup Git LFS
+        run: git lfs install
+
+      - name: Cache Zig dependencies
+        uses: actions/cache@v4
+        with:
+          path: .zig-cache
+          key: zig-cache-coverage-${{ runner.os }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-cache-coverage-${{ runner.os }}-
 
       - name: Run tests
         run: |
