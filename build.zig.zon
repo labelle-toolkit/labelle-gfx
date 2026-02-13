@@ -1,6 +1,6 @@
 .{
     .name = .labelle_gfx,
-    .version = "0.34.0",
+    .version = "0.34.1",
     .fingerprint = 0x348f3b5370979d59,
     .minimum_zig_version = "0.15.1",
 
@@ -36,6 +36,7 @@
         .wgpu_native_zig = .{
             .url = "git+https://github.com/apotema/wgpu_native_zig#fb54d9c8cbefa0b8d0e8224aa8323b7974ae454f",
             .hash = "1220ec8a938a2b278c3e5f8dc624b98342f610dfd42099f0d8fe85f3aaf3fe8dd1a3",
+            .lazy = true,
         },
     },
 

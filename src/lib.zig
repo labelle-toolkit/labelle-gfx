@@ -92,8 +92,16 @@ pub const sdl_backend = @import("backend/sdl_backend.zig");
 pub const SdlBackend = sdl_backend.SdlBackend;
 pub const bgfx_backend = @import("backend/bgfx_backend.zig");
 pub const BgfxBackend = bgfx_backend.BgfxBackend;
-pub const wgpu_native_backend = @import("backend/wgpu_native_backend.zig");
-pub const WgpuNativeBackend = wgpu_native_backend.WgpuNativeBackend;
+pub const wgpu_native_backend = if (build_options.has_wgpu)
+    @import("backend/wgpu_native_backend.zig")
+else
+    struct {
+        pub const WgpuNativeBackend = void;
+    };
+pub const WgpuNativeBackend = if (build_options.has_wgpu)
+    wgpu_native_backend.WgpuNativeBackend
+else
+    void;
 
 // Default backend - raylib on desktop, sokol on iOS
 pub const DefaultBackend = if (build_options.has_raylib)
