@@ -5,6 +5,11 @@ All notable changes to labelle-gfx will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.1] - 2026-02-13
+
+### Fixed
+- **Build**: Made `wgpu_native_zig` a lazy dependency so it is only fetched when actually needed, not for every desktop build (fixes #219)
+
 ## [0.34.0] - 2026-01-21
 
 ### Added
@@ -52,4 +57,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Earlier versions did not maintain a changelog. See git history for details.
 
+[0.34.1]: https://github.com/labelle-toolkit/labelle-gfx/compare/v0.34.0...v0.34.1
 [0.34.0]: https://github.com/labelle-toolkit/labelle-gfx/compare/v0.32.3...v0.34.0

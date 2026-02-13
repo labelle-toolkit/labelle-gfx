@@ -126,8 +126,8 @@ pub fn build(b: *std.Build) void {
     const zglfw: ?*std.Build.Module = if (zglfw_dep) |dep| dep.module("root") else null;
     const glfw_lib: ?*std.Build.Step.Compile = if (zglfw_dep) |dep| dep.artifact("glfw") else null;
 
-    // wgpu_native_zig dependency (lower-level WebGPU bindings) - not available on iOS/WASM
-    const wgpu_native_dep: ?*std.Build.Dependency = if (!is_restricted_target) b.dependency("wgpu_native_zig", .{
+    // wgpu_native_zig dependency (lower-level WebGPU bindings) - lazy, only fetched when available
+    const wgpu_native_dep: ?*std.Build.Dependency = if (!is_restricted_target) b.lazyDependency("wgpu_native_zig", .{
         .target = target,
         .optimize = optimize,
     }) else null;
@@ -146,7 +146,6 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sdl2", .module = sdl.? },
             .{ .name = "zbgfx", .module = zbgfx.? },
             .{ .name = "zglfw", .module = zglfw.? },
-            .{ .name = "wgpu", .module = wgpu_native.? },
         } else if (is_wasm) &.{
             // WASM build - raylib and sokol available
             .{ .name = "zig_utils", .module = zig_utils },
@@ -162,6 +161,8 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sokol", .module = sokol },
         },
     });
+    // wgpu is lazy — only add when the dependency was fetched
+    if (wgpu_native) |m| lib_mod.addImport("wgpu", m);
 
     // Build options for conditional compilation
     const build_options = b.addOptions();
@@ -209,7 +210,6 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "sdl2", .module = sdl.? },
                 .{ .name = "zbgfx", .module = zbgfx.? },
                 .{ .name = "zglfw", .module = zglfw.? },
-                .{ .name = "wgpu", .module = wgpu_native.? },
             } else if (is_wasm) &.{
                 // WASM build - raylib and sokol available
                 .{ .name = "zig_utils", .module = zig_utils },
@@ -226,6 +226,8 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    // wgpu is lazy — only add when the dependency was fetched
+    if (wgpu_native) |m| lib.root_module.addImport("wgpu", m);
     lib.root_module.addOptions("build_options", build_options);
     if (raylib_artifact) |artifact| {
         lib.linkLibrary(artifact);
@@ -501,7 +503,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Example 26: wgpu_native backend (lower-level WebGPU) with GLFW (desktop only)
-    if (!is_restricted_target) {
+    if (wgpu_native_dep != null) {
         const wgpu_native_example_mod = b.createModule(.{
             .root_source_file = b.path("examples/25_wgpu_native_backend/main.zig"),
             .target = target,
