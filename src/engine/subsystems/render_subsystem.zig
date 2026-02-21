@@ -230,9 +230,10 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
                             }
                         },
                         .shape => {
-                            if (cfg.space == .screen or shouldRenderShapeInViewport(visuals, item.entity_id, cam_vp)) {
-                                renderShape(visuals, item.entity_id);
-                            }
+                            // Shapes are always rendered (no viewport culling).
+                            // Shape primitives (circle, rectangle, line) are trivially
+                            // cheap to draw, making culling overhead counterproductive.
+                            renderShape(visuals, item.entity_id);
                         },
                         .text => renderText(visuals, item.entity_id),
                     }
