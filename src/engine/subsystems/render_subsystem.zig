@@ -277,11 +277,12 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
                         // Now iterate z-buckets in order, rendering only visible entities
                         var iter = self.layer_buckets[layer_idx].iterator();
                         while (iter.next()) |item| {
-                            // Text entities are not in spatial grid (they're typically UI/overlays)
-                            // so we always render them if visible
-                            const skip_spatial_check = item.item_type == .text;
+                            // Text and shape entities skip spatial grid checks:
+                            // - Text: typically UI/overlays, not tracked in spatial grid
+                            // - Shape: trivially cheap to draw, culling overhead counterproductive
+                            const skip_spatial_check = item.item_type == .text or item.item_type == .shape;
 
-                            // Skip if not in visible set (unless it's text)
+                            // Skip if not in visible set (unless it's text/shape)
                             if (!skip_spatial_check and !visible_set.contains(item.entity_id)) continue;
                             if (!isItemVisible(visuals, item)) continue;
 
@@ -291,11 +292,7 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
                                         self.renderSprite(visuals, resources, item.entity_id, cam_viewport_rect, camera);
                                     }
                                 },
-                                .shape => {
-                                    if (shouldRenderShapeInViewport(visuals, item.entity_id, cam_vp)) {
-                                        renderShape(visuals, item.entity_id);
-                                    }
-                                },
+                                .shape => renderShape(visuals, item.entity_id),
                                 .text => renderText(visuals, item.entity_id),
                             }
                         }
@@ -311,11 +308,7 @@ pub fn RenderSubsystem(comptime BackendType: type, comptime LayerEnum: type) typ
                                         self.renderSprite(visuals, resources, item.entity_id, cam_viewport_rect, camera);
                                     }
                                 },
-                                .shape => {
-                                    if (shouldRenderShapeInViewport(visuals, item.entity_id, cam_vp)) {
-                                        renderShape(visuals, item.entity_id);
-                                    }
-                                },
+                                .shape => renderShape(visuals, item.entity_id),
                                 .text => renderText(visuals, item.entity_id),
                             }
                         }
