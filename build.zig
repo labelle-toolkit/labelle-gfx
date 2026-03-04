@@ -171,6 +171,18 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "is_android", is_android);
     lib_mod.addOptions("build_options", build_options);
 
+    // Link C library artifacts into the module for transitive linking.
+    // Downstream packages importing "labelle" get these linked automatically.
+    if (bgfx_lib) |artifact| {
+        lib_mod.linkLibrary(artifact);
+    }
+    if (glfw_lib) |artifact| {
+        lib_mod.linkLibrary(artifact);
+    }
+    if (raylib_artifact) |artifact| {
+        lib_mod.linkLibrary(artifact);
+    }
+
     // Add stb_image include path for bgfx backend image loading (desktop only)
     if (zbgfx_dep) |dep| {
         lib_mod.addIncludePath(dep.path("libs/bimg/3rdparty/stb"));
