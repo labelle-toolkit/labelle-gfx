@@ -306,12 +306,12 @@ pub fn VisualEngineWithShapes(comptime BackendType: type, comptime max_sprites: 
         // Animation registry - maps animation names to their definitions
         animation_registry: std.AutoArrayHashMapUnmanaged(AnimNameKey, AnimationInfo),
 
-        // Camera state
-        camera_follow_target: ?SpriteId = null,
-        camera_follow_lerp: f32 = 0.1,
-        camera_pan_target_x: ?f32 = null,
-        camera_pan_target_y: ?f32 = null,
-        camera_pan_speed: f32 = 200,
+        // Per-camera state (indexed by camera index, MAX_CAMERAS = 4)
+        camera_follow_targets: [4]?SpriteId = .{ null, null, null, null },
+        camera_follow_lerps: [4]f32 = .{ 0.1, 0.1, 0.1, 0.1 },
+        camera_pan_target_x: [4]?f32 = .{ null, null, null, null },
+        camera_pan_target_y: [4]?f32 = .{ null, null, null, null },
+        camera_pan_speeds: [4]f32 = .{ 200, 200, 200, 200 },
 
         // Multi-camera support
         camera_manager: CameraManager,

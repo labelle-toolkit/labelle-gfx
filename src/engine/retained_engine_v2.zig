@@ -636,8 +636,64 @@ pub fn RetainedEngineWithV2(comptime BackendType: type, comptime LayerEnum: type
             self.cameras.setCameraPosition(x, y);
         }
 
+        pub fn setCameraPositionOn(self: *Self, index: u2, x: f32, y: f32) void {
+            self.cameras.setCameraPositionOn(index, x, y);
+        }
+
         pub fn setZoom(self: *Self, zoom: f32) void {
             self.cameras.setZoom(zoom);
+        }
+
+        pub fn setZoomOn(self: *Self, index: u2, zoom: f32) void {
+            self.cameras.setZoomOn(index, zoom);
+        }
+
+        pub fn getZoom(self: *const Self) f32 {
+            return self.cameras.getZoom();
+        }
+
+        pub fn getZoomOn(self: *const Self, index: u2) f32 {
+            return self.cameras.getZoomOn(index);
+        }
+
+        pub fn setBounds(self: *Self, min_x: f32, min_y: f32, max_x: f32, max_y: f32) void {
+            self.cameras.setBounds(min_x, min_y, max_x, max_y);
+        }
+
+        pub fn setBoundsOn(self: *Self, index: u2, min_x: f32, min_y: f32, max_x: f32, max_y: f32) void {
+            self.cameras.setBoundsOn(index, min_x, min_y, max_x, max_y);
+        }
+
+        pub fn clearBounds(self: *Self) void {
+            self.cameras.clearBounds();
+        }
+
+        pub fn clearBoundsOn(self: *Self, index: u2) void {
+            self.cameras.clearBoundsOn(index);
+        }
+
+        pub fn setFollowSmoothing(self: *Self, lerp: f32) void {
+            self.cameras.setFollowSmoothing(lerp);
+        }
+
+        pub fn setFollowSmoothingOn(self: *Self, index: u2, lerp: f32) void {
+            self.cameras.setFollowSmoothingOn(index, lerp);
+        }
+
+        pub fn panTo(self: *Self, x: f32, y: f32) void {
+            self.cameras.panTo(x, y);
+        }
+
+        pub fn panToOn(self: *Self, index: u2, x: f32, y: f32) void {
+            self.cameras.panToOn(index, x, y);
+        }
+
+        pub fn setPanSpeed(self: *Self, speed: f32) void {
+            self.cameras.setPanSpeed(speed);
+        }
+
+        pub fn setPanSpeedOn(self: *Self, index: u2, speed: f32) void {
+            self.cameras.setPanSpeedOn(index, speed);
         }
 
         // -------------------- Multi-Camera --------------------
