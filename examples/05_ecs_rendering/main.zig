@@ -2,8 +2,8 @@
 //!
 //! This example demonstrates:
 //! - Using VisualEngine for sprite management
-//! - Static sprites via addSprite()
-//! - Animated sprites via playAnimation()
+//! - Static sprites via sprites.addSprite()
+//! - Animated sprites via anims.playAnimation()
 //! - Z-index layering
 //!
 //! Run with: zig build run-example-05
@@ -56,7 +56,7 @@ pub fn main() !void {
 
     // Floor tiles (z=10) - static sprites
     for (0..5) |i| {
-        _ = try engine.addSprite(.{
+        _ = try engine.sprites.addSprite(.{
             .sprite_name = "grass",
             .position = .{ .x = 100 + @as(f32, @floatFromInt(i)) * 150, .y = 450 },
             .z_index = ZIndex.floor,
@@ -66,7 +66,7 @@ pub fn main() !void {
     }
 
     // Items (z=30) - static sprite
-    _ = try engine.addSprite(.{
+    _ = try engine.sprites.addSprite(.{
         .sprite_name = "coin",
         .position = .{ .x = 200, .y = 350 },
         .z_index = ZIndex.items,
@@ -75,7 +75,7 @@ pub fn main() !void {
     });
 
     // Player character (z=40) with animation
-    const player = try engine.addSprite(.{
+    const player = try engine.sprites.addSprite(.{
         .sprite_name = "idle_0001",
         .position = .{ .x = 400, .y = 350 },
         .z_index = ZIndex.characters,
@@ -83,10 +83,10 @@ pub fn main() !void {
         .pivot = .bottom_center,
     });
     // Start with idle animation (4 frames, 0.8s total)
-    _ = engine.playAnimation(player, "idle", 4, 0.8, true);
+    _ = engine.anims.playAnimation(player, "idle", 4, 0.8, true);
 
     // Enemy character (z=40) with animation
-    const enemy = try engine.addSprite(.{
+    const enemy = try engine.sprites.addSprite(.{
         .sprite_name = "walk_0001",
         .position = .{ .x = 600, .y = 350 },
         .z_index = ZIndex.characters,
@@ -94,7 +94,7 @@ pub fn main() !void {
         .pivot = .bottom_center,
     });
     // Enemy walks continuously (6 frames, 0.9s total)
-    _ = engine.playAnimation(enemy, "walk", 6, 0.6, true);
+    _ = engine.anims.playAnimation(enemy, "walk", 6, 0.6, true);
 
     var player_x: f32 = 400;
     var player_vel: f32 = 0;
@@ -130,25 +130,25 @@ pub fn main() !void {
         if (moving != was_moving) {
             was_moving = moving;
             if (moving) {
-                _ = engine.playAnimation(player, "walk", 6, 0.9, true);
+                _ = engine.anims.playAnimation(player, "walk", 6, 0.9, true);
             } else {
-                _ = engine.playAnimation(player, "idle", 4, 0.8, true);
+                _ = engine.anims.playAnimation(player, "idle", 4, 0.8, true);
             }
         }
 
         // Update player position
         player_x += player_vel * dt;
         player_x = @max(50, @min(750, player_x));
-        _ = engine.setPosition(player, .{ .x = player_x, .y = 350 });
-        _ = engine.setFlip(player, flip_x, false);
+        _ = engine.sprites.setPosition(player, .{ .x = player_x, .y = 350 });
+        _ = engine.sprites.setFlip(player, flip_x, false);
 
         // Enemy patrol (simple bounce)
         if (enemy_x < 400 or enemy_x > 700) {
             enemy_vel = -enemy_vel;
-            _ = engine.setFlip(enemy, enemy_vel > 0, false);
+            _ = engine.sprites.setFlip(enemy, enemy_vel > 0, false);
         }
         enemy_x += enemy_vel * dt;
-        _ = engine.setPosition(enemy, .{ .x = enemy_x, .y = 350 });
+        _ = engine.sprites.setPosition(enemy, .{ .x = enemy_x, .y = 350 });
 
         // Rendering with VisualEngine API
         engine.beginFrame();
@@ -171,7 +171,7 @@ pub fn main() !void {
 
         // Entity count
         var count_buf: [32]u8 = undefined;
-        const count_str = std.fmt.bufPrintZ(&count_buf, "Sprites: {}", .{engine.spriteCount()}) catch "?";
+        const count_str = std.fmt.bufPrintZ(&count_buf, "Sprites: {}", .{engine.sprites.spriteCount()}) catch "?";
         gfx.Engine.UI.text(count_str, .{ .x = 10, .y = 580, .size = 14, .color = gfx.Color.light_gray });
 
         engine.endFrame();

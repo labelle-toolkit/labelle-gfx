@@ -53,7 +53,7 @@ pub fn main() !void {
     std.debug.print("Atlases loaded\n", .{});
 
     // Create player sprite with animation
-    const player = try engine.addSprite(.{
+    const player = try engine.sprites.addSprite(.{
         .sprite_name = "idle_0001",
         .position = .{ .x = 400, .y = 300 },
         .z_index = ZIndex.characters,
@@ -61,12 +61,12 @@ pub fn main() !void {
         .pivot = .bottom_center,
     });
     // Start idle animation
-    _ = engine.playAnimation(player, "idle", 4, 0.6, true);
+    _ = engine.anims.playAnimation(player, "idle", 4, 0.6, true);
 
     // Create item pickups
     const item_names = [_][]const u8{ "coin", "gem", "heart", "key", "potion", "sword" };
     for (item_names, 0..) |item_name, i| {
-        _ = try engine.addSprite(.{
+        _ = try engine.sprites.addSprite(.{
             .sprite_name = item_name,
             .position = .{ .x = 100 + @as(f32, @floatFromInt(i)) * 100, .y = 500 },
             .z_index = ZIndex.items,
@@ -78,7 +78,7 @@ pub fn main() !void {
     // Create tile floor
     const tile_names = [_][]const u8{ "grass", "dirt", "stone", "brick", "wood", "water" };
     for (0..6) |i| {
-        _ = try engine.addSprite(.{
+        _ = try engine.sprites.addSprite(.{
             .sprite_name = tile_names[i],
             .position = .{ .x = 100 + @as(f32, @floatFromInt(i)) * 100, .y = 550 },
             .z_index = ZIndex.floor,
@@ -146,12 +146,12 @@ pub fn main() !void {
         if (!std.mem.eql(u8, new_anim, current_anim)) {
             current_anim = new_anim;
             const looping = !std.mem.eql(u8, new_anim, "jump");
-            _ = engine.playAnimation(player, new_anim, new_frames, new_duration, looping);
+            _ = engine.anims.playAnimation(player, new_anim, new_frames, new_duration, looping);
         }
 
         // Update player
-        _ = engine.setPosition(player, .{ .x = player_x, .y = 300 });
-        _ = engine.setFlip(player, flip_x, false);
+        _ = engine.sprites.setPosition(player, .{ .x = player_x, .y = 300 });
+        _ = engine.sprites.setFlip(player, flip_x, false);
 
         // Rendering
         engine.beginFrame();

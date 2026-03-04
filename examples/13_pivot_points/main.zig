@@ -60,7 +60,7 @@ pub fn main() !void {
     // ============================================================
 
     // Center pivot (default) - sprite centered at position
-    const center_sprite = try engine.addSprite(.{
+    const center_sprite = try engine.sprites.addSprite(.{
         .sprite_name = "idle_0001",
         .position = .{ .x = start_x, .y = baseline_y },
         .z_index = ZIndex.characters,
@@ -70,7 +70,7 @@ pub fn main() !void {
     _ = center_sprite;
 
     // Bottom-center pivot - feet at position (good for characters)
-    const bottom_center_sprite = try engine.addSprite(.{
+    const bottom_center_sprite = try engine.sprites.addSprite(.{
         .sprite_name = "idle_0001",
         .position = .{ .x = start_x + spacing, .y = baseline_y },
         .z_index = ZIndex.characters,
@@ -80,7 +80,7 @@ pub fn main() !void {
     _ = bottom_center_sprite;
 
     // Bottom-left pivot - corner at position (good for tiles/rooms)
-    const bottom_left_sprite = try engine.addSprite(.{
+    const bottom_left_sprite = try engine.sprites.addSprite(.{
         .sprite_name = "idle_0001",
         .position = .{ .x = start_x + spacing * 2, .y = baseline_y },
         .z_index = ZIndex.characters,
@@ -90,7 +90,7 @@ pub fn main() !void {
     _ = bottom_left_sprite;
 
     // Top-left pivot
-    const top_left_sprite = try engine.addSprite(.{
+    const top_left_sprite = try engine.sprites.addSprite(.{
         .sprite_name = "idle_0001",
         .position = .{ .x = start_x + spacing * 3, .y = baseline_y },
         .z_index = ZIndex.characters,
@@ -100,7 +100,7 @@ pub fn main() !void {
     _ = top_left_sprite;
 
     // Custom pivot (0.1, 0.9) - near handle position
-    const custom_sprite = try engine.addSprite(.{
+    const custom_sprite = try engine.sprites.addSprite(.{
         .sprite_name = "idle_0001",
         .position = .{ .x = start_x + spacing * 4, .y = baseline_y },
         .z_index = ZIndex.characters,
@@ -118,7 +118,7 @@ pub fn main() !void {
     const tile_y: f32 = 500;
     const tile_names = [_][]const u8{ "grass", "dirt", "stone", "brick", "wood", "water" };
     for (tile_names, 0..) |name, i| {
-        _ = try engine.addSprite(.{
+        _ = try engine.sprites.addSprite(.{
             .sprite_name = name,
             .position = .{ .x = 100 + @as(f32, @floatFromInt(i)) * 48, .y = tile_y }, // 32 * 1.5 = 48
             .z_index = ZIndex.floor,
@@ -134,7 +134,7 @@ pub fn main() !void {
     const item_names = [_][]const u8{ "coin", "gem", "heart", "key", "potion", "sword" };
     var items: [6]SpriteId = undefined;
     for (item_names, 0..) |name, i| {
-        items[i] = try engine.addSprite(.{
+        items[i] = try engine.sprites.addSprite(.{
             .sprite_name = name,
             .position = .{ .x = 150 + @as(f32, @floatFromInt(i)) * 100, .y = 150 },
             .z_index = ZIndex.items,
@@ -147,7 +147,7 @@ pub fn main() !void {
     // Rotating character to show pivot point behavior
     // ============================================================
 
-    const rotating_sprite = try engine.addSprite(.{
+    const rotating_sprite = try engine.sprites.addSprite(.{
         .sprite_name = "idle_0001",
         .position = .{ .x = 650, .y = 350 },
         .z_index = ZIndex.effects,
@@ -156,7 +156,7 @@ pub fn main() !void {
         .tint = .{ .r = 255, .g = 200, .b = 100 },
     });
 
-    std.debug.print("Created {} sprites\n", .{engine.spriteCount()});
+    std.debug.print("Created {} sprites\n", .{engine.sprites.spriteCount()});
 
     var frame_count: u32 = 0;
 
@@ -173,12 +173,12 @@ pub fn main() !void {
         // Rotate items for visual effect
         for (items, 0..) |item, i| {
             const item_rotation = @as(f32, @floatFromInt(frame_count)) * 2.0 + @as(f32, @floatFromInt(i)) * 60.0;
-            _ = engine.setRotation(item, item_rotation);
+            _ = engine.sprites.setRotation(item, item_rotation);
         }
 
         // Rotate the character sprite to demonstrate pivot point (smooth pendulum swing)
         const rotation = @sin(@as(f32, @floatFromInt(frame_count)) * 0.05) * 30.0;
-        _ = engine.setRotation(rotating_sprite, rotation);
+        _ = engine.sprites.setRotation(rotating_sprite, rotation);
 
         // Begin frame
         engine.beginFrame();
