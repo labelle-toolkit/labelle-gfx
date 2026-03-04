@@ -9,7 +9,7 @@
 //! - Loading animation definitions from .zon files at comptime
 //! - Compile-time validation of animation frame references
 //! - Registering animations with the visual engine
-//! - Playing animations with the simplified engine.play() API
+//! - Playing animations with the simplified engine.anims.play() API
 //!
 //! Run with: zig build run-example-12
 
@@ -59,9 +59,9 @@ pub fn main() !void {
     try engine.loadAtlasComptime("characters", character_frames, "fixtures/output/characters.png");
 
     // Register animation definitions from comptime .zon data
-    // This enables the simplified engine.play(sprite, "anim_name") API
+    // This enables the simplified engine.anims.play(sprite, "anim_name") API
     const anim_entries = comptime animation_def.animationEntries(character_anims);
-    try engine.registerAnimations(&anim_entries);
+    try engine.anims.registerAnimations(&anim_entries);
 
     std.debug.print("Comptime Animations Demo initialized\n", .{});
     std.debug.print("Atlas loaded from comptime .zon - no JSON parsing!\n", .{});
@@ -69,7 +69,7 @@ pub fn main() !void {
     std.debug.print("Registered {} animations with the engine\n", .{comptime animation_def.animationCountData(character_anims)});
 
     // Create player sprite
-    const player = try engine.addSprite(.{
+    const player = try engine.sprites.addSprite(.{
         .sprite_name = "idle_0001",
         .position = .{ .x = 400, .y = 300 },
         .z_index = ZIndex.characters,
@@ -86,7 +86,7 @@ pub fn main() !void {
 
     // Set up animation complete callback for non-looping animations (like jump)
     // This callback is invoked when a non-looping animation finishes
-    engine.setOnAnimationComplete(struct {
+    engine.anims.setOnAnimationComplete(struct {
         fn callback(id: SpriteId, animation: []const u8) void {
             _ = id;
             if (std.mem.eql(u8, animation, "jump")) {
@@ -97,13 +97,13 @@ pub fn main() !void {
         }
     }.callback);
 
-    // Start idle animation using the simplified play() API
+    // Start idle animation using the simplified anims.play() API
     // No need to specify frame_count, duration, looping - it's looked up from the registry!
-    _ = engine.play(player, "idle");
+    _ = engine.anims.play(player, "idle");
 
     // Camera setup
-    engine.setFollowSmoothing(0.05);
-    engine.followEntity(player);
+    engine.camera.setFollowSmoothing(0.05);
+    engine.camera.followEntity(player);
 
     var player_x: f32 = 400;
     var flip_x = false;
@@ -148,27 +148,27 @@ pub fn main() !void {
         if (AnimState.jump_finished) {
             AnimState.jump_finished = false;
             AnimState.current_anim = "idle";
-            _ = engine.play(player, "idle");
+            _ = engine.anims.play(player, "idle");
         }
 
-        // Switch animation based on state using simplified play() API
+        // Switch animation based on state using simplified anims.play() API
         if (jumping and !std.mem.eql(u8, AnimState.current_anim, "jump")) {
-            _ = engine.play(player, "jump");
+            _ = engine.anims.play(player, "jump");
             AnimState.current_anim = "jump";
         } else if (running and !std.mem.eql(u8, AnimState.current_anim, "run")) {
-            _ = engine.play(player, "run");
+            _ = engine.anims.play(player, "run");
             AnimState.current_anim = "run";
         } else if (moving and !jumping and !running and !std.mem.eql(u8, AnimState.current_anim, "walk")) {
-            _ = engine.play(player, "walk");
+            _ = engine.anims.play(player, "walk");
             AnimState.current_anim = "walk";
         } else if (!moving and !jumping and !std.mem.eql(u8, AnimState.current_anim, "idle")) {
-            _ = engine.play(player, "idle");
+            _ = engine.anims.play(player, "idle");
             AnimState.current_anim = "idle";
         }
 
         // Update sprite position and flip
-        _ = engine.setPosition(player, .{ .x = player_x, .y = 300 });
-        _ = engine.setFlip(player, flip_x, false);
+        _ = engine.sprites.setPosition(player, .{ .x = player_x, .y = 300 });
+        _ = engine.sprites.setFlip(player, flip_x, false);
 
         // Begin frame
         engine.beginFrame();
@@ -180,12 +180,12 @@ pub fn main() !void {
         // Draw UI
         gfx.Engine.UI.text("Comptime Animations Demo", .{ .x = 10, .y = 10, .size = 20, .color = gfx.Color.white });
         gfx.Engine.UI.text("Atlas loaded from comptime .zon - NO JSON PARSING!", .{ .x = 10, .y = 35, .size = 14, .color = gfx.Color.green });
-        gfx.Engine.UI.text("Using engine.play() - no manual frame_count/duration needed!", .{ .x = 10, .y = 55, .size = 14, .color = gfx.Color.green });
+        gfx.Engine.UI.text("Using engine.anims.play() - no manual frame_count/duration needed!", .{ .x = 10, .y = 55, .size = 14, .color = gfx.Color.green });
         gfx.Engine.UI.text("A/D: Walk  |  Shift+A/D: Run  |  Space: Jump", .{ .x = 10, .y = 80, .size = 16, .color = gfx.Color.light_gray });
 
         // Show current animation info from registry
         var anim_buf: [64]u8 = undefined;
-        const current_sprite = engine.getSpriteName(player) orelse "unknown";
+        const current_sprite = engine.sprites.getSpriteName(player) orelse "unknown";
         const anim_str = std.fmt.bufPrintZ(&anim_buf, "Animation: {s}  Sprite: {s}", .{
             AnimState.current_anim,
             current_sprite,
@@ -193,7 +193,7 @@ pub fn main() !void {
         gfx.Engine.UI.text(anim_str, .{ .x = 10, .y = 110, .size = 16, .color = gfx.Color.sky_blue });
 
         // Show animation info from registry
-        if (engine.getAnimationInfo(AnimState.current_anim)) |info| {
+        if (engine.anims.getAnimationInfo(AnimState.current_anim)) |info| {
             var info_buf: [64]u8 = undefined;
             const info_str = std.fmt.bufPrintZ(&info_buf, "Frames: {}  Duration: {d:.2}s  Looping: {}", .{
                 info.frame_count,

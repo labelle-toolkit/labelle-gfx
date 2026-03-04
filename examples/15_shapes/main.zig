@@ -4,7 +4,7 @@
 //! circles, rectangles, lines, triangles, and polygons.
 //!
 //! Features demonstrated:
-//! - Adding shapes via addShape()
+//! - Adding shapes via shapes.addShape()
 //! - All shape types: circle, rectangle, line, triangle, polygon
 //! - Filled vs outline shapes
 //! - Shape property modification at runtime
@@ -47,58 +47,58 @@ pub fn main() !void {
     // Create various shapes
 
     // Row 1: Basic filled shapes
-    const circle1 = try engine.addShape(ShapeConfig.circle(100, 100, 40));
-    _ = engine.setShapeColor(circle1, .{ .r = 255, .g = 100, .b = 100, .a = 255 });
+    const circle1 = try engine.shapes.addShape(ShapeConfig.circle(100, 100, 40));
+    _ = engine.shapes.setColor(circle1, .{ .r = 255, .g = 100, .b = 100, .a = 255 });
 
-    const rect1 = try engine.addShape(ShapeConfig.rectangle(200, 60, 80, 80));
-    _ = engine.setShapeColor(rect1, .{ .r = 100, .g = 255, .b = 100, .a = 255 });
+    const rect1 = try engine.shapes.addShape(ShapeConfig.rectangle(200, 60, 80, 80));
+    _ = engine.shapes.setColor(rect1, .{ .r = 100, .g = 255, .b = 100, .a = 255 });
 
-    const triangle1 = try engine.addShape(ShapeConfig.triangle(350, 140, 400, 60, 450, 140));
-    _ = engine.setShapeColor(triangle1, .{ .r = 100, .g = 100, .b = 255, .a = 255 });
+    const triangle1 = try engine.shapes.addShape(ShapeConfig.triangle(350, 140, 400, 60, 450, 140));
+    _ = engine.shapes.setColor(triangle1, .{ .r = 100, .g = 100, .b = 255, .a = 255 });
 
-    const polygon1 = try engine.addShape(ShapeConfig.polygon(550, 100, 6, 45));
-    _ = engine.setShapeColor(polygon1, .{ .r = 255, .g = 255, .b = 100, .a = 255 });
+    const polygon1 = try engine.shapes.addShape(ShapeConfig.polygon(550, 100, 6, 45));
+    _ = engine.shapes.setColor(polygon1, .{ .r = 255, .g = 255, .b = 100, .a = 255 });
 
-    const line1 = try engine.addShape(ShapeConfig.line(650, 60, 750, 140));
-    _ = engine.setShapeColor(line1, .{ .r = 255, .g = 100, .b = 255, .a = 255 });
-    _ = engine.setShapeThickness(line1, 3);
+    const line1 = try engine.shapes.addShape(ShapeConfig.line(650, 60, 750, 140));
+    _ = engine.shapes.setColor(line1, .{ .r = 255, .g = 100, .b = 255, .a = 255 });
+    _ = engine.shapes.setThickness(line1, 3);
 
     // Row 2: Outline shapes (not filled)
-    const circle2 = try engine.addShape(ShapeConfig.circle(100, 250, 40));
-    _ = engine.setShapeColor(circle2, .{ .r = 255, .g = 150, .b = 150, .a = 255 });
-    _ = engine.setShapeFilled(circle2, false);
+    const circle2 = try engine.shapes.addShape(ShapeConfig.circle(100, 250, 40));
+    _ = engine.shapes.setColor(circle2, .{ .r = 255, .g = 150, .b = 150, .a = 255 });
+    _ = engine.shapes.setFilled(circle2, false);
 
-    const rect2 = try engine.addShape(ShapeConfig.rectangle(200, 210, 80, 80));
-    _ = engine.setShapeColor(rect2, .{ .r = 150, .g = 255, .b = 150, .a = 255 });
-    _ = engine.setShapeFilled(rect2, false);
+    const rect2 = try engine.shapes.addShape(ShapeConfig.rectangle(200, 210, 80, 80));
+    _ = engine.shapes.setColor(rect2, .{ .r = 150, .g = 255, .b = 150, .a = 255 });
+    _ = engine.shapes.setFilled(rect2, false);
 
-    const triangle2 = try engine.addShape(ShapeConfig.triangle(350, 290, 400, 210, 450, 290));
-    _ = engine.setShapeColor(triangle2, .{ .r = 150, .g = 150, .b = 255, .a = 255 });
-    _ = engine.setShapeFilled(triangle2, false);
+    const triangle2 = try engine.shapes.addShape(ShapeConfig.triangle(350, 290, 400, 210, 450, 290));
+    _ = engine.shapes.setColor(triangle2, .{ .r = 150, .g = 150, .b = 255, .a = 255 });
+    _ = engine.shapes.setFilled(triangle2, false);
 
-    const polygon2 = try engine.addShape(ShapeConfig.polygon(550, 250, 8, 45));
-    _ = engine.setShapeColor(polygon2, .{ .r = 255, .g = 255, .b = 150, .a = 255 });
-    _ = engine.setShapeFilled(polygon2, false);
+    const polygon2 = try engine.shapes.addShape(ShapeConfig.polygon(550, 250, 8, 45));
+    _ = engine.shapes.setColor(polygon2, .{ .r = 255, .g = 255, .b = 150, .a = 255 });
+    _ = engine.shapes.setFilled(polygon2, false);
 
     // Row 3: Animated shapes (will be modified each frame)
-    const animated_circle = try engine.addShape(ShapeConfig.circle(100, 400, 30));
-    _ = engine.setShapeColor(animated_circle, .{ .r = 255, .g = 200, .b = 100, .a = 255 });
-    _ = engine.setShapeZIndex(animated_circle, ZIndex.effects);
+    const animated_circle = try engine.shapes.addShape(ShapeConfig.circle(100, 400, 30));
+    _ = engine.shapes.setColor(animated_circle, .{ .r = 255, .g = 200, .b = 100, .a = 255 });
+    _ = engine.shapes.setZIndex(animated_circle, ZIndex.effects);
 
-    const animated_polygon = try engine.addShape(ShapeConfig.polygon(300, 400, 5, 40));
-    _ = engine.setShapeColor(animated_polygon, .{ .r = 100, .g = 200, .b = 255, .a = 255 });
-    _ = engine.setShapeZIndex(animated_polygon, ZIndex.effects);
+    const animated_polygon = try engine.shapes.addShape(ShapeConfig.polygon(300, 400, 5, 40));
+    _ = engine.shapes.setColor(animated_polygon, .{ .r = 100, .g = 200, .b = 255, .a = 255 });
+    _ = engine.shapes.setZIndex(animated_polygon, ZIndex.effects);
 
-    const animated_rect = try engine.addShape(ShapeConfig.rectangle(450, 370, 60, 60));
-    _ = engine.setShapeColor(animated_rect, .{ .r = 200, .g = 100, .b = 255, .a = 255 });
-    _ = engine.setShapeZIndex(animated_rect, ZIndex.effects);
+    const animated_rect = try engine.shapes.addShape(ShapeConfig.rectangle(450, 370, 60, 60));
+    _ = engine.shapes.setColor(animated_rect, .{ .r = 200, .g = 100, .b = 255, .a = 255 });
+    _ = engine.shapes.setZIndex(animated_rect, ZIndex.effects);
 
     // Pulsing line
-    const animated_line = try engine.addShape(ShapeConfig.line(600, 400, 750, 400));
-    _ = engine.setShapeColor(animated_line, .{ .r = 255, .g = 255, .b = 255, .a = 255 });
-    _ = engine.setShapeThickness(animated_line, 2);
+    const animated_line = try engine.shapes.addShape(ShapeConfig.line(600, 400, 750, 400));
+    _ = engine.shapes.setColor(animated_line, .{ .r = 255, .g = 255, .b = 255, .a = 255 });
+    _ = engine.shapes.setThickness(animated_line, 2);
 
-    std.debug.print("Created {} shapes\n", .{engine.shapeCount()});
+    std.debug.print("Created {} shapes\n", .{engine.shapes.shapeCount()});
 
     var frame_count: u32 = 0;
     var time: f32 = 0;
@@ -118,20 +118,20 @@ pub fn main() !void {
 
         // Pulsing circle radius
         const pulse = @sin(time * 3) * 10 + 30;
-        _ = engine.setShapeRadius(animated_circle, pulse);
+        _ = engine.shapes.setRadius(animated_circle, pulse);
 
         // Rotating polygon
-        _ = engine.setShapeRotation(animated_polygon, time * 60);
+        _ = engine.shapes.setRotation(animated_polygon, time * 60);
 
         // Bouncing rectangle
         const bounce_y = 370 + @sin(time * 4) * 20;
-        _ = engine.setShapePosition(animated_rect, .{ .x = 450, .y = bounce_y });
+        _ = engine.shapes.setPosition(animated_rect, .{ .x = 450, .y = bounce_y });
 
         // Color-shifting line
         const r: u8 = @intFromFloat((@sin(time * 2) + 1) * 127);
         const g: u8 = @intFromFloat((@sin(time * 2 + 2) + 1) * 127);
         const b: u8 = @intFromFloat((@sin(time * 2 + 4) + 1) * 127);
-        _ = engine.setShapeColor(animated_line, .{ .r = r, .g = g, .b = b, .a = 255 });
+        _ = engine.shapes.setColor(animated_line, .{ .r = r, .g = g, .b = b, .a = 255 });
 
         // Begin frame
         engine.beginFrame();
@@ -152,7 +152,7 @@ pub fn main() !void {
         gfx.Engine.UI.text("Pulsing   Rotating    Bouncing    Color Shift", .{ .x = 60, .y = 450, .size = 14, .color = gfx.Color.gray });
 
         var shape_count_buf: [64]u8 = undefined;
-        const shape_count_str = std.fmt.bufPrintZ(&shape_count_buf, "Shapes: {}", .{engine.shapeCount()}) catch "?";
+        const shape_count_str = std.fmt.bufPrintZ(&shape_count_buf, "Shapes: {}", .{engine.shapes.shapeCount()}) catch "?";
         gfx.Engine.UI.text(shape_count_str, .{ .x = 10, .y = 560, .size = 16, .color = gfx.Color.sky_blue });
 
         gfx.Engine.UI.text("ESC: Exit", .{ .x = 700, .y = 580, .size = 14, .color = gfx.Color.light_gray });

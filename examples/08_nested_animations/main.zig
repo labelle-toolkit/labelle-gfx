@@ -68,24 +68,24 @@ pub fn main() !void {
     std.debug.print("Loaded party atlas\n", .{});
 
     // Create wizard sprite
-    const wizard = try engine.addSprite(.{
+    const wizard = try engine.sprites.addSprite(.{
         .sprite_name = "wizard/drink_0001",
         .position = .{ .x = 250, .y = 300 },
         .z_index = ZIndex.characters,
         .scale = 4.0,
         .pivot = .bottom_center,
     });
-    _ = engine.playAnimation(wizard, wizard_anims[0].path, wizard_anims[0].frames, wizard_anims[0].duration, true);
+    _ = engine.anims.playAnimation(wizard, wizard_anims[0].path, wizard_anims[0].frames, wizard_anims[0].duration, true);
 
     // Create thief sprite
-    const thief = try engine.addSprite(.{
+    const thief = try engine.sprites.addSprite(.{
         .sprite_name = "thief/attack_0001",
         .position = .{ .x = 550, .y = 300 },
         .z_index = ZIndex.characters,
         .scale = 4.0,
         .pivot = .bottom_center,
     });
-    _ = engine.playAnimation(thief, thief_anims[0].path, thief_anims[0].frames, thief_anims[0].duration, true);
+    _ = engine.anims.playAnimation(thief, thief_anims[0].path, thief_anims[0].frames, thief_anims[0].duration, true);
 
     var wizard_anim_idx: usize = 0;
     var thief_anim_idx: usize = 0;
@@ -104,22 +104,22 @@ pub fn main() !void {
         if (rl.isKeyPressed(.one)) {
             wizard_anim_idx = 0;
             const anim = wizard_anims[0];
-            _ = engine.playAnimation(wizard, anim.path, anim.frames, anim.duration, true);
+            _ = engine.anims.playAnimation(wizard, anim.path, anim.frames, anim.duration, true);
         }
         if (rl.isKeyPressed(.two)) {
             wizard_anim_idx = 1;
             const anim = wizard_anims[1];
-            _ = engine.playAnimation(wizard, anim.path, anim.frames, anim.duration, true);
+            _ = engine.anims.playAnimation(wizard, anim.path, anim.frames, anim.duration, true);
         }
         if (rl.isKeyPressed(.three)) {
             thief_anim_idx = 0;
             const anim = thief_anims[0];
-            _ = engine.playAnimation(thief, anim.path, anim.frames, anim.duration, true);
+            _ = engine.anims.playAnimation(thief, anim.path, anim.frames, anim.duration, true);
         }
         if (rl.isKeyPressed(.four)) {
             thief_anim_idx = 1;
             const anim = thief_anims[1];
-            _ = engine.playAnimation(thief, anim.path, anim.frames, anim.duration, true);
+            _ = engine.anims.playAnimation(thief, anim.path, anim.frames, anim.duration, true);
         }
 
         // Rendering
@@ -154,9 +154,9 @@ pub fn main() !void {
 
         // Code example
         gfx.Engine.UI.text("Code:", .{ .x = 10, .y = 480, .size = 16, .color = gfx.Color.yellow });
-        gfx.Engine.UI.text("// Use nested path with playAnimation:", .{ .x = 10, .y = 500, .size = 12, .color = gfx.Color.light_gray });
-        gfx.Engine.UI.text("engine.playAnimation(wizard, \"wizard/drink\", 11, 1.1, true);", .{ .x = 10, .y = 515, .size = 12, .color = gfx.Color.light_gray });
-        gfx.Engine.UI.text("engine.playAnimation(thief, \"thief/attack\", 8, 0.64, true);", .{ .x = 10, .y = 530, .size = 12, .color = gfx.Color.light_gray });
+        gfx.Engine.UI.text("// Use nested path with anims.playAnimation:", .{ .x = 10, .y = 500, .size = 12, .color = gfx.Color.light_gray });
+        gfx.Engine.UI.text("engine.anims.playAnimation(wizard, \"wizard/drink\", 11, 1.1, true);", .{ .x = 10, .y = 515, .size = 12, .color = gfx.Color.light_gray });
+        gfx.Engine.UI.text("engine.anims.playAnimation(thief, \"thief/attack\", 8, 0.64, true);", .{ .x = 10, .y = 530, .size = 12, .color = gfx.Color.light_gray });
 
         gfx.Engine.UI.text("ESC: Exit", .{ .x = 10, .y = 580, .size = 14, .color = gfx.Color.dark_gray });
 
