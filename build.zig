@@ -192,6 +192,15 @@ pub fn build(b: *std.Build) void {
         b.modules.put("raylib", rl) catch @panic("OOM");
     }
     b.modules.put("sokol", sokol) catch @panic("OOM");
+    if (zbgfx) |m| {
+        b.modules.put("zbgfx", m) catch @panic("OOM");
+    }
+    if (zglfw) |m| {
+        b.modules.put("zglfw", m) catch @panic("OOM");
+    }
+    if (wgpu_native) |m| {
+        b.modules.put("wgpu_native", m) catch @panic("OOM");
+    }
 
     // Static library for linking
     const lib = b.addLibrary(.{
