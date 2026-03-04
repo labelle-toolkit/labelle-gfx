@@ -235,11 +235,11 @@ const InternalSpriteData = struct {
     generation: u32 = 0,
     active: bool = false,
 
-    fn getSpriteName(self: *const InternalSpriteData) []const u8 {
+    pub fn getSpriteName(self: *const InternalSpriteData) []const u8 {
         return self.sprite_name[0..self.sprite_name_len];
     }
 
-    fn setSpriteName(self: *InternalSpriteData, name: []const u8) void {
+    pub fn setSpriteName(self: *InternalSpriteData, name: []const u8) void {
         const len = @min(name.len, self.sprite_name.len);
         @memcpy(self.sprite_name[0..len], name[0..len]);
         self.sprite_name_len = @intCast(len);
