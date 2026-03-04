@@ -175,13 +175,13 @@ pub fn build(b: *std.Build) void {
 
     // Link C library artifacts into the module for transitive linking.
     // Downstream packages importing "labelle" get these linked automatically.
+    // Note: raylib is NOT linked here because it bundles miniaudio, which
+    // conflicts with zaudio's miniaudio when both are linked. Raylib linking
+    // is handled by consumers via the static lib artifact.
     if (bgfx_lib) |artifact| {
         lib_mod.linkLibrary(artifact);
     }
     if (glfw_lib) |artifact| {
-        lib_mod.linkLibrary(artifact);
-    }
-    if (raylib_artifact) |artifact| {
         lib_mod.linkLibrary(artifact);
     }
 
