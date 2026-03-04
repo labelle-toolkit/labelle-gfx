@@ -82,7 +82,7 @@ pub fn ShapeMixin(comptime EngineType: type) type {
             return self.engineConst().shape_storage.isValid(.{ .index = id.index, .generation = id.generation });
         }
 
-        pub fn count(self: *const Self) u32 {
+        pub fn shapeCount(self: *const Self) u32 {
             return self.engineConst().shape_storage.count();
         }
 

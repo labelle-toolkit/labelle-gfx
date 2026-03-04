@@ -127,12 +127,17 @@ fn takeScreenshotMetalImpl(filename: [*:0]const u8) void {
 
     msgSendGetBytes(texture, sel_getBytes, pixels.ptr, bytes_per_row, region, 0);
 
-    // Save as PPM (Metal gives us BGRA, need to convert to RGB)
-    savePPM_BGRA(filename, pixels, width, height);
+    // Save as PPM (Metal gives us BGRA, no vertical flip needed)
+    savePPM(filename, pixels, width, height, .bgra, false);
 }
 
-/// Save BGRA pixel data as PPM file (no vertical flip needed for Metal)
-fn savePPM_BGRA(filename: [*:0]const u8, pixels: []const u8, width: usize, height: usize) void {
+/// Pixel format for PPM saving
+const PixelFormat = enum { rgba, bgra };
+
+/// Save pixel data as PPM file.
+/// - `format`: source pixel layout (RGBA or BGRA)
+/// - `y_flip`: when true, rows are written bottom-to-top (needed for GL readback)
+fn savePPM(filename: [*:0]const u8, pixels: []const u8, width: usize, height: usize, format: PixelFormat, y_flip: bool) void {
     const path = std.mem.span(filename);
 
     var file = std.fs.cwd().createFile(path, .{}) catch |err| {
@@ -152,26 +157,28 @@ fn savePPM_BGRA(filename: [*:0]const u8, pixels: []const u8, width: usize, heigh
         return;
     };
 
-    // Write RGB data, converting from BGRA to RGB
-    // Allocate row buffer on heap to support any width
     const row_buf = std.heap.smp_allocator.alloc(u8, width * 3) catch {
         std.log.err("Failed to allocate row buffer for screenshot", .{});
         return;
     };
     defer std.heap.smp_allocator.free(row_buf);
 
-    var y: usize = 0;
-    while (y < height) : (y += 1) {
+    // Channel offsets: RGBA → R=0,G=1,B=2; BGRA → R=2,G=1,B=0
+    const r_off: usize = if (format == .bgra) 2 else 0;
+    const b_off: usize = if (format == .bgra) 0 else 2;
+
+    var row_idx: usize = 0;
+    while (row_idx < height) : (row_idx += 1) {
+        const y = if (y_flip) (height - 1 - row_idx) else row_idx;
         const row_start = y * width * 4;
         const row = pixels[row_start..][0 .. width * 4];
 
-        // Convert BGRA to RGB
         var out_idx: usize = 0;
         var x: usize = 0;
         while (x < width * 4) : (x += 4) {
-            row_buf[out_idx + 0] = row[x + 2]; // R (from B position in BGRA)
+            row_buf[out_idx + 0] = row[x + r_off]; // R
             row_buf[out_idx + 1] = row[x + 1]; // G
-            row_buf[out_idx + 2] = row[x + 0]; // B (from R position in BGRA)
+            row_buf[out_idx + 2] = row[x + b_off]; // B
             out_idx += 3;
         }
 
@@ -222,61 +229,6 @@ fn takeScreenshotGL(filename: [*:0]const u8) void {
         return;
     }
 
-    // Save as PPM file (simple format, no external dependencies)
-    // Note: glReadPixels returns bottom-to-top, so we flip vertically
-    savePPM(filename, pixels, width, height);
-}
-
-/// Save pixel data as PPM file (flips vertically since GL is bottom-to-top)
-fn savePPM(filename: [*:0]const u8, pixels: []const u8, width: usize, height: usize) void {
-    const path = std.mem.span(filename);
-
-    var file = std.fs.cwd().createFile(path, .{}) catch |err| {
-        std.log.err("Failed to create screenshot file: {}", .{err});
-        return;
-    };
-    defer file.close();
-
-    // Write PPM header (P6 = binary RGB)
-    var header_buf: [64]u8 = undefined;
-    const header = std.fmt.bufPrint(&header_buf, "P6\n{} {}\n255\n", .{ width, height }) catch {
-        std.log.err("Failed to format PPM header", .{});
-        return;
-    };
-    file.writeAll(header) catch |err| {
-        std.log.err("Failed to write PPM header: {}", .{err});
-        return;
-    };
-
-    // Write RGB data, flipping vertically (GL reads bottom-to-top)
-    // Allocate row buffer on heap to support any width
-    const row_buf = std.heap.smp_allocator.alloc(u8, width * 3) catch {
-        std.log.err("Failed to allocate row buffer for screenshot", .{});
-        return;
-    };
-    defer std.heap.smp_allocator.free(row_buf);
-
-    var y: usize = height;
-    while (y > 0) {
-        y -= 1;
-        const row_start = y * width * 4;
-        const row = pixels[row_start..][0 .. width * 4];
-
-        // Convert RGBA to RGB
-        var out_idx: usize = 0;
-        var x: usize = 0;
-        while (x < width * 4) : (x += 4) {
-            row_buf[out_idx + 0] = row[x + 0]; // R
-            row_buf[out_idx + 1] = row[x + 1]; // G
-            row_buf[out_idx + 2] = row[x + 2]; // B
-            out_idx += 3;
-        }
-
-        file.writeAll(row_buf[0..out_idx]) catch |err| {
-            std.log.err("Failed to write PPM data: {}", .{err});
-            return;
-        };
-    }
-
-    std.log.info("Screenshot saved to: {s}", .{path});
+    // GL reads bottom-to-top, so flip vertically
+    savePPM(filename, pixels, width, height, .rgba, true);
 }

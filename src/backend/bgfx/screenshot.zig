@@ -227,11 +227,11 @@ pub fn saveBMP(filename: [:0]const u8, data: [*c]u8, width_u32: u32, height_u32:
 
     // Pixel data (BMP stores bottom-to-top, BGR format)
     // Allocate row buffer on heap to support any width
-    const row_buf = std.heap.page_allocator.alloc(u8, width * 3) catch {
+    const row_buf = std.heap.smp_allocator.alloc(u8, width * 3) catch {
         std.log.err("Failed to allocate row buffer for screenshot", .{});
         return;
     };
-    defer std.heap.page_allocator.free(row_buf);
+    defer std.heap.smp_allocator.free(row_buf);
 
     const padding: usize = @intCast(row_size - (width_u32 * 3));
     const padding_bytes = [_]u8{ 0, 0, 0 };

@@ -98,7 +98,7 @@ pub fn main() !void {
     _ = engine.shapes.setColor(animated_line, .{ .r = 255, .g = 255, .b = 255, .a = 255 });
     _ = engine.shapes.setThickness(animated_line, 2);
 
-    std.debug.print("Created {} shapes\n", .{engine.shapes.count()});
+    std.debug.print("Created {} shapes\n", .{engine.shapes.shapeCount()});
 
     var frame_count: u32 = 0;
     var time: f32 = 0;
@@ -152,7 +152,7 @@ pub fn main() !void {
         gfx.Engine.UI.text("Pulsing   Rotating    Bouncing    Color Shift", .{ .x = 60, .y = 450, .size = 14, .color = gfx.Color.gray });
 
         var shape_count_buf: [64]u8 = undefined;
-        const shape_count_str = std.fmt.bufPrintZ(&shape_count_buf, "Shapes: {}", .{engine.shapes.count()}) catch "?";
+        const shape_count_str = std.fmt.bufPrintZ(&shape_count_buf, "Shapes: {}", .{engine.shapes.shapeCount()}) catch "?";
         gfx.Engine.UI.text(shape_count_str, .{ .x = 10, .y = 560, .size = 16, .color = gfx.Color.sky_blue });
 
         gfx.Engine.UI.text("ESC: Exit", .{ .x = 700, .y = 580, .size = 14, .color = gfx.Color.light_gray });

@@ -111,7 +111,7 @@ pub fn CameraMixin(comptime EngineType: type) type {
             // Follow target
             if (eng.camera_follow_target) |target_id| {
                 if (eng.sprites.getPosition(target_id)) |pos| {
-                    const lerp = 1.0 - eng.camera_follow_lerp;
+                    const lerp = eng.camera_follow_lerp;
                     eng.renderer.camera.x += (pos.x - eng.renderer.camera.x) * lerp;
                     eng.renderer.camera.y += (pos.y - eng.renderer.camera.y) * lerp;
                 }

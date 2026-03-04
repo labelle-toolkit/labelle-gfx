@@ -42,28 +42,22 @@ pub fn initWindow(width: i32, height: i32, title: [*:0]const u8) !void {
     }
 
     // Initialize SDL_image for PNG/JPG support (optional, fails gracefully if not linked)
-    sdl_image.init(.{ .png = true, .jpg = true }) catch {
-        // SDL_image not linked or init failed - loadTexture from file won't work
+    if (sdl_image.init(.{ .png = true, .jpg = true })) |_| {
+        state.sdl_image_initialized = true;
+    } else |_| {
         if (@import("builtin").mode == .Debug) {
             std.debug.print("SDL_image init failed (library may not be linked)\n", .{});
         }
-        // Don't set sdl_image_initialized on failure
-        state.last_frame_time = sdl.getPerformanceCounter();
-        return;
-    };
-    state.sdl_image_initialized = true;
+    }
 
     // Initialize SDL_ttf for text rendering (optional, fails gracefully if not linked)
-    sdl_ttf.init() catch {
-        // SDL_ttf not linked or init failed - drawText won't work
+    if (sdl_ttf.init()) |_| {
+        state.sdl_ttf_initialized = true;
+    } else |_| {
         if (@import("builtin").mode == .Debug) {
             std.debug.print("SDL_ttf init failed (library may not be linked)\n", .{});
         }
-        // Don't set sdl_ttf_initialized on failure
-        state.last_frame_time = sdl.getPerformanceCounter();
-        return;
-    };
-    state.sdl_ttf_initialized = true;
+    }
 
     state.last_frame_time = sdl.getPerformanceCounter();
 }

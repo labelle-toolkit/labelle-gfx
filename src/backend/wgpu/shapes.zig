@@ -174,6 +174,7 @@ pub fn drawTriangleLines(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, c
 }
 
 pub fn drawPoly(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
+    if (sides < 3 or radius <= 0) return;
     if (state.shape_batch) |*batch| {
         const alloc = state.allocator orelse return;
         const color_packed = col.toAbgr();
@@ -204,6 +205,7 @@ pub fn drawPoly(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation:
 }
 
 pub fn drawPolyLines(center_x: f32, center_y: f32, sides: i32, radius: f32, rotation: f32, col: Color) void {
+    if (sides < 3 or radius <= 0) return;
     const num_sides: u32 = @intCast(sides);
     const thickness: f32 = 1.0;
 
