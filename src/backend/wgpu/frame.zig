@@ -284,7 +284,8 @@ pub fn endDrawing() void {
                 // Render each draw call with its own texture
                 for (calls.items) |call| {
                     // Get or create cached bind group for this texture
-                    const texture_key = @intFromPtr(call.texture.texture);
+                    const texture_ptr = call.texture.texture orelse continue;
+                    const texture_key = @intFromPtr(texture_ptr);
                     var bind_group: *wgpu.BindGroup = undefined;
 
                     var cache = &state.sprite_bind_group_cache.?; // Cache should always be initialized
@@ -304,7 +305,7 @@ pub fn endDrawing() void {
                                 },
                                 .{
                                     .binding = 1,
-                                    .texture_view = call.texture.view,
+                                    .texture_view = call.texture.view orelse continue,
                                 },
                                 .{
                                     .binding = 2,

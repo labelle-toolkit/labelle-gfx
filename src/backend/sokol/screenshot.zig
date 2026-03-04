@@ -98,11 +98,11 @@ fn takeScreenshotMetalImpl(filename: [*:0]const u8) void {
     // Allocate buffer for pixel data (BGRA - Metal's default format)
     const bytes_per_row = width * 4;
     const buffer_size = bytes_per_row * height;
-    const pixels = std.heap.page_allocator.alloc(u8, buffer_size) catch {
+    const pixels = std.heap.smp_allocator.alloc(u8, buffer_size) catch {
         std.log.err("Failed to allocate memory for screenshot", .{});
         return;
     };
-    defer std.heap.page_allocator.free(pixels);
+    defer std.heap.smp_allocator.free(pixels);
 
     // Call [texture getBytes:bytesPerRow:fromRegion:mipmapLevel:]
     // We need to construct the MTLRegion struct
@@ -154,11 +154,11 @@ fn savePPM_BGRA(filename: [*:0]const u8, pixels: []const u8, width: usize, heigh
 
     // Write RGB data, converting from BGRA to RGB
     // Allocate row buffer on heap to support any width
-    const row_buf = std.heap.page_allocator.alloc(u8, width * 3) catch {
+    const row_buf = std.heap.smp_allocator.alloc(u8, width * 3) catch {
         std.log.err("Failed to allocate row buffer for screenshot", .{});
         return;
     };
-    defer std.heap.page_allocator.free(row_buf);
+    defer std.heap.smp_allocator.free(row_buf);
 
     var y: usize = 0;
     while (y < height) : (y += 1) {
@@ -196,11 +196,11 @@ fn takeScreenshotGL(filename: [*:0]const u8) void {
 
     // Allocate buffer for pixel data (RGBA)
     const buffer_size = width * height * 4;
-    const pixels = std.heap.page_allocator.alloc(u8, buffer_size) catch {
+    const pixels = std.heap.smp_allocator.alloc(u8, buffer_size) catch {
         std.log.err("Failed to allocate memory for screenshot", .{});
         return;
     };
-    defer std.heap.page_allocator.free(pixels);
+    defer std.heap.smp_allocator.free(pixels);
 
     // Ensure all rendering commands have completed before reading pixels
     gl.glFinish();
@@ -250,11 +250,11 @@ fn savePPM(filename: [*:0]const u8, pixels: []const u8, width: usize, height: us
 
     // Write RGB data, flipping vertically (GL reads bottom-to-top)
     // Allocate row buffer on heap to support any width
-    const row_buf = std.heap.page_allocator.alloc(u8, width * 3) catch {
+    const row_buf = std.heap.smp_allocator.alloc(u8, width * 3) catch {
         std.log.err("Failed to allocate row buffer for screenshot", .{});
         return;
     };
-    defer std.heap.page_allocator.free(row_buf);
+    defer std.heap.smp_allocator.free(row_buf);
 
     var y: usize = height;
     while (y > 0) {

@@ -54,16 +54,19 @@ pub fn takeScreenshot(filename: [*:0]const u8) void {
     // SDL backend only supports BMP format (SDL_SaveBMP is built-in)
     // PNG support would require SDL_image's IMG_SavePNG which isn't exposed by SDL.zig
     const filename_slice = std.mem.span(filename);
-    if (std.mem.endsWith(u8, filename_slice, ".png")) {
-        std.log.warn("SDL backend: PNG screenshots not supported, saving as BMP instead", .{});
-    }
+    var bmp_buf: [512]u8 = undefined;
+    const save_filename: [*:0]const u8 = if (!std.mem.endsWith(u8, filename_slice, ".bmp")) blk: {
+        std.log.warn("SDL backend only supports BMP. Forcing .bmp extension.", .{});
+        const stem = std.fs.path.stem(filename_slice);
+        break :blk std.fmt.bufPrintZ(&bmp_buf, "{s}.bmp", .{stem}) catch filename;
+    } else filename;
 
     // Save as BMP using SDL's built-in function
-    const result = c.SDL_SaveBMP(surface.ptr, filename);
+    const result = c.SDL_SaveBMP(surface.ptr, save_filename);
     if (result != 0) {
         std.log.err("Failed to save BMP screenshot: {s}", .{c.SDL_GetError()});
         return;
     }
 
-    std.log.info("Screenshot saved to: {s}", .{filename_slice});
+    std.log.info("Screenshot saved to: {s}", .{std.mem.span(save_filename)});
 }

@@ -76,8 +76,12 @@ pub fn unloadTexture(texture: Texture) void {
     texture.handle.destroy();
 }
 
-/// Check if a texture is valid
+/// Check if a texture is valid.
+/// SDL textures wrap a non-optional `*c.SDL_Texture` pointer, so if a Texture
+/// value exists it was successfully created. After `unloadTexture` the handle is
+/// dangling and must not be used — callers should discard the value.
 pub fn isTextureValid(texture: Texture) bool {
-    _ = texture;
-    return true; // SDL textures are always valid if they exist
+    // SDL_QueryTexture returns 0 on success, non-zero on failure (e.g. destroyed texture)
+    const c = @import("sdl2").c;
+    return c.SDL_QueryTexture(texture.handle.ptr, null, null, null, null) == 0;
 }

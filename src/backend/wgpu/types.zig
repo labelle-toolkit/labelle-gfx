@@ -11,13 +11,12 @@ const wgpu = @import("wgpu");
 
 /// Opaque texture handle
 pub const Texture = struct {
-    view: *wgpu.TextureView,
-    texture: *wgpu.Texture,
+    view: ?*wgpu.TextureView,
+    texture: ?*wgpu.Texture,
     width: u16,
     height: u16,
 
     pub fn isValid(self: Texture) bool {
-        // A valid texture must have non-null internal handles
         return self.texture != null and self.view != null;
     }
 };

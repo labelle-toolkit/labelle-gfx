@@ -127,8 +127,18 @@ pub fn loadTexture(path: [:0]const u8) !types.Texture {
 }
 
 pub fn unloadTexture(tex: types.Texture) void {
-    tex.view.release();
-    tex.texture.release();
+    // Invalidate cached bind group referencing this texture's view
+    if (tex.texture) |texture_ptr| {
+        if (state.sprite_bind_group_cache) |*cache| {
+            const key = @intFromPtr(texture_ptr);
+            if (cache.fetchRemove(key)) |entry| {
+                entry.value.release();
+            }
+        }
+    }
+
+    if (tex.view) |v| v.release();
+    if (tex.texture) |t| t.release();
 }
 
 pub fn isTextureValid(tex: types.Texture) bool {
