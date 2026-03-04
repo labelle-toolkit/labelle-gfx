@@ -40,4 +40,4 @@ pub var keys_just_pressed: [512]bool = [_]bool{false} ** 512;
 pub var current_camera: ?types.Camera2D = null;
 
 // Fullscreen state
-pub threadlocal var is_fullscreen: bool = false;
+pub var is_fullscreen: bool = false;
