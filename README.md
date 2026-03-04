@@ -78,8 +78,8 @@ var engine = try VisualEngine.init(allocator, .{
 });
 defer engine.deinit();
 
-// Create sprites - engine owns them internally
-const player = try engine.addSprite(.{
+// Create sprites via the sprites mixin
+const player = try engine.sprites.addSprite(.{
     .sprite_name = "player_idle",
     .position = .{ .x = 400, .y = 300 },
     .pivot = .center,
@@ -91,9 +91,9 @@ const player = try engine.addSprite(.{
 while (engine.isRunning()) {
     const dt = engine.getDeltaTime();
 
-    // Update sprite
-    _ = engine.setPosition(player, .{ .x = new_x, .y = new_y });
-    _ = engine.setSpriteName(player, "player_walk_0001");
+    // Update sprite via mixin namespaces
+    _ = engine.sprites.setPosition(player, .{ .x = new_x, .y = new_y });
+    _ = engine.sprites.setSpriteName(player, "player_walk_0001");
 
     // Render
     engine.beginFrame();
@@ -222,6 +222,12 @@ zig build run-example-22
 
 # bgfx backend
 zig build run-example-23
+
+# Sokol run() API
+zig build run-example-25
+
+# WebGPU native backend
+zig build run-example-26
 ```
 
 ## API Overview
@@ -279,16 +285,16 @@ renderer.drawLayer("background", camera_x, camera_y, .{});
 ```zig
 const gfx = @import("labelle");
 
-// Create shapes with helper functions
-const circle = try engine.addShape(gfx.ShapeConfig.circle(100, 100, 50));
-const rect = try engine.addShape(gfx.ShapeConfig.rectangle(200, 50, 80, 60));
-const line = try engine.addShape(gfx.ShapeConfig.line(0, 0, 100, 100));
-const tri = try engine.addShape(gfx.ShapeConfig.triangle(300, 100, 350, 0, 400, 100));
-const hex = try engine.addShape(gfx.ShapeConfig.polygon(500, 100, 6, 40));
+// Create shapes via the shapes mixin
+const circle = try engine.shapes.addShape(gfx.ShapeConfig.circle(100, 100, 50));
+const rect = try engine.shapes.addShape(gfx.ShapeConfig.rectangle(200, 50, 80, 60));
+const line = try engine.shapes.addShape(gfx.ShapeConfig.line(0, 0, 100, 100));
+const tri = try engine.shapes.addShape(gfx.ShapeConfig.triangle(300, 100, 350, 0, 400, 100));
+const hex = try engine.shapes.addShape(gfx.ShapeConfig.polygon(500, 100, 6, 40));
 
 // Modify properties
-_ = engine.setShapeColor(circle, .{ .r = 255, .g = 0, .b = 0, .a = 255 });
-_ = engine.setShapeFilled(rect, false);  // Outline only
+_ = engine.shapes.setColor(circle, .{ .r = 255, .g = 0, .b = 0, .a = 255 });
+_ = engine.shapes.setFilled(rect, false);  // Outline only
 ```
 
 ### Multi-Camera
@@ -374,10 +380,21 @@ labelle/
 │   ├── camera/                 # Camera system
 │   ├── effects/                # Visual effects
 │   ├── engine/                 # Engine API and VisualEngine
+│   │   ├── visual_engine.zig   # Main struct, init, tick, lifecycle
+│   │   └── visual_engine/      # Zero-bit mixin modules
+│   │       ├── sprites.zig     # engine.sprites.* (add, remove, position, flip)
+│   │       ├── shapes.zig      # engine.shapes.* (add, remove, color, radius)
+│   │       ├── animations.zig  # engine.anims.* (play, registry, callbacks)
+│   │       ├── camera.zig      # engine.camera.* (follow, pan, zoom, bounds)
+│   │       └── rendering.zig   # engine.rendering.* (internal render dispatch)
 │   ├── backend/                # Backend abstraction
+│   │   ├── sokol/              # Sokol submodules (state, types, shapes, camera, ...)
+│   │   ├── sdl/                # SDL2 submodules (state, types, input, font, ...)
+│   │   ├── wgpu/               # WebGPU submodules (state, pipeline, shaders, ...)
+│   │   └── bgfx/               # bgfx submodules (state, drawing, shaders, ...)
 │   └── tools/                  # CLI tools (converter)
 ├── tests/                      # Test files (zspec)
-├── examples/                   # Example applications (01-23)
+├── examples/                   # Example applications (01-26)
 └── fixtures/                   # Test assets
 ```
 
@@ -406,6 +423,7 @@ zig build -Dconvert-atlases=true
 - [sokol](https://github.com/floooh/sokol) - Optional alternative backend
 - [SDL.zig](https://github.com/ikskuh/SDL.zig) - Optional SDL2 backend
 - [zbgfx](https://github.com/zig-gamedev/zbgfx) - Optional bgfx backend (cross-platform, multi-threaded)
+- [wgpu_native_zig](https://github.com/apotema/wgpu_native_zig) - Optional WebGPU native backend
 - [zig-utils](https://github.com/labelle-toolkit/zig-utils) - Common utilities
 - [zspec](https://github.com/labelle-toolkit/zspec) - BDD-style testing
 

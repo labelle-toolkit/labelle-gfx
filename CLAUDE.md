@@ -25,10 +25,21 @@ labelle/
 │   ├── camera/                 # Camera system (pan, zoom, bounds)
 │   ├── effects/                # Visual effects (Fade, TemporalFade, Flash)
 │   ├── engine/                 # VisualEngine and Input/UI helpers
-│   ├── backend/                # Backend abstraction (raylib, sokol, mock)
+│   │   ├── visual_engine.zig   # Main struct, init, tick, lifecycle
+│   │   └── visual_engine/      # Zero-bit mixin modules
+│   │       ├── sprites.zig     # engine.sprites.* (add, remove, position, flip)
+│   │       ├── shapes.zig      # engine.shapes.* (add, remove, color, radius)
+│   │       ├── animations.zig  # engine.anims.* (play, registry, callbacks)
+│   │       ├── camera.zig      # engine.camera.* (follow, pan, zoom, bounds)
+│   │       └── rendering.zig   # engine.rendering.* (internal render dispatch)
+│   ├── backend/                # Backend abstraction (raylib, sokol, sdl, bgfx, wgpu, mock)
+│   │   ├── sokol/              # Sokol submodules (state, types, shapes, camera, ...)
+│   │   ├── sdl/                # SDL2 submodules (state, types, input, font, ...)
+│   │   ├── wgpu/               # WebGPU submodules (state, pipeline, shaders, ...)
+│   │   └── bgfx/               # bgfx submodules (state, drawing, shaders, ...)
 │   └── tools/                  # CLI tools (converter)
 ├── tests/                      # Test files (zspec)
-├── examples/                   # Example applications (01-21)
+├── examples/                   # Example applications (01-26)
 ├── fixtures/                   # Test assets (sprite atlases, .zon files)
 └── .github/workflows/          # CI configuration
 ```
@@ -49,8 +60,8 @@ var engine = try gfx.VisualEngine.init(allocator, .{
 });
 defer engine.deinit();
 
-// Create sprites - engine owns them internally
-const player = try engine.addSprite(.{
+// Create sprites via the sprites mixin
+const player = try engine.sprites.addSprite(.{
     .sprite_name = "player_idle",
     .position = .{ .x = 400, .y = 300 },
     .pivot = .center,
@@ -60,7 +71,7 @@ const player = try engine.addSprite(.{
 
 // Game loop
 while (engine.isRunning()) {
-    engine.setPosition(player, .{ .x = new_x, .y = new_y });
+    _ = engine.sprites.setPosition(player, .{ .x = new_x, .y = new_y });
     engine.beginFrame();
     engine.tick(dt);
     engine.endFrame();
@@ -191,7 +202,7 @@ defer engine.deinit();
 try engine.loadSprite("background", "assets/background.png");
 
 // Use like any atlas sprite
-const bg = try engine.addSprite(.{
+const bg = try engine.sprites.addSprite(.{
     .sprite_name = "background",
     .position = .{ .x = 0, .y = 0 },
     .pivot = .top_left,
@@ -256,28 +267,28 @@ Pivot points determine which point of the sprite is placed at the (x, y) positio
 const gfx = @import("labelle");
 
 // Character with bottom-center pivot (feet position)
-const player = try engine.addSprite(.{
+const player = try engine.sprites.addSprite(.{
     .sprite_name = "player_idle",
     .position = .{ .x = 400, .y = 300 },
     .pivot = .bottom_center,  // Sprite's feet at (400, 300)
 });
 
 // Room tile with bottom-left pivot (for grid placement)
-const tile = try engine.addSprite(.{
+const tile = try engine.sprites.addSprite(.{
     .sprite_name = "floor_tile",
     .position = .{ .x = 0, .y = 0 },
     .pivot = .bottom_left,  // Tile's corner at (0, 0)
 });
 
 // Item with center pivot (default - good for rotation)
-const gem = try engine.addSprite(.{
+const gem = try engine.sprites.addSprite(.{
     .sprite_name = "gem",
     .position = .{ .x = 100, .y = 100 },
     .pivot = .center,  // Default, can be omitted
 });
 
 // Custom pivot (e.g., weapon handle position)
-const sword = try engine.addSprite(.{
+const sword = try engine.sprites.addSprite(.{
     .sprite_name = "sword",
     .position = .{ .x = 100, .y = 100 },
     .pivot = .custom,
@@ -286,8 +297,8 @@ const sword = try engine.addSprite(.{
 });
 
 // Change pivot at runtime
-_ = engine.setPivot(player, .center);
-_ = engine.setPivotCustom(sword, 0.2, 0.8);
+_ = engine.sprites.setPivot(player, .center);
+_ = engine.sprites.setPivotCustom(sword, 0.2, 0.8);
 ```
 
 Available pivot presets:
@@ -472,18 +483,18 @@ var engine = try gfx.VisualEngine.init(allocator, .{
 });
 defer engine.deinit();
 
-// Create shapes using ShapeConfig helpers
-const circle = try engine.addShape(gfx.ShapeConfig.circle(100, 100, 50));
-const rect = try engine.addShape(gfx.ShapeConfig.rectangle(200, 50, 80, 60));
-const line = try engine.addShape(gfx.ShapeConfig.line(0, 0, 100, 100));
-const tri = try engine.addShape(gfx.ShapeConfig.triangle(300, 100, 350, 0, 400, 100));
-const hex = try engine.addShape(gfx.ShapeConfig.polygon(500, 100, 6, 40));
+// Create shapes via the shapes mixin
+const circle = try engine.shapes.addShape(gfx.ShapeConfig.circle(100, 100, 50));
+const rect = try engine.shapes.addShape(gfx.ShapeConfig.rectangle(200, 50, 80, 60));
+const line = try engine.shapes.addShape(gfx.ShapeConfig.line(0, 0, 100, 100));
+const tri = try engine.shapes.addShape(gfx.ShapeConfig.triangle(300, 100, 350, 0, 400, 100));
+const hex = try engine.shapes.addShape(gfx.ShapeConfig.polygon(500, 100, 6, 40));
 
 // Modify shape properties
-_ = engine.setShapeColor(circle, .{ .r = 255, .g = 0, .b = 0, .a = 255 });
-_ = engine.setShapeFilled(rect, false);  // Outline only
-_ = engine.setShapeRadius(circle, 60);
-_ = engine.setShapeRotation(hex, 30);
+_ = engine.shapes.setColor(circle, .{ .r = 255, .g = 0, .b = 0, .a = 255 });
+_ = engine.shapes.setFilled(rect, false);  // Outline only
+_ = engine.shapes.setRadius(circle, 60);
+_ = engine.shapes.setRotation(hex, 30);
 
 // Game loop - shapes render automatically with sprites
 while (engine.isRunning()) {
@@ -762,7 +773,7 @@ zig build test
 # Run specific example
 zig build run-example-01
 zig build run-example-02
-# ... through run-example-16
+# ... through run-example-26
 
 # Run converter tool
 zig build converter -- input.json -o output.zon
@@ -810,6 +821,9 @@ pub const AnimationTests = struct {
 | 20_sprite_sizing | Container-based sprite sizing (stretch, cover, contain, repeat) |
 | 21_fullscreen | Fullscreen toggle with screen resize handling |
 | 22_sokol_shapes | Sokol backend shape rendering demo |
+| 23_bgfx_backend | bgfx backend with GLFW |
+| 25_sokol_run | Sokol run() API example |
+| 26_wgpu_native_backend | WebGPU native backend with GLFW |
 
 ## Common Patterns
 
