@@ -126,8 +126,8 @@ pub fn build(b: *std.Build) void {
     const zglfw: ?*std.Build.Module = if (zglfw_dep) |dep| dep.module("root") else null;
     const glfw_lib: ?*std.Build.Step.Compile = if (zglfw_dep) |dep| dep.artifact("glfw") else null;
 
-    // wgpu_native_zig dependency (lower-level WebGPU bindings) - lazy, only fetched when available
-    const wgpu_native_dep: ?*std.Build.Dependency = if (!is_restricted_target) b.lazyDependency("wgpu_native_zig", .{
+    // wgpu_native_zig dependency (WebGPU bindings) - not available on iOS/WASM
+    const wgpu_native_dep: ?*std.Build.Dependency = if (!is_restricted_target) b.dependency("wgpu_native_zig", .{
         .target = target,
         .optimize = optimize,
     }) else null;
