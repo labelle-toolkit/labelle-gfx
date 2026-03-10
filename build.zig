@@ -206,6 +206,7 @@ pub fn build(b: *std.Build) void {
         b.modules.put("raylib", rl) catch @panic("OOM");
     }
     b.modules.put("sokol", sokol) catch @panic("OOM");
+    b.modules.put("zig_utils", zig_utils) catch @panic("OOM");
     if (zbgfx) |m| {
         b.modules.put("zbgfx", m) catch @panic("OOM");
     }
