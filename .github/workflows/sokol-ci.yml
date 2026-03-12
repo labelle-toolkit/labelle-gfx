@@ -18,7 +18,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: labelle-toolkit/labelle-core
-          path: ../labelle-core
+          path: labelle-core-tmp
+
+      - name: Move labelle-core to sibling directory
+        run: mv labelle-core-tmp ../labelle-core
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
