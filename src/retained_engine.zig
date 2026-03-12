@@ -4,7 +4,7 @@ const visual_types_mod = @import("visual_types.zig");
 const types = @import("types.zig");
 const layer_mod = @import("layer.zig");
 const visuals_mod = @import("visuals.zig");
-const SourceRect = types.SourceRect;
+
 
 /// Creates a retained-mode rendering engine parameterized by backend and layer enum.
 /// The backend provides the actual draw calls; this engine manages entity state,
