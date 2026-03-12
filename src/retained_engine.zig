@@ -250,6 +250,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 const tex_id = sprite.texture.toInt();
 
                 // Resolve source rect and display dimensions
+                const tex_info = self.textures.get(tex_id);
                 var src_x: f32 = 0;
                 var src_y: f32 = 0;
                 var src_w: f32 = 0;
@@ -261,20 +262,18 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                     // Pre-resolved source rect (from engine atlas resolution)
                     src_x = sr.x;
                     src_y = sr.y;
-                    src_w = sr.width;
-                    src_h = sr.height;
-                    display_w = @abs(sr.width);
-                    display_h = @abs(sr.height);
+                    src_w = @abs(sr.width);
+                    src_h = @abs(sr.height);
+                    display_w = src_w;
+                    display_h = src_h;
                 } else {
                     // No source rect: use full texture
-                    const tex_info = self.textures.get(tex_id);
                     display_w = if (tex_info) |t| t.width else 64;
                     display_h = if (tex_info) |t| t.height else 64;
                     src_w = display_w;
                     src_h = display_h;
                 }
 
-                const tex_info = self.textures.get(tex_id);
                 const backend_tex: B.Texture = if (tex_info) |t| t.backend_texture else .{
                     .id = tex_id,
                     .width = @intFromFloat(display_w),
