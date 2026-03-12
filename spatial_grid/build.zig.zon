@@ -1,0 +1,17 @@
+.{
+    .fingerprint = 0x6d3d57de2f5550f8,
+    .name = .spatial_grid,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .zspec = .{
+            .url = "https://github.com/apotema/zspec/archive/refs/heads/main.tar.gz",
+            .hash = "zspec-0.7.0-jaKLbVqmAwDxLB7GYHuw354BQp7_uBSN9rSBUIfAx5xy",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
