@@ -58,17 +58,27 @@ jobs:
           restore-keys: |
             zig-cache-coverage-${{ runner.os }}-
 
-      - name: Run tests
+      - name: Run root tests
         run: |
-          # Note: Code coverage for Zig projects with C dependencies is not
-          # reliably available via kcov. kcov can only instrument C code and
-          # Zig dependencies in .zig-cache, not the project's own source files.
-          #
-          # For accurate coverage, we would need Zig's built-in coverage or
-          # llvm-cov with proper configuration.
-          #
-          # For now, we run tests to verify they pass.
-          echo "Running tests..."
+          echo "Running root tests..."
+          zig build test --summary all
+
+      - name: Run spatial_grid tests
+        working-directory: spatial_grid
+        run: |
+          echo "Running spatial_grid tests..."
+          zig build test --summary all
+
+      - name: Run tilemap tests
+        working-directory: tilemap
+        run: |
+          echo "Running tilemap tests..."
+          zig build test --summary all
+
+      - name: Run camera tests
+        working-directory: camera
+        run: |
+          echo "Running camera tests..."
           zig build test --summary all
 
       - name: Create coverage badge
