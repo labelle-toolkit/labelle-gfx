@@ -268,6 +268,11 @@ pub fn CameraManager(comptime BackendImpl: type) type {
             const sw = BackendImpl.getScreenWidth();
             const sh = BackendImpl.getScreenHeight();
 
+            // Reset all viewports to avoid stale values on inactive cameras.
+            for (&self.cameras) |*cam| {
+                cam.screen_viewport = null;
+            }
+
             switch (self.current_layout) {
                 .single => {
                     self.active_mask = 0b0001;
