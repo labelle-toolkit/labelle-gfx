@@ -1,0 +1,136 @@
+/// Creates a validated backend interface from an implementation type.
+/// The implementation must provide all required types and functions.
+pub fn Backend(comptime Impl: type) type {
+    comptime {
+        if (!@hasDecl(Impl, "Texture")) @compileError("Backend must define 'Texture' type");
+        if (!@hasDecl(Impl, "Color")) @compileError("Backend must define 'Color' type");
+        if (!@hasDecl(Impl, "Rectangle")) @compileError("Backend must define 'Rectangle' type");
+        if (!@hasDecl(Impl, "Vector2")) @compileError("Backend must define 'Vector2' type");
+        if (!@hasDecl(Impl, "Camera2D")) @compileError("Backend must define 'Camera2D' type");
+    }
+
+    comptime {
+        if (!@hasDecl(Impl, "drawTexturePro")) @compileError("Backend must define 'drawTexturePro'");
+        if (!@hasDecl(Impl, "drawRectangleRec")) @compileError("Backend must define 'drawRectangleRec'");
+        if (!@hasDecl(Impl, "drawCircle")) @compileError("Backend must define 'drawCircle'");
+        if (!@hasDecl(Impl, "drawLine")) @compileError("Backend must define 'drawLine'");
+        if (!@hasDecl(Impl, "drawText")) @compileError("Backend must define 'drawText'");
+        if (!@hasDecl(Impl, "loadTexture")) @compileError("Backend must define 'loadTexture'");
+        if (!@hasDecl(Impl, "unloadTexture")) @compileError("Backend must define 'unloadTexture'");
+        if (!@hasDecl(Impl, "beginMode2D")) @compileError("Backend must define 'beginMode2D'");
+        if (!@hasDecl(Impl, "endMode2D")) @compileError("Backend must define 'endMode2D'");
+        if (!@hasDecl(Impl, "getScreenWidth")) @compileError("Backend must define 'getScreenWidth'");
+        if (!@hasDecl(Impl, "getScreenHeight")) @compileError("Backend must define 'getScreenHeight'");
+        if (!@hasDecl(Impl, "screenToWorld")) @compileError("Backend must define 'screenToWorld'");
+        if (!@hasDecl(Impl, "worldToScreen")) @compileError("Backend must define 'worldToScreen'");
+    }
+
+    comptime {
+        if (!@hasDecl(Impl, "white")) @compileError("Backend must define 'white' color constant");
+        if (!@hasDecl(Impl, "black")) @compileError("Backend must define 'black' color constant");
+        if (!@hasDecl(Impl, "red")) @compileError("Backend must define 'red' color constant");
+        if (!@hasDecl(Impl, "green")) @compileError("Backend must define 'green' color constant");
+        if (!@hasDecl(Impl, "blue")) @compileError("Backend must define 'blue' color constant");
+        if (!@hasDecl(Impl, "transparent")) @compileError("Backend must define 'transparent' color constant");
+    }
+
+    return struct {
+        pub const Implementation = Impl;
+
+        pub const Texture = Impl.Texture;
+        pub const Color = Impl.Color;
+        pub const Rectangle = Impl.Rectangle;
+        pub const Vector2 = Impl.Vector2;
+        pub const Camera2D = Impl.Camera2D;
+
+        pub const white = Impl.white;
+        pub const black = Impl.black;
+        pub const red = Impl.red;
+        pub const green = Impl.green;
+        pub const blue = Impl.blue;
+        pub const transparent = Impl.transparent;
+
+        pub inline fn color(r: u8, g: u8, b: u8, a: u8) Color {
+            if (@hasDecl(Impl, "color")) {
+                return Impl.color(r, g, b, a);
+            } else {
+                return .{ .r = r, .g = g, .b = b, .a = a };
+            }
+        }
+
+        pub inline fn drawTexturePro(
+            texture: Texture,
+            source: Rectangle,
+            dest: Rectangle,
+            origin: Vector2,
+            rotation: f32,
+            tint: Color,
+        ) void {
+            Impl.drawTexturePro(texture, source, dest, origin, rotation, tint);
+        }
+
+        pub inline fn drawRectangleRec(rec: Rectangle, tint: Color) void {
+            Impl.drawRectangleRec(rec, tint);
+        }
+
+        pub inline fn drawCircle(center_x: f32, center_y: f32, radius: f32, tint: Color) void {
+            Impl.drawCircle(center_x, center_y, radius, tint);
+        }
+
+        pub inline fn drawRectangleLinesEx(rec: Rectangle, line_thick: f32, tint: Color) void {
+            if (@hasDecl(Impl, "drawRectangleLinesEx")) {
+                Impl.drawRectangleLinesEx(rec, line_thick, tint);
+            } else {
+                drawRectangleRec(rec, tint);
+            }
+        }
+
+        pub inline fn drawCircleLines(center_x: f32, center_y: f32, radius: f32, tint: Color) void {
+            if (@hasDecl(Impl, "drawCircleLines")) {
+                Impl.drawCircleLines(center_x, center_y, radius, tint);
+            } else {
+                drawCircle(center_x, center_y, radius, tint);
+            }
+        }
+
+        pub inline fn drawLine(start_x: f32, start_y: f32, end_x: f32, end_y: f32, thickness: f32, tint: Color) void {
+            Impl.drawLine(start_x, start_y, end_x, end_y, thickness, tint);
+        }
+
+        pub inline fn drawText(text: [:0]const u8, x: f32, y: f32, size: f32, tint: Color) void {
+            Impl.drawText(text, x, y, size, tint);
+        }
+
+        pub inline fn loadTexture(path: [:0]const u8) !Texture {
+            return Impl.loadTexture(path);
+        }
+
+        pub inline fn unloadTexture(texture: Texture) void {
+            Impl.unloadTexture(texture);
+        }
+
+        pub inline fn beginMode2D(camera: Camera2D) void {
+            Impl.beginMode2D(camera);
+        }
+
+        pub inline fn endMode2D() void {
+            Impl.endMode2D();
+        }
+
+        pub inline fn getScreenWidth() i32 {
+            return Impl.getScreenWidth();
+        }
+
+        pub inline fn getScreenHeight() i32 {
+            return Impl.getScreenHeight();
+        }
+
+        pub inline fn screenToWorld(pos: Vector2, camera: Camera2D) Vector2 {
+            return Impl.screenToWorld(pos, camera);
+        }
+
+        pub inline fn worldToScreen(pos: Vector2, camera: Camera2D) Vector2 {
+            return Impl.worldToScreen(pos, camera);
+        }
+    };
+}
