@@ -9,6 +9,7 @@ pub const Pivot = types.Pivot;
 pub const SizeMode = types.SizeMode;
 pub const Container = types.Container;
 pub const Position = types.Position;
+pub const SourceRect = types.SourceRect;
 pub const Shape = visuals.Shape;
 
 /// Creates visual types parameterized by layer enum.
@@ -36,6 +37,7 @@ pub fn VisualTypes(comptime LayerEnum: type) type {
         pub const SpriteVisual = struct {
             texture: TextureId = .invalid,
             sprite_name: []const u8 = "",
+            source_rect: ?SourceRect = null,
             scale_x: f32 = 1.0,
             scale_y: f32 = 1.0,
             rotation: f32 = 0,
