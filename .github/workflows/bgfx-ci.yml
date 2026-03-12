@@ -14,6 +14,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Checkout labelle-core (sibling dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: labelle-toolkit/labelle-core
+          path: ../labelle-core
+
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
