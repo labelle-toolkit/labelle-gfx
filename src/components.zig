@@ -20,6 +20,7 @@ pub const GizmoVisibility = core.GizmoVisibility;
 /// Sprite render component — user-facing data that maps to labelle-gfx SpriteVisual.
 pub fn SpriteComponent(comptime LayerEnum: type) type {
     const VTypes = visual_types_mod.VisualTypes(LayerEnum);
+    const SourceRect = types_mod.SourceRect;
 
     return struct {
         const Self = @This();
@@ -27,6 +28,7 @@ pub fn SpriteComponent(comptime LayerEnum: type) type {
 
         sprite_name: []const u8 = "",
         texture: TextureId = .invalid,
+        source_rect: ?SourceRect = null,
         scale_x: f32 = 1.0,
         scale_y: f32 = 1.0,
         rotation: f32 = 0,
@@ -44,6 +46,7 @@ pub fn SpriteComponent(comptime LayerEnum: type) type {
             return .{
                 .texture = self.texture,
                 .sprite_name = self.sprite_name,
+                .source_rect = self.source_rect,
                 .scale_x = self.scale_x,
                 .scale_y = self.scale_y,
                 .rotation = self.rotation,

@@ -74,6 +74,9 @@ pub const TileFlags = tilemap_mod.TileFlags;
 pub const TileMapRendererWith = tilemap_mod.TileMapRendererWith;
 pub const TileMapDrawOptions = tilemap_mod.DrawOptions;
 
+// Source Rect
+pub const SourceRect = types_mod.SourceRect;
+
 // Window Utilities
 pub const Fullscreen = window_utils_mod.Fullscreen;
 pub const Screenshot = window_utils_mod.Screenshot;

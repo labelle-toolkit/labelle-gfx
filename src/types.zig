@@ -91,6 +91,15 @@ pub const Pivot = enum {
     }
 };
 
+/// Pre-resolved source rectangle within a texture (from atlas or manual).
+/// When set on a sprite, the renderer uses this directly instead of the full texture.
+pub const SourceRect = struct {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+};
+
 /// Sizing mode for sprites relative to a container
 pub const SizeMode = enum {
     none,

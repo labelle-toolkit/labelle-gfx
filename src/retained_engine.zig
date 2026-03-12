@@ -5,6 +5,7 @@ const types = @import("types.zig");
 const layer_mod = @import("layer.zig");
 const visuals_mod = @import("visuals.zig");
 
+
 /// Creates a retained-mode rendering engine parameterized by backend and layer enum.
 /// The backend provides the actual draw calls; this engine manages entity state,
 /// dirty tracking, and render ordering.
@@ -248,32 +249,62 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 const pos = entry.value_ptr.position;
                 const tex_id = sprite.texture.toInt();
 
-                // Look up actual texture dimensions from registry
+                // Resolve source rect and display dimensions
                 const tex_info = self.textures.get(tex_id);
-                const tex_w: f32 = if (tex_info) |t| t.width else 64;
-                const tex_h: f32 = if (tex_info) |t| t.height else 64;
+                var src_x: f32 = 0;
+                var src_y: f32 = 0;
+                var src_w: f32 = 0;
+                var src_h: f32 = 0;
+                var display_w: f32 = 0;
+                var display_h: f32 = 0;
+
+                if (sprite.source_rect) |sr| {
+                    // Pre-resolved source rect (from engine atlas resolution)
+                    src_x = sr.x;
+                    src_y = sr.y;
+                    src_w = @abs(sr.width);
+                    src_h = @abs(sr.height);
+                    display_w = src_w;
+                    display_h = src_h;
+                } else {
+                    // No source rect: use full texture
+                    display_w = if (tex_info) |t| t.width else 64;
+                    display_h = if (tex_info) |t| t.height else 64;
+                    src_w = display_w;
+                    src_h = display_h;
+                }
+
                 const backend_tex: B.Texture = if (tex_info) |t| t.backend_texture else .{
                     .id = tex_id,
-                    .width = @intFromFloat(tex_w),
-                    .height = @intFromFloat(tex_h),
+                    .width = @intFromFloat(display_w),
+                    .height = @intFromFloat(display_h),
                 };
 
-                // Compute pivot offset
+                // Compute pivot offset using display dimensions
                 const pivot_norm = sprite.pivot.getNormalized(sprite.pivot_x, sprite.pivot_y);
-                const dest_w = tex_w * sprite.scale_x;
-                const dest_h = tex_h * sprite.scale_y;
+                const dest_w = display_w * sprite.scale_x;
+                const dest_h = display_h * sprite.scale_y;
                 const origin_x = dest_w * pivot_norm.x;
                 const origin_y = dest_h * pivot_norm.y;
 
-                // Source rect handles flipping
-                const src_x: f32 = if (sprite.flip_x) tex_w else 0;
-                const src_y: f32 = if (sprite.flip_y) tex_h else 0;
-                const src_w: f32 = if (sprite.flip_x) -tex_w else tex_w;
-                const src_h: f32 = if (sprite.flip_y) -tex_h else tex_h;
+                // Apply flip to source rect
+                var final_src_x = src_x;
+                var final_src_y = src_y;
+                var final_src_w = src_w;
+                var final_src_h = src_h;
+
+                if (sprite.flip_x) {
+                    final_src_x = src_x + src_w;
+                    final_src_w = -src_w;
+                }
+                if (sprite.flip_y) {
+                    final_src_y = src_y + src_h;
+                    final_src_h = -src_h;
+                }
 
                 B.drawTexturePro(
                     backend_tex,
-                    .{ .x = src_x, .y = src_y, .width = src_w, .height = src_h },
+                    .{ .x = final_src_x, .y = final_src_y, .width = final_src_w, .height = final_src_h },
                     .{ .x = pos.x, .y = pos.y, .width = dest_w, .height = dest_h },
                     .{ .x = origin_x, .y = origin_y },
                     sprite.rotation,
