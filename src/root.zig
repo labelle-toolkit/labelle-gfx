@@ -54,6 +54,14 @@ pub const Fade = effects_mod.Fade;
 pub const TemporalFade = effects_mod.TemporalFade;
 pub const Flash = effects_mod.Flash;
 
+/// Components exported for ECS integration.
+/// Auto-discovered by the CLI when labelle-gfx is available.
+pub const Components = struct {
+    pub const Fade = effects_mod.Fade;
+    pub const TemporalFade = effects_mod.TemporalFade;
+    pub const Flash = effects_mod.Flash;
+};
+
 // Camera
 pub const Camera = camera_mod.Camera;
 pub const CameraManager = camera_mod.CameraManager;
