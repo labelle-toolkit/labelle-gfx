@@ -5,7 +5,8 @@
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .labelle_core = .{
-            .path = "../../labelle-core",
+            .url = "https://github.com/labelle-toolkit/labelle-core/archive/refs/tags/v1.1.0.tar.gz",
+            .hash = "labelle_core-1.1.0-OauRcBXiAABw6NKQxonsYQo83gJEAEbpkZJ7JQs-Dxom",
         },
         .zspec = .{
             .url = "https://github.com/apotema/zspec/archive/refs/heads/main.tar.gz",
