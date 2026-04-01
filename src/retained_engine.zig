@@ -320,23 +320,19 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 const origin_x = dest_w * pivot_norm.x;
                 const origin_y = dest_h * pivot_norm.y;
 
-                var final_src_x = src_x;
-                var final_src_y = src_y;
                 var final_src_w = src_w;
                 var final_src_h = src_h;
 
                 if (sprite.flip_x) {
-                    final_src_x = src_x + src_w;
                     final_src_w = -src_w;
                 }
                 if (sprite.flip_y) {
-                    final_src_y = src_y + src_h;
                     final_src_h = -src_h;
                 }
 
                 B.drawTexturePro(
                     backend_tex,
-                    .{ .x = final_src_x, .y = final_src_y, .width = final_src_w, .height = final_src_h },
+                    .{ .x = src_x, .y = src_y, .width = final_src_w, .height = final_src_h },
                     .{ .x = pos.x, .y = pos.y, .width = dest_w, .height = dest_h },
                     .{ .x = origin_x, .y = origin_y },
                     sprite.rotation,
