@@ -251,6 +251,12 @@ pub const MockBackend = struct {
         return Texture{ .id = id, .width = 256, .height = 256 };
     }
 
+    pub fn loadTextureFromMemory(_: [:0]const u8, _: []const u8) !Texture {
+        const id = texture_counter;
+        texture_counter += 1;
+        return Texture{ .id = id, .width = 256, .height = 256 };
+    }
+
     pub fn unloadTexture(_: Texture) void {}
 
     pub fn beginMode2D(_: Camera2D) void {

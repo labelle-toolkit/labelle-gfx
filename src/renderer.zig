@@ -92,6 +92,10 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
             return self.inner.loadTexture(path);
         }
 
+        pub fn loadTextureFromMemory(self: *Self, file_type: [:0]const u8, data: []const u8) !types_mod.TextureId {
+            return self.inner.loadTextureFromMemory(file_type, data);
+        }
+
         pub fn unloadTexture(self: *Self, id: types_mod.TextureId) void {
             self.inner.unloadTexture(id);
         }

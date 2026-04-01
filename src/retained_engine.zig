@@ -103,6 +103,17 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             return id;
         }
 
+        pub fn loadTextureFromMemory(self: *Self, file_type: [:0]const u8, data: []const u8) !TextureId {
+            const tex = try B.loadTextureFromMemory(file_type, data);
+            const id = TextureId.from(tex.id);
+            self.textures.put(id.toInt(), .{
+                .backend_texture = tex,
+                .width = @floatFromInt(tex.width),
+                .height = @floatFromInt(tex.height),
+            }) catch {};
+            return id;
+        }
+
         pub fn unloadTexture(self: *Self, id: TextureId) void {
             if (self.textures.fetchRemove(id.toInt())) |kv| {
                 B.unloadTexture(kv.value.backend_texture);

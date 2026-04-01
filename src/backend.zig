@@ -16,6 +16,7 @@ pub fn Backend(comptime Impl: type) type {
         if (!@hasDecl(Impl, "drawLine")) @compileError("Backend must define 'drawLine'");
         if (!@hasDecl(Impl, "drawText")) @compileError("Backend must define 'drawText'");
         if (!@hasDecl(Impl, "loadTexture")) @compileError("Backend must define 'loadTexture'");
+        if (!@hasDecl(Impl, "loadTextureFromMemory")) @compileError("Backend must define 'loadTextureFromMemory'");
         if (!@hasDecl(Impl, "unloadTexture")) @compileError("Backend must define 'unloadTexture'");
         if (!@hasDecl(Impl, "beginMode2D")) @compileError("Backend must define 'beginMode2D'");
         if (!@hasDecl(Impl, "endMode2D")) @compileError("Backend must define 'endMode2D'");
@@ -103,6 +104,10 @@ pub fn Backend(comptime Impl: type) type {
 
         pub inline fn loadTexture(path: [:0]const u8) !Texture {
             return Impl.loadTexture(path);
+        }
+
+        pub inline fn loadTextureFromMemory(file_type: [:0]const u8, data: []const u8) !Texture {
+            return Impl.loadTextureFromMemory(file_type, data);
         }
 
         pub inline fn unloadTexture(texture: Texture) void {
