@@ -251,13 +251,38 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             self.renderTextsOnLayer(layer);
         }
 
+        const SortEntry = struct {
+            key: u32,
+            z_index: i16,
+        };
+
         fn renderSpritesOnLayer(self: *Self, layer: LayerEnum) void {
-            var sprite_iter = self.sprites.iterator();
-            while (sprite_iter.next()) |entry| {
+            // Collect visible sprites for this layer, then sort by z_index
+            var sort_buf: [4096]SortEntry = undefined;
+            var sort_count: usize = 0;
+
+            var collect_iter = self.sprites.iterator();
+            while (collect_iter.next()) |entry| {
                 const sprite = &entry.value_ptr.visual;
                 if (sprite.layer != layer or !sprite.visible) continue;
+                if (sort_count < sort_buf.len) {
+                    sort_buf[sort_count] = .{ .key = entry.key_ptr.*, .z_index = sprite.z_index };
+                    sort_count += 1;
+                }
+            }
 
-                const pos = entry.value_ptr.position;
+            // Sort by z_index (lower draws first = behind)
+            std.mem.sort(SortEntry, sort_buf[0..sort_count], {}, struct {
+                fn lessThan(_: void, a: SortEntry, b: SortEntry) bool {
+                    return a.z_index < b.z_index;
+                }
+            }.lessThan);
+
+            // Draw in sorted order
+            for (sort_buf[0..sort_count]) |sorted| {
+                const entry = self.sprites.getPtr(sorted.key) orelse continue;
+                const sprite = &entry.visual;
+                const pos = entry.position;
                 const tex_id = sprite.texture.toInt();
 
                 // Resolve source rect and display dimensions
@@ -270,7 +295,6 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 var display_h: f32 = 0;
 
                 if (sprite.source_rect) |sr| {
-                    // Pre-resolved source rect (from engine atlas resolution)
                     src_x = sr.x;
                     src_y = sr.y;
                     src_w = @abs(sr.width);
@@ -278,7 +302,6 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                     display_w = src_w;
                     display_h = src_h;
                 } else {
-                    // No source rect: use full texture
                     display_w = if (tex_info) |t| t.width else 64;
                     display_h = if (tex_info) |t| t.height else 64;
                     src_w = display_w;
@@ -291,14 +314,12 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                     .height = @intFromFloat(display_h),
                 };
 
-                // Compute pivot offset using display dimensions
                 const pivot_norm = sprite.pivot.getNormalized(sprite.pivot_x, sprite.pivot_y);
                 const dest_w = display_w * sprite.scale_x;
                 const dest_h = display_h * sprite.scale_y;
                 const origin_x = dest_w * pivot_norm.x;
                 const origin_y = dest_h * pivot_norm.y;
 
-                // Apply flip to source rect
                 var final_src_x = src_x;
                 var final_src_y = src_y;
                 var final_src_w = src_w;
