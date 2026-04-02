@@ -126,6 +126,7 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
                 self.inner.removeEntity(entry.value_ptr.entity_id);
             }
             self.tracked.clearRetainingCapacity();
+            self.inner.clearEntities();
         }
 
         pub fn markPositionDirty(self: *Self, entity: Entity) void {

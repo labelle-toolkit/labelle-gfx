@@ -90,6 +90,15 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             self.texts.deinit();
         }
 
+        /// Clear all entity visuals but keep textures loaded.
+        /// Used by save/load to reset rendering state without
+        /// destroying GPU textures that are expensive to reload.
+        pub fn clearEntities(self: *Self) void {
+            self.sprites.clearAndFree();
+            self.shapes.clearAndFree();
+            self.texts.clearAndFree();
+        }
+
         // -- Texture registry --
 
         pub fn loadTexture(self: *Self, path: [:0]const u8) !TextureId {
