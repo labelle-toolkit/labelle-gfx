@@ -288,4 +288,6 @@ pub const MockBackend = struct {
             .y = (pos.y - camera.target.y) * camera.zoom + camera.offset.y,
         };
     }
+
+    pub fn setDesignSize(_: i32, _: i32) void {}
 };
