@@ -261,7 +261,8 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
         pub fn render(self: *Self) void {
             var in_camera = false;
             inline for (sorted_layers) |layer| {
-                const is_world = layer.config().space == .world;
+                const space = layer.config().space;
+                const is_world = space == .world;
                 if (is_world and !in_camera) {
                     self.camera_mgr.getPrimaryCamera().begin();
                     in_camera = true;
@@ -269,10 +270,22 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
                     self.camera_mgr.getPrimaryCamera().end();
                     in_camera = false;
                 }
+                // Tell the backend whether this layer should bypass the
+                // design→physical aspect fit. `.screen_fill` layers stretch
+                // to fill the whole framebuffer (backdrops); everything
+                // else gets the normal pillarbox/letterbox treatment. The
+                // hook is optional — backends without it simply ignore
+                // `.screen_fill` and treat it like `.screen`.
+                if (@hasDecl(BackendImpl, "setApplyFit")) {
+                    BackendImpl.setApplyFit(space != .screen_fill);
+                }
                 self.inner.renderLayer(layer);
             }
             if (in_camera) {
                 self.camera_mgr.getPrimaryCamera().end();
+            }
+            if (@hasDecl(BackendImpl, "setApplyFit")) {
+                BackendImpl.setApplyFit(true);
             }
         }
 
