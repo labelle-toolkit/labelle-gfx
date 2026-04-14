@@ -167,21 +167,31 @@ pub fn Camera(comptime BackendImpl: type) type {
             };
         }
 
+        /// Full-screen height used for the Y-up ↔ Y-down flip.
+        ///
+        /// Must match the reference height the renderer uses in
+        /// `toScreenY` (see labelle-gfx/src/renderer.zig), which flips
+        /// entity positions against the full screen, not the camera's
+        /// viewport. Using the viewport height here would break when a
+        /// `screen_viewport` is set (e.g. split-screen or minimap), where
+        /// `dims.height` < full screen height.
+        fn flipReferenceHeight() f32 {
+            return @floatFromInt(BackendImpl.getScreenHeight());
+        }
+
         /// Convert screen pixel to world coordinate.
         pub fn screenToWorld(self: *const Self, screen_x: f32, screen_y: f32) struct { x: f32, y: f32 } {
-            const dims = self.getViewportDimensions();
             const cam2d = self.toBackend();
             const result = BackendImpl.screenToWorld(.{ .x = screen_x, .y = screen_y }, cam2d);
             // Backend returns Y-down; camera API is Y-up world.
-            return .{ .x = result.x, .y = dims.height - result.y };
+            return .{ .x = result.x, .y = flipReferenceHeight() - result.y };
         }
 
         /// Convert world coordinate to screen pixel.
         pub fn worldToScreen(self: *const Self, world_x: f32, world_y: f32) struct { x: f32, y: f32 } {
-            const dims = self.getViewportDimensions();
             const cam2d = self.toBackend();
             // Flip Y-up world → Y-down pixel space the backend expects.
-            const result = BackendImpl.worldToScreen(.{ .x = world_x, .y = dims.height - world_y }, cam2d);
+            const result = BackendImpl.worldToScreen(.{ .x = world_x, .y = flipReferenceHeight() - world_y }, cam2d);
             return .{ .x = result.x, .y = result.y };
         }
 
@@ -194,7 +204,7 @@ pub fn Camera(comptime BackendImpl: type) type {
             const dims = self.getViewportDimensions();
             return .{
                 .offset = .{ .x = dims.width / 2.0, .y = dims.height / 2.0 },
-                .target = .{ .x = self.x, .y = dims.height - self.y },
+                .target = .{ .x = self.x, .y = flipReferenceHeight() - self.y },
                 .rotation = self.rotation,
                 .zoom = self.zoom,
             };
