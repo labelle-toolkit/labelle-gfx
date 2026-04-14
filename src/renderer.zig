@@ -31,6 +31,7 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
     const sorted_layers = layer_mod.getSortedLayers(LayerEnum);
 
     return struct {
+        pub const ScreenPoint = types_mod.ScreenPoint;
         const Self = @This();
 
         // Export component types so engine can use them via RenderImpl.Sprite etc.
@@ -98,6 +99,27 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
 
         pub fn unloadTexture(self: *Self, id: types_mod.TextureId) void {
             self.inner.unloadTexture(id);
+        }
+
+        /// Convert a physical-pixel screen coordinate (sokol_app touch /
+        /// mouse event coords) to a design-pixel coordinate inside the
+        /// pillarboxed/letterboxed canvas.
+        ///
+        /// Optional backend hook: if the backend defines
+        /// `pub fn screenToDesign(px: f32, py: f32) struct { x, y }`,
+        /// the renderer forwards to it. Backends that don't have a
+        /// design/physical distinction (raylib, etc.) get a passthrough
+        /// — the input `(px, py)` is returned unchanged.
+        ///
+        /// Game scripts use this to translate touch / mouse coordinates
+        /// before feeding them to `cam.screenToWorld` for picking,
+        /// pinch-around-midpoint zoom, etc.
+        pub fn screenToDesign(_: *Self, px: f32, py: f32) types_mod.ScreenPoint {
+            if (@hasDecl(BackendImpl, "screenToDesign")) {
+                const r = BackendImpl.screenToDesign(px, py);
+                return .{ .x = r.x, .y = r.y };
+            }
+            return .{ .x = px, .y = py };
         }
 
         fn toScreenY(self: *const Self, y: f32) f32 {

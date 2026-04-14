@@ -91,6 +91,15 @@ pub const Pivot = enum {
     }
 };
 
+/// 2D point used by the renderer's coordinate-conversion helpers
+/// (screenToDesign, etc.). A named type so forwarding wrappers can
+/// declare the same return type — Zig treats two anon-struct returns
+/// as distinct types even when their fields match.
+pub const ScreenPoint = struct {
+    x: f32,
+    y: f32,
+};
+
 /// Pre-resolved source rectangle within a texture (from atlas or manual).
 /// When set on a sprite, the renderer uses this directly instead of the full texture.
 pub const SourceRect = struct {
