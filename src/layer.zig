@@ -2,8 +2,18 @@
 pub const LayerSpace = enum {
     /// World-space: camera transforms apply
     world,
-    /// Screen-space: fixed to screen, no camera transforms
+    /// Screen-space: fixed to screen, no camera transforms.
+    /// Pillarboxed/letterboxed by the backend's aspect-fit so design
+    /// coordinates map correctly regardless of the physical framebuffer
+    /// aspect.
     screen,
+    /// Like `screen`, but bypasses the aspect-preserving fit and stretches
+    /// to fill the entire physical framebuffer. Useful for backdrops /
+    /// skies / parallax that should cover the pillarbox bars left by the
+    /// game's design canvas. Use sparingly — content on this layer WILL
+    /// be horizontally/vertically stretched on devices whose aspect
+    /// ratio doesn't match the design.
+    screen_fill,
 };
 
 /// Configuration for a render layer
