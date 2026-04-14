@@ -280,10 +280,16 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 }
             }
 
-            // Sort by z_index (lower draws first = behind)
+            // Sort by z_index (lower draws first = behind), with entity id as
+            // tiebreaker for deterministic order. std.mem.sort is unstable, and
+            // the source hashmap iteration order changes as entries are added
+            // and removed — without a tiebreaker, sprites sharing a z_index
+            // swap front/back each frame, which with alpha blending looks like
+            // flickering on the overlapping region.
             std.mem.sort(SortEntry, sort_buf[0..sort_count], {}, struct {
                 fn lessThan(_: void, a: SortEntry, b: SortEntry) bool {
-                    return a.z_index < b.z_index;
+                    if (a.z_index != b.z_index) return a.z_index < b.z_index;
+                    return a.key < b.key;
                 }
             }.lessThan);
 
