@@ -263,22 +263,33 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
             inline for (sorted_layers) |layer| {
                 const space = layer.config().space;
                 const is_world = space == .world;
-                if (is_world and !in_camera) {
-                    self.camera_mgr.getPrimaryCamera().begin();
-                    in_camera = true;
-                } else if (!is_world and in_camera) {
+
+                // Exit the camera FIRST if we're moving from a world
+                // layer to a non-world layer.
+                if (!is_world and in_camera) {
                     self.camera_mgr.getPrimaryCamera().end();
                     in_camera = false;
                 }
-                // Tell the backend whether this layer should bypass the
-                // design→physical aspect fit. `.screen_fill` layers stretch
-                // to fill the whole framebuffer (backdrops); everything
-                // else gets the normal pillarbox/letterbox treatment. The
-                // hook is optional — backends without it simply ignore
-                // `.screen_fill` and treat it like `.screen`.
+
+                // Then update the backend's fit mode for the upcoming
+                // layer. This must happen between camera.end() and
+                // camera.begin() — a backend's beginMode2D may build its
+                // projection / viewport using the current fit state, so
+                // entering camera mode while still in fill mode from a
+                // previous `screen_fill` layer would set up the wrong
+                // matrix for the world layer. The hook is optional;
+                // backends without it ignore `.screen_fill` and treat it
+                // like `.screen`.
                 if (@hasDecl(BackendImpl, "setApplyFit")) {
                     BackendImpl.setApplyFit(space != .screen_fill);
                 }
+
+                // Now (re-)enter the camera if needed for this layer.
+                if (is_world and !in_camera) {
+                    self.camera_mgr.getPrimaryCamera().begin();
+                    in_camera = true;
+                }
+
                 self.inner.renderLayer(layer);
             }
             if (in_camera) {
