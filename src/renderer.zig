@@ -123,6 +123,14 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
             return .{ .x = px, .y = py };
         }
 
+        /// Pixel-dimension lookup for a previously-loaded texture.
+        /// Atlas loaders need this to derive a `texture_scale` against
+        /// the JSON's `meta.size` when the user ships a downscaled PNG
+        /// without re-running TexturePacker.
+        pub fn getTextureInfo(self: *const Self, id: types_mod.TextureId) ?@TypeOf(self.inner).TextureInfo {
+            return self.inner.getTextureInfo(id);
+        }
+
         fn toScreenY(self: *const Self, y: f32) f32 {
             return self.screen_height - y;
         }
