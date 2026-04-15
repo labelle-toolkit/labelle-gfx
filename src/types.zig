@@ -93,11 +93,25 @@ pub const Pivot = enum {
 
 /// Pre-resolved source rectangle within a texture (from atlas or manual).
 /// When set on a sprite, the renderer uses this directly instead of the full texture.
+///
+/// `width` / `height` are the texture sub-rect in **texture pixels** — this
+/// is what the renderer uses to compute UV coordinates.
+///
+/// `display_width` / `display_height` are the intended on-screen size in
+/// **design units** — i.e. the sprite's original artwork dimensions before
+/// any atlas downscaling. When they're 0 (the default) the renderer falls
+/// back to `width` / `height`, which preserves behavior for atlases where
+/// the artwork was authored at the same resolution as the atlas (the
+/// common case). Atlas loaders that downscale the source PNG must populate
+/// these from the TexturePacker `sourceSize` so the rendered sprite stays
+/// the same on-screen size regardless of texture resolution.
 pub const SourceRect = struct {
     x: f32,
     y: f32,
     width: f32,
     height: f32,
+    display_width: f32 = 0,
+    display_height: f32 = 0,
 };
 
 /// Sizing mode for sprites relative to a container
