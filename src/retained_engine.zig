@@ -44,7 +44,9 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         };
 
         /// Loaded texture info — maps TextureId to backend texture + dimensions.
-        const TextureInfo = struct {
+        /// Public so the `GfxRenderer` wrapper can forward `getTextureInfo`
+        /// without re-declaring the type.
+        pub const TextureInfo = struct {
             backend_texture: B.Texture,
             width: f32,
             height: f32,
@@ -314,8 +316,15 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                     src_y = sr.y;
                     src_w = @abs(sr.width);
                     src_h = @abs(sr.height);
-                    display_w = src_w;
-                    display_h = src_h;
+                    // `display_*` carry the design-space rendered size.
+                    // When 0, source-rect width/height double as the
+                    // display size — matching the legacy behavior for 1:1
+                    // atlases. Atlas loaders that downscale the texture
+                    // populate `display_*` separately so the on-screen
+                    // size stays put while UV sampling tracks the smaller
+                    // physical texture.
+                    display_w = if (sr.display_width > 0) sr.display_width else src_w;
+                    display_h = if (sr.display_height > 0) sr.display_height else src_h;
                 } else {
                     display_w = if (tex_info) |t| t.width else 64;
                     display_h = if (tex_info) |t| t.height else 64;
