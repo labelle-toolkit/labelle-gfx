@@ -44,7 +44,9 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         };
 
         /// Loaded texture info — maps TextureId to backend texture + dimensions.
-        const TextureInfo = struct {
+        /// Public so the `GfxRenderer` wrapper can forward `getTextureInfo`
+        /// without re-declaring the type.
+        pub const TextureInfo = struct {
             backend_texture: B.Texture,
             width: f32,
             height: f32,
