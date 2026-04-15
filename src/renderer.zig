@@ -106,15 +106,16 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
         /// pillarboxed/letterboxed canvas.
         ///
         /// Optional backend hook: if the backend defines
-        /// `pub fn screenToDesign(px: f32, py: f32) struct { x, y }`,
-        /// the renderer forwards to it. Backends that don't have a
-        /// design/physical distinction (raylib, etc.) get a passthrough
-        /// — the input `(px, py)` is returned unchanged.
+        /// `pub fn screenToDesign(px: f32, py: f32) types_mod.ScreenPoint`
+        /// (or any type with `f32` `x`/`y` fields), the renderer forwards
+        /// to it. Backends that don't have a design/physical distinction
+        /// (raylib, etc.) get a passthrough — the input `(px, py)` is
+        /// returned unchanged.
         ///
         /// Game scripts use this to translate touch / mouse coordinates
         /// before feeding them to `cam.screenToWorld` for picking,
         /// pinch-around-midpoint zoom, etc.
-        pub fn screenToDesign(_: *Self, px: f32, py: f32) types_mod.ScreenPoint {
+        pub fn screenToDesign(_: *const Self, px: f32, py: f32) ScreenPoint {
             if (@hasDecl(BackendImpl, "screenToDesign")) {
                 const r = BackendImpl.screenToDesign(px, py);
                 return .{ .x = r.x, .y = r.y };

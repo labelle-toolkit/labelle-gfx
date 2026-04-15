@@ -306,6 +306,34 @@ test "GfxRenderer: clear removes all tracked" {
     try testing.expectEqual(0, renderer.trackedCount());
 }
 
+test "GfxRenderer: screenToDesign is passthrough when backend has no hook" {
+    // MockBackend doesn't define `screenToDesign`, so the renderer
+    // returns the input coordinates unchanged. This is the path
+    // every backend without a design/physical distinction takes
+    // (raylib, sdl2, mock).
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const out = renderer.screenToDesign(123.5, 456.25);
+    try testing.expectEqual(@as(f32, 123.5), out.x);
+    try testing.expectEqual(@as(f32, 456.25), out.y);
+}
+
+test "GfxRenderer: screenToDesign callable on a const renderer reference" {
+    // Regression for the `*const Self` receiver — verifies the method
+    // can be called through a const pointer the way game scripts will
+    // when they hold an immutable handle.
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const renderer_const: *const Renderer = &renderer;
+    const out = renderer_const.screenToDesign(7.0, 8.0);
+    try testing.expectEqual(@as(f32, 7.0), out.x);
+    try testing.expectEqual(@as(f32, 8.0), out.y);
+}
+
 // ── Components ─────────────────────────────────────────────
 
 test "SpriteComponent.toVisual produces correct SpriteVisual" {
