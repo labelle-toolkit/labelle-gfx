@@ -15,6 +15,7 @@ pub const window_utils_mod = @import("window_utils.zig");
 
 // Core re-exports
 pub const Backend = backend_mod.Backend;
+pub const DecodedImage = backend_mod.DecodedImage;
 pub const MockBackend = mock_backend_mod.MockBackend;
 pub const RetainedEngineWith = retained_engine_mod.RetainedEngineWith;
 pub const GfxRenderer = renderer_mod.GfxRenderer;

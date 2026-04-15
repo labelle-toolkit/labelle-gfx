@@ -1,7 +1,10 @@
 const std = @import("std");
+const backend_mod = @import("backend.zig");
 
 /// Mock backend for testing — records draw calls without any native dependencies.
 pub const MockBackend = struct {
+    pub const DecodedImage = backend_mod.DecodedImage;
+
     pub const Texture = struct {
         id: u32,
         width: i32,
@@ -251,10 +254,32 @@ pub const MockBackend = struct {
         return Texture{ .id = id, .width = 256, .height = 256 };
     }
 
-    pub fn loadTextureFromMemory(_: [:0]const u8, _: []const u8) !Texture {
+    /// Stub CPU decode: returns a 1x1 RGBA8 image allocated from the caller's
+    /// allocator. Worker-thread safe (no shared mutable state). The caller owns
+    /// `pixels` and must free it through the same allocator.
+    pub fn decodeImage(
+        _: [:0]const u8,
+        _: []const u8,
+        allocator: std.mem.Allocator,
+    ) !backend_mod.DecodedImage {
+        const pixels = try allocator.alloc(u8, 4);
+        pixels[0] = 255;
+        pixels[1] = 255;
+        pixels[2] = 255;
+        pixels[3] = 255;
+        return .{ .pixels = pixels, .width = 1, .height = 1 };
+    }
+
+    /// Stub GPU upload: returns a fresh mock Texture and records nothing about
+    /// the pixel buffer (the caller still owns it).
+    pub fn uploadTexture(decoded: backend_mod.DecodedImage) !Texture {
         const id = texture_counter;
         texture_counter += 1;
-        return Texture{ .id = id, .width = 256, .height = 256 };
+        return Texture{
+            .id = id,
+            .width = @intCast(decoded.width),
+            .height = @intCast(decoded.height),
+        };
     }
 
     pub fn unloadTexture(_: Texture) void {}

@@ -1,3 +1,18 @@
+const std = @import("std");
+
+/// CPU-decoded image owned by the caller's allocator.
+/// Phase 1 of the Asset Streaming RFC (labelle-engine#437): splits PNG decode
+/// (worker-thread safe) from GPU upload (main/GL thread only). The pixel buffer
+/// is allocator-owned so the asset catalog can free it on BOTH the success and
+/// the discard paths (when a refcount hits zero between decode and upload).
+pub const DecodedImage = struct {
+    /// RGBA8 pixels, length == width * height * 4. Owned by the allocator passed
+    /// to `decodeImage`; the caller frees via that same allocator.
+    pixels: []u8,
+    width: u32,
+    height: u32,
+};
+
 /// Creates a validated backend interface from an implementation type.
 /// The implementation must provide all required types and functions.
 pub fn Backend(comptime Impl: type) type {
@@ -16,7 +31,8 @@ pub fn Backend(comptime Impl: type) type {
         if (!@hasDecl(Impl, "drawLine")) @compileError("Backend must define 'drawLine'");
         if (!@hasDecl(Impl, "drawText")) @compileError("Backend must define 'drawText'");
         if (!@hasDecl(Impl, "loadTexture")) @compileError("Backend must define 'loadTexture'");
-        if (!@hasDecl(Impl, "loadTextureFromMemory")) @compileError("Backend must define 'loadTextureFromMemory'");
+        if (!@hasDecl(Impl, "decodeImage")) @compileError("Backend must define 'decodeImage' (worker-thread safe CPU decode)");
+        if (!@hasDecl(Impl, "uploadTexture")) @compileError("Backend must define 'uploadTexture' (main/GL thread GPU upload)");
         if (!@hasDecl(Impl, "unloadTexture")) @compileError("Backend must define 'unloadTexture'");
         if (!@hasDecl(Impl, "beginMode2D")) @compileError("Backend must define 'beginMode2D'");
         if (!@hasDecl(Impl, "endMode2D")) @compileError("Backend must define 'endMode2D'");
@@ -106,8 +122,36 @@ pub fn Backend(comptime Impl: type) type {
             return Impl.loadTexture(path);
         }
 
+        /// Pure CPU decode, safe to call from a worker thread. Returns a
+        /// `DecodedImage` whose `pixels` buffer is owned by `allocator` — the
+        /// caller frees it via that same allocator on BOTH the success and
+        /// the discard paths (see `uploadTexture`).
+        pub inline fn decodeImage(
+            file_type: [:0]const u8,
+            data: []const u8,
+            allocator: std.mem.Allocator,
+        ) !DecodedImage {
+            return Impl.decodeImage(file_type, data, allocator);
+        }
+
+        /// Main/GL thread only. Uploads a previously decoded image to the GPU
+        /// and returns a backend `Texture`. Does NOT free `decoded.pixels` —
+        /// the caller is responsible for freeing the buffer on both the success
+        /// path and the discard path (e.g. when the asset catalog drops the
+        /// asset between decode and upload).
+        pub inline fn uploadTexture(decoded: DecodedImage) !Texture {
+            return Impl.uploadTexture(decoded);
+        }
+
+        /// Convenience wrapper: decode + upload + free in one call. Equivalent
+        /// to the previous `loadTextureFromMemory` contract; preserved so
+        /// existing synchronous callers (renderer, retained engine, single-
+        /// threaded games) keep working unchanged.
         pub inline fn loadTextureFromMemory(file_type: [:0]const u8, data: []const u8) !Texture {
-            return Impl.loadTextureFromMemory(file_type, data);
+            const allocator = std.heap.page_allocator;
+            const decoded = try Impl.decodeImage(file_type, data, allocator);
+            defer allocator.free(decoded.pixels);
+            return Impl.uploadTexture(decoded);
         }
 
         pub inline fn unloadTexture(texture: Texture) void {
