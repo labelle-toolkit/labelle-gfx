@@ -69,6 +69,56 @@ test "MockBackend: camera mode tracking" {
     try testing.expect(!MockBackend.isInCameraMode());
 }
 
+// ── decodeImage / uploadTexture (Asset Streaming Phase 1) ─────────────────
+
+test "Backend: decode then upload round trip frees decoded pixels" {
+    const B = Backend(MockBackend);
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    // Worker-thread step: decode into an allocator-owned buffer.
+    const decoded = try B.decodeImage("png", &[_]u8{}, testing.allocator);
+    // Stub mock backend always returns 1x1 RGBA8.
+    try testing.expectEqual(@as(u32, 1), decoded.width);
+    try testing.expectEqual(@as(u32, 1), decoded.height);
+    try testing.expectEqual(@as(usize, 4), decoded.pixels.len);
+
+    // Main/GL-thread step: upload. Must NOT free decoded.pixels.
+    const tex = try B.uploadTexture(decoded);
+    try testing.expect(tex.id != 0);
+    try testing.expectEqual(@as(i32, 1), tex.width);
+    try testing.expectEqual(@as(i32, 1), tex.height);
+
+    // Caller frees the pixel buffer on the success path.
+    testing.allocator.free(decoded.pixels);
+}
+
+test "Backend: discard path frees decoded pixels without uploadTexture" {
+    const B = Backend(MockBackend);
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    // Simulate the asset catalog: decode runs on a worker, then the refcount
+    // hits zero before uploadTexture is called. The catalog must be able to
+    // free the buffer via the same allocator with no GPU-side state to undo.
+    const decoded = try B.decodeImage("png", &[_]u8{}, testing.allocator);
+
+    // Discard without uploading. testing.allocator (a GPA) will assert on any
+    // leak or double-free — proves uploadTexture does not own decoded.pixels.
+    testing.allocator.free(decoded.pixels);
+}
+
+test "Backend: loadTextureFromMemory wrapper still works (no caller break)" {
+    const B = Backend(MockBackend);
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    // The convenience wrapper preserves the pre-RFC contract: same signature,
+    // same error set. Existing renderer / retained-engine callers stay green.
+    const tex = try B.loadTextureFromMemory("png", &[_]u8{});
+    try testing.expect(tex.id != 0);
+}
+
 // ── RetainedEngine ─────────────────────────────────────────
 
 test "RetainedEngine: create and remove sprite" {
