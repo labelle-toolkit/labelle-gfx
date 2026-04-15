@@ -102,11 +102,26 @@ pub const ScreenPoint = struct {
 
 /// Pre-resolved source rectangle within a texture (from atlas or manual).
 /// When set on a sprite, the renderer uses this directly instead of the full texture.
+///
+/// `width` / `height` are the texture sub-rect in **physical texture pixels** —
+/// what the renderer feeds to the backend for UV computation.
+///
+/// `display_width` / `display_height` are the intended on-screen size in
+/// **design units** — the rendered destination size before any sprite scale.
+/// When `0` (the default) the renderer falls back to `width` / `height`,
+/// preserving behavior for callers who don't distinguish the two (1:1
+/// atlases where the artwork is authored at the same resolution as the
+/// texture). Atlas loaders that downscale the source PNG must populate
+/// these from the *un-scaled* per-sprite frame dimensions so trimmed and
+/// un-trimmed sprites alike keep their on-screen size when the texture
+/// shrinks.
 pub const SourceRect = struct {
     x: f32,
     y: f32,
     width: f32,
     height: f32,
+    display_width: f32 = 0,
+    display_height: f32 = 0,
 };
 
 /// Sizing mode for sprites relative to a container
