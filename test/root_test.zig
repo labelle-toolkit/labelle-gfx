@@ -197,6 +197,69 @@ test "RetainedEngine: render produces draw calls" {
     try testing.expectEqual(2, MockBackend.getDrawCallCount());
 }
 
+test "RetainedEngine: source_rect default uses width/height as display size" {
+    // Legacy behavior — when display_width/height are 0, the renderer
+    // falls back to source_rect.width/height for the destination size.
+    // This must keep working for atlases where artwork is authored at
+    // 1:1 with the texture (the common case).
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{
+        .sprite_name = "a",
+        .pivot = .top_left,
+        .source_rect = .{ .x = 0, .y = 0, .width = 100, .height = 80 },
+    }, .{ .x = 50, .y = 60 });
+
+    engine.render();
+
+    const calls = MockBackend.getDrawCalls();
+    try testing.expectEqual(@as(usize, 1), calls.len);
+    try testing.expectEqual(100.0, calls[0].dest.width);
+    try testing.expectEqual(80.0, calls[0].dest.height);
+}
+
+test "RetainedEngine: source_rect display_width/height override frame size" {
+    // The fix for labelle-toolkit/labelle-gfx#240. When the texture has
+    // been downscaled relative to the original artwork, the atlas
+    // loader puts the *physical* texture sub-rect in `width/height`
+    // (smaller) and the *un-scaled* design-space dimensions in
+    // `display_width/display_height`. The renderer uses the second
+    // pair for the destination so the on-screen sprite size stays the
+    // same regardless of texture resolution. Texture sub-rect (UV
+    // sampling) still uses `width/height`.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{
+        .sprite_name = "a",
+        .pivot = .top_left,
+        .source_rect = .{
+            .x = 0,
+            .y = 0,
+            .width = 50, // physical texture sub-rect (downscaled half)
+            .height = 40,
+            .display_width = 100, // intended on-screen size
+            .display_height = 80,
+        },
+    }, .{ .x = 50, .y = 60 });
+
+    engine.render();
+
+    const calls = MockBackend.getDrawCalls();
+    try testing.expectEqual(@as(usize, 1), calls.len);
+    try testing.expectEqual(100.0, calls[0].dest.width);
+    try testing.expectEqual(80.0, calls[0].dest.height);
+}
+
 test "RetainedEngine: invisible sprites not rendered" {
     MockBackend.initMock(testing.allocator);
     defer MockBackend.deinitMock();
@@ -354,6 +417,34 @@ test "GfxRenderer: clear removes all tracked" {
 
     renderer.clear();
     try testing.expectEqual(0, renderer.trackedCount());
+}
+
+test "GfxRenderer: screenToDesign is passthrough when backend has no hook" {
+    // MockBackend doesn't define `screenToDesign`, so the renderer
+    // returns the input coordinates unchanged. This is the path
+    // every backend without a design/physical distinction takes
+    // (raylib, sdl2, mock).
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const out = renderer.screenToDesign(123.5, 456.25);
+    try testing.expectEqual(@as(f32, 123.5), out.x);
+    try testing.expectEqual(@as(f32, 456.25), out.y);
+}
+
+test "GfxRenderer: screenToDesign callable on a const renderer reference" {
+    // Regression for the `*const Self` receiver — verifies the method
+    // can be called through a const pointer the way game scripts will
+    // when they hold an immutable handle.
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const renderer_const: *const Renderer = &renderer;
+    const out = renderer_const.screenToDesign(7.0, 8.0);
+    try testing.expectEqual(@as(f32, 7.0), out.x);
+    try testing.expectEqual(@as(f32, 8.0), out.y);
 }
 
 // ── Components ─────────────────────────────────────────────

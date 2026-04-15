@@ -31,6 +31,7 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
     const sorted_layers = layer_mod.getSortedLayers(LayerEnum);
 
     return struct {
+        pub const ScreenPoint = types_mod.ScreenPoint;
         const Self = @This();
 
         // Export component types so engine can use them via RenderImpl.Sprite etc.
@@ -98,6 +99,36 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
 
         pub fn unloadTexture(self: *Self, id: types_mod.TextureId) void {
             self.inner.unloadTexture(id);
+        }
+
+        /// Convert a physical-pixel screen coordinate (sokol_app touch /
+        /// mouse event coords) to a design-pixel coordinate inside the
+        /// pillarboxed/letterboxed canvas.
+        ///
+        /// Optional backend hook: if the backend defines
+        /// `pub fn screenToDesign(px: f32, py: f32) types_mod.ScreenPoint`
+        /// (or any type with `f32` `x`/`y` fields), the renderer forwards
+        /// to it. Backends that don't have a design/physical distinction
+        /// (raylib, etc.) get a passthrough — the input `(px, py)` is
+        /// returned unchanged.
+        ///
+        /// Game scripts use this to translate touch / mouse coordinates
+        /// before feeding them to `cam.screenToWorld` for picking,
+        /// pinch-around-midpoint zoom, etc.
+        pub fn screenToDesign(_: *const Self, px: f32, py: f32) ScreenPoint {
+            if (@hasDecl(BackendImpl, "screenToDesign")) {
+                const r = BackendImpl.screenToDesign(px, py);
+                return .{ .x = r.x, .y = r.y };
+            }
+            return .{ .x = px, .y = py };
+        }
+
+        /// Pixel-dimension lookup for a previously-loaded texture.
+        /// Atlas loaders need this to derive a `texture_scale` against
+        /// the JSON's `meta.size` when the user ships a downscaled PNG
+        /// without re-running TexturePacker.
+        pub fn getTextureInfo(self: *const Self, id: types_mod.TextureId) ?@TypeOf(self.inner).TextureInfo {
+            return self.inner.getTextureInfo(id);
         }
 
         fn toScreenY(self: *const Self, y: f32) f32 {
@@ -261,18 +292,42 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
         pub fn render(self: *Self) void {
             var in_camera = false;
             inline for (sorted_layers) |layer| {
-                const is_world = layer.config().space == .world;
-                if (is_world and !in_camera) {
-                    self.camera_mgr.getPrimaryCamera().begin();
-                    in_camera = true;
-                } else if (!is_world and in_camera) {
+                const space = layer.config().space;
+                const is_world = space == .world;
+
+                // Exit the camera FIRST if we're moving from a world
+                // layer to a non-world layer.
+                if (!is_world and in_camera) {
                     self.camera_mgr.getPrimaryCamera().end();
                     in_camera = false;
                 }
+
+                // Then update the backend's fit mode for the upcoming
+                // layer. This must happen between camera.end() and
+                // camera.begin() — a backend's beginMode2D may build its
+                // projection / viewport using the current fit state, so
+                // entering camera mode while still in fill mode from a
+                // previous `screen_fill` layer would set up the wrong
+                // matrix for the world layer. The hook is optional;
+                // backends without it ignore `.screen_fill` and treat it
+                // like `.screen`.
+                if (@hasDecl(BackendImpl, "setApplyFit")) {
+                    BackendImpl.setApplyFit(space != .screen_fill);
+                }
+
+                // Now (re-)enter the camera if needed for this layer.
+                if (is_world and !in_camera) {
+                    self.camera_mgr.getPrimaryCamera().begin();
+                    in_camera = true;
+                }
+
                 self.inner.renderLayer(layer);
             }
             if (in_camera) {
                 self.camera_mgr.getPrimaryCamera().end();
+            }
+            if (@hasDecl(BackendImpl, "setApplyFit")) {
+                BackendImpl.setApplyFit(true);
             }
         }
 

@@ -40,6 +40,7 @@ pub fn Backend(comptime Impl: type) type {
         if (!@hasDecl(Impl, "getScreenHeight")) @compileError("Backend must define 'getScreenHeight'");
         if (!@hasDecl(Impl, "screenToWorld")) @compileError("Backend must define 'screenToWorld'");
         if (!@hasDecl(Impl, "worldToScreen")) @compileError("Backend must define 'worldToScreen'");
+        if (!@hasDecl(Impl, "setDesignSize")) @compileError("Backend must define 'setDesignSize'");
     }
 
     comptime {
@@ -180,6 +181,10 @@ pub fn Backend(comptime Impl: type) type {
 
         pub inline fn worldToScreen(pos: Vector2, camera: Camera2D) Vector2 {
             return Impl.worldToScreen(pos, camera);
+        }
+
+        pub inline fn setDesignSize(w: i32, h: i32) void {
+            Impl.setDesignSize(w, h);
         }
     };
 }
