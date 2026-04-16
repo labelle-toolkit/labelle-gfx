@@ -91,6 +91,17 @@ pub fn Backend(comptime Impl: type) type {
             Impl.drawRectangleRec(rec, tint);
         }
 
+        /// Rotated filled rectangle centered on (cx, cy). `rotation` is
+        /// in radians. Backends that don't implement it fall back to an
+        /// axis-aligned draw (rotation ignored).
+        pub inline fn drawRectangleRotated(cx: f32, cy: f32, width: f32, height: f32, rotation: f32, tint: Color) void {
+            if (@hasDecl(Impl, "drawRectangleRotated")) {
+                Impl.drawRectangleRotated(cx, cy, width, height, rotation, tint);
+            } else {
+                drawRectangleRec(.{ .x = cx - width * 0.5, .y = cy - height * 0.5, .width = width, .height = height }, tint);
+            }
+        }
+
         pub inline fn drawCircle(center_x: f32, center_y: f32, radius: f32, tint: Color) void {
             Impl.drawCircle(center_x, center_y, radius, tint);
         }
