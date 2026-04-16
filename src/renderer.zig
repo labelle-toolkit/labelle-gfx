@@ -101,6 +101,16 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
             self.inner.unloadTexture(id);
         }
 
+        /// Forward `RetainedEngine.registerCatalogTexture`. Called by
+        /// the assembler-emitted `ImageBackendAdapter.upload` so a
+        /// catalog-uploaded texture's slot handle resolves to the
+        /// real `BackendTexture` in the renderer's drawing path.
+        /// Without this the draw path falls back to treating the
+        /// slot handle as a GL texture id and renders white quads.
+        pub fn registerCatalogTexture(self: *Self, handle: u32, backend_tex: BackendImpl.Texture) void {
+            self.inner.registerCatalogTexture(handle, backend_tex);
+        }
+
         /// Convert a physical-pixel screen coordinate (sokol_app touch /
         /// mouse event coords) to a design-pixel coordinate inside the
         /// pillarboxed/letterboxed canvas.

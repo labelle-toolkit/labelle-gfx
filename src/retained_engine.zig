@@ -131,6 +131,29 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             }
         }
 
+        /// Register a backend texture under a caller-chosen handle.
+        /// Used by the asset-streaming pipeline (Asset Streaming RFC
+        /// #437): the catalog's image loader uploads via the
+        /// assembler-emitted `ImageBackendAdapter`, which returns a
+        /// slot handle (NOT a GL texture id) — without this entry,
+        /// the renderer's draw path falls back to treating the handle
+        /// as a GL id and produces white quads. The adapter calls
+        /// this immediately after `BackendImpl.uploadTexture` so the
+        /// handle resolves to the real `BackendTexture` (with all
+        /// its aux sg.View / sg.Sampler fields, on sokol).
+        ///
+        /// Idempotent: a repeated register on the same handle
+        /// overwrites — the catalog already prevents double-uploads
+        /// via refcount, so a re-register is only possible after an
+        /// `unloadTexture` and re-acquire, which is fine.
+        pub fn registerCatalogTexture(self: *Self, handle: u32, backend_tex: BackendImpl.Texture) void {
+            self.textures.put(handle, .{
+                .backend_texture = backend_tex,
+                .width = @floatFromInt(backend_tex.width),
+                .height = @floatFromInt(backend_tex.height),
+            }) catch {};
+        }
+
         pub fn getTextureInfo(self: *const Self, id: TextureId) ?TextureInfo {
             return self.textures.get(id.toInt());
         }
