@@ -401,13 +401,14 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                     .rectangle => |rect| {
                         const w = rect.width * shape.scale_x;
                         const h = rect.height * shape.scale_y;
+                        const rec = B.Rectangle{ .x = spos.x, .y = spos.y, .width = w, .height = h };
                         if (rect.fill == .outline) {
                             // Outline rotation not yet supported — fall back to axis-aligned.
-                            B.drawRectangleLinesEx(.{ .x = spos.x, .y = spos.y, .width = w, .height = h }, rect.thickness, c);
+                            B.drawRectangleLinesEx(rec, rect.thickness, c);
                         } else if (shape.rotation != 0) {
                             B.drawRectangleRotated(spos.x + w * 0.5, spos.y + h * 0.5, w, h, shape.rotation, c);
                         } else {
-                            B.drawRectangleRec(.{ .x = spos.x, .y = spos.y, .width = w, .height = h }, c);
+                            B.drawRectangleRec(rec, c);
                         }
                     },
                     .circle => |circle| {
