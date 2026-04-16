@@ -104,6 +104,27 @@ pub fn Camera(comptime BackendImpl: type) type {
             self.y = dims.height / 2.0;
         }
 
+        /// Center the camera on the **design canvas**, not the
+        /// physical framebuffer. Use this in scripts that position
+        /// world entities by the dimensions declared in
+        /// `project.labelle` (the natural shape for portable game
+        /// scripts) — `centerOnScreen` would put the camera at the
+        /// physical mid-point, which on a 2000×1200 Android tablet
+        /// with an 800×600 design canvas means (1000, 600), miles
+        /// outside the design space.
+        ///
+        /// Falls back to `centerOnScreen()` when the backend does
+        /// not expose `getDesignWidth/Height` — preserves existing
+        /// behavior for backends that haven't migrated yet.
+        pub fn centerOnDesign(self: *Self) void {
+            if (@hasDecl(BackendImpl, "getDesignWidth") and @hasDecl(BackendImpl, "getDesignHeight")) {
+                self.x = @as(f32, @floatFromInt(BackendImpl.getDesignWidth())) / 2.0;
+                self.y = @as(f32, @floatFromInt(BackendImpl.getDesignHeight())) / 2.0;
+            } else {
+                self.centerOnScreen();
+            }
+        }
+
         pub fn setPosition(self: *Self, x: f32, y: f32) void {
             self.x = x;
             self.y = y;
