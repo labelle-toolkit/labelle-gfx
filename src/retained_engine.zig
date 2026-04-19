@@ -399,16 +399,77 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
 
                 switch (shape.shape) {
                     .rectangle => |rect| {
-                        const rec = B.Rectangle{
-                            .x = spos.x,
-                            .y = spos.y,
-                            .width = rect.width * shape.scale_x,
-                            .height = rect.height * shape.scale_y,
-                        };
-                        if (rect.fill == .outline) {
-                            B.drawRectangleLinesEx(rec, rect.thickness, c);
+                        const w = rect.width * shape.scale_x;
+                        const h = rect.height * shape.scale_y;
+                        if (shape.rotation == 0) {
+                            const rec = B.Rectangle{
+                                .x = spos.x,
+                                .y = spos.y,
+                                .width = w,
+                                .height = h,
+                            };
+                            if (rect.fill == .outline) {
+                                B.drawRectangleLinesEx(rec, rect.thickness, c);
+                            } else {
+                                B.drawRectangleRec(rec, c);
+                            }
                         } else {
-                            B.drawRectangleRec(rec, c);
+                            // Rotated rectangle. Filled goes through
+                            // `drawRectanglePro` (sokol renders a
+                            // rotated sgl quad; backends without the
+                            // primitive emit a rotated outline via
+                            // the backend shim's fallback). Outlines
+                            // emit 4 line segments between the
+                            // rotated corner points — `drawLine`
+                            // takes arbitrary endpoints so the
+                            // rotation is exact on every backend.
+                            //
+                            // Known cosmetic divergence: the
+                            // axis-aligned outline uses
+                            // `drawRectangleLinesEx` (backend-defined
+                            // stroke: sokol is always 1 px, raylib
+                            // centres the line on the rect edge); the
+                            // rotated outline uses `drawLine` which
+                            // centres the line on the segment. For
+                            // thin outlines the difference is
+                            // sub-pixel; for thick outlines the
+                            // rotated rect can appear slightly larger
+                            // than its axis-aligned counterpart.
+                            // Accepted as a non-regression: thin
+                            // outlines look identical, and there's
+                            // currently no backend with a
+                            // rotated-outline-with-inner-stroke
+                            // primitive to target.
+                            const cx = spos.x + w * 0.5;
+                            const cy = spos.y + h * 0.5;
+                            if (rect.fill == .outline) {
+                                const hw = w * 0.5;
+                                const hh = h * 0.5;
+                                const cos_r = @cos(shape.rotation);
+                                const sin_r = @sin(shape.rotation);
+                                const Pt = struct { x: f32, y: f32 };
+                                const corners = [_]Pt{
+                                    .{ .x = -hw, .y = -hh },
+                                    .{ .x = hw, .y = -hh },
+                                    .{ .x = hw, .y = hh },
+                                    .{ .x = -hw, .y = hh },
+                                };
+                                var rotated: [4]Pt = undefined;
+                                for (corners, 0..) |p, i| {
+                                    rotated[i] = .{
+                                        .x = cx + p.x * cos_r - p.y * sin_r,
+                                        .y = cy + p.x * sin_r + p.y * cos_r,
+                                    };
+                                }
+                                var i: usize = 0;
+                                while (i < 4) : (i += 1) {
+                                    const a = rotated[i];
+                                    const b = rotated[(i + 1) % 4];
+                                    B.drawLine(a.x, a.y, b.x, b.y, rect.thickness, c);
+                                }
+                            } else {
+                                B.drawRectanglePro(cx, cy, w, h, shape.rotation, c);
+                            }
                         }
                     },
                     .circle => |circle| {

@@ -91,6 +91,73 @@ pub fn Backend(comptime Impl: type) type {
             Impl.drawRectangleRec(rec, tint);
         }
 
+        /// Filled rectangle rotated `rotation` radians around its centre
+        /// `(center_x, center_y)`. `width`/`height` are in world pixels.
+        ///
+        /// Fallback strategy when the backend doesn't expose a native
+        /// rotated-quad primitive:
+        ///   - `rotation == 0` — `drawRectangleRec` (identical to the
+        ///     existing axis-aligned fast path, zero cost).
+        ///   - `rotation != 0` — draw the 4 rotated edges via
+        ///     `drawLine`. Outlined rather than filled (no universal
+        ///     fill-quad primitive across backends), but the rotation
+        ///     is still visible — silently degrading to axis-aligned
+        ///     would hide the transform entirely, which is worse than
+        ///     a cosmetic outline-vs-fill divergence.
+        ///
+        /// Backends wanting the filled rotation add a `pub fn
+        /// drawRectanglePro(cx, cy, w, h, rotation, tint) void`
+        /// declaration to their gfx module; the shim detects it via
+        /// `@hasDecl` and dispatches.
+        pub inline fn drawRectanglePro(
+            center_x: f32,
+            center_y: f32,
+            width: f32,
+            height: f32,
+            rotation: f32,
+            tint: Color,
+        ) void {
+            if (@hasDecl(Impl, "drawRectanglePro")) {
+                Impl.drawRectanglePro(center_x, center_y, width, height, rotation, tint);
+                return;
+            }
+            if (rotation == 0) {
+                const rec = Rectangle{
+                    .x = center_x - width * 0.5,
+                    .y = center_y - height * 0.5,
+                    .width = width,
+                    .height = height,
+                };
+                drawRectangleRec(rec, tint);
+                return;
+            }
+            // Rotated outline fallback.
+            const hw = width * 0.5;
+            const hh = height * 0.5;
+            const cos_r = @cos(rotation);
+            const sin_r = @sin(rotation);
+            const Pt = struct { x: f32, y: f32 };
+            const corners = [_]Pt{
+                .{ .x = -hw, .y = -hh },
+                .{ .x = hw, .y = -hh },
+                .{ .x = hw, .y = hh },
+                .{ .x = -hw, .y = hh },
+            };
+            var rotated: [4]Pt = undefined;
+            for (corners, 0..) |p, i| {
+                rotated[i] = .{
+                    .x = center_x + p.x * cos_r - p.y * sin_r,
+                    .y = center_y + p.x * sin_r + p.y * cos_r,
+                };
+            }
+            var i: usize = 0;
+            while (i < 4) : (i += 1) {
+                const a = rotated[i];
+                const b = rotated[(i + 1) % 4];
+                Impl.drawLine(a.x, a.y, b.x, b.y, 1.0, tint);
+            }
+        }
+
         pub inline fn drawCircle(center_x: f32, center_y: f32, radius: f32, tint: Color) void {
             Impl.drawCircle(center_x, center_y, radius, tint);
         }
