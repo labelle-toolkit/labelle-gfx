@@ -246,8 +246,18 @@ pub fn Camera(comptime BackendImpl: type) type {
         /// [1]: https://github.com/labelle-toolkit/labelle-gfx/issues/253
         pub fn worldToFramebuffer(self: *const Self, world_x: f32, world_y: f32) struct { x: f32, y: f32 } {
             const sc = self.worldToScreen(world_x, world_y);
-            const fb = BackendImpl.designToPhysical(.{ .x = sc.x, .y = sc.y });
-            return .{ .x = fb.x, .y = fb.y };
+            // `Camera` is generic over the raw backend `Impl`, not
+            // the wrapped `Backend(Impl)` interface, so the
+            // `@hasDecl` fallback that lives in `Backend(Impl)` for
+            // the optional `designToPhysical` doesn't apply here —
+            // we have to guard the call ourselves. Identity for
+            // backends that don't pillarbox/letterbox keeps the API
+            // usable on raylib without any backend-side change.
+            if (@hasDecl(BackendImpl, "designToPhysical")) {
+                const fb = BackendImpl.designToPhysical(.{ .x = sc.x, .y = sc.y });
+                return .{ .x = fb.x, .y = fb.y };
+            }
+            return .{ .x = sc.x, .y = sc.y };
         }
 
         /// Convert to backend Camera2D struct.
