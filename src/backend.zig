@@ -275,12 +275,8 @@ pub fn Backend(comptime Impl: type) type {
         ///
         /// [1]: https://github.com/labelle-toolkit/labelle-gfx/issues/253
         pub inline fn designToPhysical(pos: Vector2) Vector2 {
-            // The sokol impl mirrors `screenToDesign`'s 2-scalar
-            // signature so the inverse pair stays symmetric on the
-            // backend side. Adapt to the trait's `Vector2` convention
-            // here.
             if (@hasDecl(Impl, "designToPhysical")) {
-                return Impl.designToPhysical(pos.x, pos.y);
+                return Impl.designToPhysical(pos);
             } else {
                 return pos;
             }
