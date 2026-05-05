@@ -254,7 +254,13 @@ pub fn Camera(comptime BackendImpl: type) type {
             // backends that don't pillarbox/letterbox keeps the API
             // usable on raylib without any backend-side change.
             if (@hasDecl(BackendImpl, "designToPhysical")) {
-                const fb = BackendImpl.designToPhysical(.{ .x = sc.x, .y = sc.y });
+                // The sokol impl takes 2 scalars (matching the
+                // `screenToDesign` inverse-pair shape). The
+                // `Backend(Impl)` trait wrapper in `src/backend.zig`
+                // adapts to a `Vector2` API for trait-level callers,
+                // but `Camera` is generic over the raw `Impl` and so
+                // calls the 2-scalar form directly.
+                const fb = BackendImpl.designToPhysical(sc.x, sc.y);
                 return .{ .x = fb.x, .y = fb.y };
             }
             return .{ .x = sc.x, .y = sc.y };
