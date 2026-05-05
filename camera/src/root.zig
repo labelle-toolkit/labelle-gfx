@@ -209,11 +209,61 @@ pub fn Camera(comptime BackendImpl: type) type {
         }
 
         /// Convert world coordinate to screen pixel.
+        ///
+        /// The result is in **design-canvas pixels** — the camera's
+        /// declared logical size, *not* the physical framebuffer.
+        /// On a desktop window matching the design canvas, the two
+        /// coincide and this output is also a usable
+        /// `igSetNextWindowPos` coordinate. On mobile or any resized
+        /// surface, the backend pillarboxes/letterboxes the design
+        /// canvas inside the framebuffer; pinning an imgui window
+        /// then needs `worldToFramebuffer` (or the equivalent
+        /// `designToPhysical` applied to this result) to land on the
+        /// same physical pixel as the world-rendered entity. See
+        /// [labelle-gfx#253][1].
+        ///
+        /// [1]: https://github.com/labelle-toolkit/labelle-gfx/issues/253
         pub fn worldToScreen(self: *const Self, world_x: f32, world_y: f32) struct { x: f32, y: f32 } {
             const cam2d = self.toBackend();
             // Flip Y-up world → Y-down pixel space the backend expects.
             const result = BackendImpl.worldToScreen(.{ .x = world_x, .y = flipReferenceHeight() - world_y }, cam2d);
             return .{ .x = result.x, .y = result.y };
+        }
+
+        /// Convert world coordinate to a **physical-framebuffer**
+        /// pixel — the same coordinate space ImGui uses
+        /// (`igGetIO().DisplaySize`). Use this for
+        /// `igSetNextWindowPos` when pinning an imgui window to a
+        /// world-space entity (e.g. an action panel over a tile, a
+        /// numeric overlay above a building). Mirrors the renderer's
+        /// design→physical transform via the backend's
+        /// `designToPhysical` (pillarbox/letterbox-aware).
+        ///
+        /// On backends that don't pillarbox (or where physical ==
+        /// design), this collapses to `worldToScreen`. See
+        /// [labelle-gfx#253][1].
+        ///
+        /// [1]: https://github.com/labelle-toolkit/labelle-gfx/issues/253
+        pub fn worldToFramebuffer(self: *const Self, world_x: f32, world_y: f32) struct { x: f32, y: f32 } {
+            const sc = self.worldToScreen(world_x, world_y);
+            // `Camera` is generic over the raw backend `Impl`, not
+            // the wrapped `Backend(Impl)` interface, so the
+            // `@hasDecl` fallback that lives in `Backend(Impl)` for
+            // the optional `designToPhysical` doesn't apply here —
+            // we have to guard the call ourselves. Identity for
+            // backends that don't pillarbox/letterbox keeps the API
+            // usable on raylib without any backend-side change.
+            if (@hasDecl(BackendImpl, "designToPhysical")) {
+                // The sokol impl takes 2 scalars (matching the
+                // `screenToDesign` inverse-pair shape). The
+                // `Backend(Impl)` trait wrapper in `src/backend.zig`
+                // adapts to a `Vector2` API for trait-level callers,
+                // but `Camera` is generic over the raw `Impl` and so
+                // calls the 2-scalar form directly.
+                const fb = BackendImpl.designToPhysical(sc.x, sc.y);
+                return .{ .x = fb.x, .y = fb.y };
+            }
+            return .{ .x = sc.x, .y = sc.y };
         }
 
         /// Convert to backend Camera2D struct.

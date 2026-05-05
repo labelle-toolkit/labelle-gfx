@@ -206,6 +206,22 @@ pub const CameraTests = struct {
         try std.testing.expect(std.math.approxEqAbs(f32, 300.0, vp.height, 0.1));
     }
 
+    test "worldToFramebuffer falls back to worldToScreen when backend has no designToPhysical" {
+        const Cam = camera.Camera(MockBackend);
+        const cam = Cam.init();
+        const sc = cam.worldToScreen(123.0, 45.0);
+        const fb = cam.worldToFramebuffer(123.0, 45.0);
+        // MockBackend doesn't define `designToPhysical`, so the
+        // backend wrapper's `@hasDecl` fallback returns the
+        // identity transform — `worldToFramebuffer` collapses to
+        // `worldToScreen`. Sokol-side transform coverage lives in
+        // `labelle-cli/test/imgui-anchor-test` (visual repro) since
+        // backend internals (`fit_scale_*`, `bar_*`) aren't reachable
+        // from this test harness.
+        try std.testing.expectEqual(sc.x, fb.x);
+        try std.testing.expectEqual(sc.y, fb.y);
+    }
+
     test "bounds clamping prevents moving outside bounds" {
         const Cam = camera.Camera(MockBackend);
         var cam = Cam.init();

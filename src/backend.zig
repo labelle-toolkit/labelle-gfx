@@ -253,5 +253,37 @@ pub fn Backend(comptime Impl: type) type {
         pub inline fn setDesignSize(w: i32, h: i32) void {
             Impl.setDesignSize(w, h);
         }
+
+        /// Convert a design-pixel coordinate (e.g. the output of
+        /// `cam.worldToScreen` for a world-space entity) to its
+        /// physical-framebuffer pixel position, applying the
+        /// backend's aspect-preserving fit (pillarbox/letterbox)
+        /// and bar offset.
+        ///
+        /// Use this when pinning an imgui window to a world-space
+        /// entity: `igSetNextWindowPos` interprets coords in
+        /// physical-framebuffer pixels (`igGetIO().DisplaySize`),
+        /// but `worldToScreen` returns design pixels — the two
+        /// diverge whenever physical ≠ design. See [labelle-gfx#253][1].
+        ///
+        /// Backends that don't pillarbox / letterbox (or that draw
+        /// directly to the design canvas) can omit `designToPhysical`
+        /// — this wrapper falls back to identity so the call still
+        /// compiles and produces correct results when design ==
+        /// physical. The sokol backend overrides; raylib uses the
+        /// fallback today.
+        ///
+        /// [1]: https://github.com/labelle-toolkit/labelle-gfx/issues/253
+        pub inline fn designToPhysical(pos: Vector2) Vector2 {
+            // The sokol impl mirrors `screenToDesign`'s 2-scalar
+            // signature so the inverse pair stays symmetric on the
+            // backend side. Adapt to the trait's `Vector2` convention
+            // here.
+            if (@hasDecl(Impl, "designToPhysical")) {
+                return Impl.designToPhysical(pos.x, pos.y);
+            } else {
+                return pos;
+            }
+        }
     };
 }
