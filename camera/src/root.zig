@@ -267,6 +267,41 @@ pub fn Camera(comptime BackendImpl: type) type {
             return .{ .x = sc.x, .y = sc.y };
         }
 
+        /// Convert a **physical-framebuffer** pixel — the same
+        /// coordinate space ImGui uses (`io.MousePos` /
+        /// `igGetIO().DisplaySize`), and the space sokol_app touch /
+        /// mouse events arrive in — to a world coordinate. Inverse
+        /// of `worldToFramebuffer`.
+        ///
+        /// Use this for ImGui mouse/touch hit-tests against
+        /// world-space entities (drag retargeting, click-to-select,
+        /// tap-to-target). Without it, callers have to do the
+        /// two-step `screenToDesign` → `screenToWorld` manually and
+        /// every site has to remember why — same trap that
+        /// `worldToFramebuffer` closed on the output side.
+        ///
+        /// Mirrors `worldToFramebuffer`: applies the backend's
+        /// physical→design transform (un-pillarbox + un-scale) via
+        /// `screenToDesign` and then maps through the camera's
+        /// design→world (`screenToWorld`). On backends that don't
+        /// pillarbox / letterbox (or where physical == design), the
+        /// pre-step collapses to identity and this function reduces
+        /// to `screenToWorld`. See [labelle-gfx#255][1].
+        ///
+        /// [1]: https://github.com/labelle-toolkit/labelle-gfx/issues/255
+        pub fn framebufferToWorld(self: *const Self, px: f32, py: f32) struct { x: f32, y: f32 } {
+            // Same `@hasDecl` shape as `worldToFramebuffer`: `Camera`
+            // is generic over the raw backend `Impl`, so we guard the
+            // optional hook ourselves. Identity fallback keeps raylib
+            // (and any other non-pillarboxing backend) working
+            // unchanged.
+            if (@hasDecl(BackendImpl, "screenToDesign")) {
+                const ds = BackendImpl.screenToDesign(px, py);
+                return self.screenToWorld(ds.x, ds.y);
+            }
+            return self.screenToWorld(px, py);
+        }
+
         /// Convert to backend Camera2D struct.
         /// `self.y` is Y-up world; the backend works in Y-down pixel space, so
         /// we flip here. The renderer applies a matching `toScreenY` flip to

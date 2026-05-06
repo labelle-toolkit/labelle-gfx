@@ -222,6 +222,32 @@ pub const CameraTests = struct {
         try std.testing.expectEqual(sc.y, fb.y);
     }
 
+    test "framebufferToWorld falls back to screenToWorld when backend has no screenToDesign" {
+        const Cam = camera.Camera(MockBackend);
+        const cam = Cam.init();
+        // Mirror of the `worldToFramebuffer` fallback test: MockBackend
+        // doesn't define `screenToDesign`, so the camera's `@hasDecl`
+        // guard skips the physical→design pre-step and the function
+        // collapses to `screenToWorld`. Pillarboxed-backend coverage
+        // lives in `labelle-cli/test/imgui-anchor-test`.
+        const sw = cam.screenToWorld(50.0, 60.0);
+        const w = cam.framebufferToWorld(50.0, 60.0);
+        try std.testing.expectEqual(sw.x, w.x);
+        try std.testing.expectEqual(sw.y, w.y);
+    }
+
+    test "framebufferToWorld is the inverse of worldToFramebuffer (identity backend)" {
+        const Cam = camera.Camera(MockBackend);
+        const cam = Cam.init();
+        // On MockBackend (no pillarbox), the round-trip is exact.
+        // On a pillarboxing backend the same property holds modulo
+        // float rounding — covered visually in `imgui-anchor-test`.
+        const fb = cam.worldToFramebuffer(123.0, 45.0);
+        const w = cam.framebufferToWorld(fb.x, fb.y);
+        try std.testing.expectApproxEqAbs(@as(f32, 123.0), w.x, 1e-3);
+        try std.testing.expectApproxEqAbs(@as(f32, 45.0), w.y, 1e-3);
+    }
+
     test "bounds clamping prevents moving outside bounds" {
         const Cam = camera.Camera(MockBackend);
         var cam = Cam.init();
