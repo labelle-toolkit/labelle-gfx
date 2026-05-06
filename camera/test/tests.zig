@@ -141,6 +141,45 @@ const MockBackend = struct {
     pub fn endMode2D() void {}
 };
 
+// Pillarboxing test backend — defines `screenToDesign` /
+// `designToPhysical` so `framebufferToWorld` and `worldToFramebuffer`
+// take their non-fallback paths. The transform mimics a sokol-style
+// fit: physical-px to design-px applies a 100-px horizontal bar
+// offset on each side and a 50-px vertical bar, plus a 2× scale
+// (i.e. design coords are (physical - bar) / 2). `designToPhysical`
+// is the exact inverse. `screenToWorld`/`worldToScreen` stay identity
+// so the camera→world step doesn't mask transform bugs.
+const PillarboxBackend = struct {
+    pub const Camera2D = struct {
+        offset: Vector2 = .{},
+        target: Vector2 = .{},
+        rotation: f32 = 0,
+        zoom: f32 = 1,
+    };
+    pub const Vector2 = struct { x: f32 = 0, y: f32 = 0 };
+
+    pub fn getScreenWidth() i32 {
+        return 800;
+    }
+    pub fn getScreenHeight() i32 {
+        return 600;
+    }
+    pub fn screenToWorld(pos: Vector2, _: Camera2D) Vector2 {
+        return pos;
+    }
+    pub fn worldToScreen(pos: Vector2, _: Camera2D) Vector2 {
+        return pos;
+    }
+    pub fn screenToDesign(px: f32, py: f32) Vector2 {
+        return .{ .x = (px - 100.0) / 2.0, .y = (py - 50.0) / 2.0 };
+    }
+    pub fn designToPhysical(pos: Vector2) Vector2 {
+        return .{ .x = pos.x * 2.0 + 100.0, .y = pos.y * 2.0 + 50.0 };
+    }
+    pub fn beginMode2D(_: Camera2D) void {}
+    pub fn endMode2D() void {}
+};
+
 pub const CameraTests = struct {
     test "init creates camera at origin" {
         const Cam = camera.Camera(MockBackend);
@@ -220,6 +259,67 @@ pub const CameraTests = struct {
         // from this test harness.
         try std.testing.expectEqual(sc.x, fb.x);
         try std.testing.expectEqual(sc.y, fb.y);
+    }
+
+    test "framebufferToWorld falls back to screenToWorld when backend has no screenToDesign" {
+        const Cam = camera.Camera(MockBackend);
+        const cam = Cam.init();
+        // Mirror of the `worldToFramebuffer` fallback test: MockBackend
+        // doesn't define `screenToDesign`, so the camera's `@hasDecl`
+        // guard skips the physical→design pre-step and the function
+        // collapses to `screenToWorld`. Pillarboxed-backend coverage
+        // lives in `labelle-cli/test/imgui-anchor-test`.
+        const sw = cam.screenToWorld(50.0, 60.0);
+        const w = cam.framebufferToWorld(50.0, 60.0);
+        try std.testing.expectEqual(sw.x, w.x);
+        try std.testing.expectEqual(sw.y, w.y);
+    }
+
+    test "framebufferToWorld is the inverse of worldToFramebuffer (identity backend)" {
+        const Cam = camera.Camera(MockBackend);
+        const cam = Cam.init();
+        // On MockBackend (no pillarbox), the round-trip is exact.
+        // The pillarboxed-backend round-trip is exercised in the next
+        // test; this one guards the identity fallback path.
+        const fb = cam.worldToFramebuffer(123.0, 45.0);
+        const w = cam.framebufferToWorld(fb.x, fb.y);
+        try std.testing.expectApproxEqAbs(@as(f32, 123.0), w.x, 1e-3);
+        try std.testing.expectApproxEqAbs(@as(f32, 45.0), w.y, 1e-3);
+    }
+
+    test "framebufferToWorld applies backend screenToDesign before screenToWorld" {
+        // PillarboxBackend's `screenToDesign` undoes a 100-px horizontal
+        // bar (each side), 50-px vertical bar, and a 2× scale — the
+        // shape sokol uses on Android. Physical (110, 70) maps to
+        // design (5, 10); the camera's `screenToWorld` then Y-flips
+        // (Y-up world over a 600-px backend height) to produce world
+        // (5, 590). Without the `screenToDesign` pre-step the result
+        // would collapse to world (110, 530) — the regression this
+        // guards.
+        const Cam = camera.Camera(PillarboxBackend);
+        const cam = Cam.init();
+        const w = cam.framebufferToWorld(110.0, 70.0);
+        try std.testing.expectApproxEqAbs(@as(f32, 5.0), w.x, 1e-3);
+        try std.testing.expectApproxEqAbs(@as(f32, 590.0), w.y, 1e-3);
+    }
+
+    test "framebufferToWorld is the inverse of worldToFramebuffer (pillarboxed backend)" {
+        // End-to-end round-trip with both transform hooks active.
+        // World (123, 45) → screen (123, 555) via Y-flip → physical
+        // (346, 1160) via `designToPhysical` → back to world
+        // (123, 45) via `framebufferToWorld`. The intermediate
+        // physical point is non-trivially different from the world
+        // point (different by the 200/100 bar offsets, 2× scale,
+        // and Y-flip), so this catches direction mismatches that the
+        // identity-backend test cannot.
+        const Cam = camera.Camera(PillarboxBackend);
+        const cam = Cam.init();
+        const fb = cam.worldToFramebuffer(123.0, 45.0);
+        try std.testing.expectApproxEqAbs(@as(f32, 346.0), fb.x, 1e-3);
+        try std.testing.expectApproxEqAbs(@as(f32, 1160.0), fb.y, 1e-3);
+        const w = cam.framebufferToWorld(fb.x, fb.y);
+        try std.testing.expectApproxEqAbs(@as(f32, 123.0), w.x, 1e-3);
+        try std.testing.expectApproxEqAbs(@as(f32, 45.0), w.y, 1e-3);
     }
 
     test "bounds clamping prevents moving outside bounds" {
