@@ -295,11 +295,16 @@ pub fn Camera(comptime BackendImpl: type) type {
             // optional hook ourselves. Identity fallback keeps raylib
             // (and any other non-pillarboxing backend) working
             // unchanged.
-            if (@hasDecl(BackendImpl, "screenToDesign")) {
+            //
+            // `screenToWorld`'s anon-struct return type is a different
+            // nominal type from this method's anon-struct return —
+            // unpack to fields and repack so the types reconcile.
+            const ds_x: f32, const ds_y: f32 = if (@hasDecl(BackendImpl, "screenToDesign")) blk: {
                 const ds = BackendImpl.screenToDesign(px, py);
-                return self.screenToWorld(ds.x, ds.y);
-            }
-            return self.screenToWorld(px, py);
+                break :blk .{ ds.x, ds.y };
+            } else .{ px, py };
+            const w = self.screenToWorld(ds_x, ds_y);
+            return .{ .x = w.x, .y = w.y };
         }
 
         /// Convert to backend Camera2D struct.
