@@ -1,4 +1,18 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
+// Decode-buffer allocator for the legacy `loadTextureFromMemory`
+// convenience wrapper. On `wasm32-emscripten` Zig's `page_allocator`
+// resolves to `WasmAllocator`, which calls `@wasmMemoryGrow` directly
+// and bypasses emscripten's `updateMemoryViews()` — the next stderr
+// write then aborts with a spurious "segmentation fault" because the
+// JS-side `HEAPU32` is detached. Route through libc (emscripten's
+// malloc) on wasm; keep `page_allocator` on desktop. See
+// `labelle-cli/docs/wasm-segfault-investigation.md` (#196).
+const decode_allocator: std.mem.Allocator = if (builtin.target.os.tag == .emscripten)
+    std.heap.c_allocator
+else
+    std.heap.page_allocator;
 
 /// CPU-decoded image owned by the caller's allocator.
 /// Phase 1 of the Asset Streaming RFC (labelle-engine#437): splits PNG decode
@@ -216,7 +230,7 @@ pub fn Backend(comptime Impl: type) type {
         /// existing synchronous callers (renderer, retained engine, single-
         /// threaded games) keep working unchanged.
         pub inline fn loadTextureFromMemory(file_type: [:0]const u8, data: []const u8) !Texture {
-            const allocator = std.heap.page_allocator;
+            const allocator = decode_allocator;
             const decoded = try Impl.decodeImage(file_type, data, allocator);
             defer allocator.free(decoded.pixels);
             return Impl.uploadTexture(decoded);
