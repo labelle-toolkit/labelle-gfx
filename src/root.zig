@@ -16,6 +16,12 @@ pub const window_utils_mod = @import("window_utils.zig");
 // Core re-exports
 pub const Backend = backend_mod.Backend;
 pub const DecodedImage = backend_mod.DecodedImage;
+pub const DecodedFont = backend_mod.DecodedFont;
+pub const FontBakeParams = backend_mod.FontBakeParams;
+pub const CodepointRange = backend_mod.CodepointRange;
+pub const Glyph = backend_mod.Glyph;
+pub const CodepointEntry = backend_mod.CodepointEntry;
+pub const KernPair = backend_mod.KernPair;
 pub const MockBackend = mock_backend_mod.MockBackend;
 pub const RetainedEngineWith = retained_engine_mod.RetainedEngineWith;
 pub const GfxRenderer = renderer_mod.GfxRenderer;

@@ -27,6 +27,96 @@ pub const DecodedImage = struct {
     height: u32,
 };
 
+/// Codepoint range to bake glyphs for, half-open [first, last).
+/// Used by `FontBakeParams` to drive `decodeFont`. Phase 4 of the Asset
+/// Streaming RFC (labelle-engine#448).
+pub const CodepointRange = struct {
+    first: u32,
+    last: u32,
+};
+
+/// One baked glyph in a font atlas. UV rect is in *pixels* of the atlas
+/// (not normalised) — the renderer divides by atlas size once at upload
+/// time. `xoff` / `yoff` already incorporate the glyph's bearing; the
+/// renderer just adds them to the pen position. Structurally identical
+/// to `labelle-engine`'s `font_types.Glyph` to make the assembler
+/// adapter a 1:1 field copy.
+pub const Glyph = struct {
+    u0: u16,
+    v0: u16,
+    u1: u16,
+    v1: u16,
+    xoff: f32,
+    yoff: f32,
+    advance: f32,
+};
+
+/// Sorted (by codepoint) lookup from Unicode codepoint to dense glyph
+/// index. Renderers binary-search this per glyph. Structurally
+/// identical to `labelle-engine`'s `font_types.CodepointEntry`.
+pub const CodepointEntry = struct {
+    codepoint: u32,
+    glyph_index: u32,
+};
+
+/// One GPOS kern pair. Structurally identical to `labelle-engine`'s
+/// `font_types.KernPair`.
+pub const KernPair = struct {
+    first: u32,
+    second: u32,
+    advance: f32,
+};
+
+/// Bake-time parameters for `decodeFont`. The same TTF baked at
+/// different `pixel_height` / `ranges` / atlas dimensions produces a
+/// distinct atlas — that's why these ride alongside the source bytes
+/// instead of being inferred from the file. The engine carries this
+/// via `AssetEntry.params` (a type-erased pointer) at register time
+/// and the worker forwards it to `decodeFont`. See
+/// `RFC-FONT-LOADER.md` §2.
+pub const FontBakeParams = struct {
+    /// Pixel height passed to the rasteriser. f32 because
+    /// `stb_truetype` (the canonical decoder) takes f32.
+    pixel_height: f32 = 16,
+
+    /// Codepoint ranges to bake. Default is ASCII printable.
+    /// Lifetime: borrowed; must outlive the decode call.
+    ranges: []const CodepointRange = &.{ .{ .first = 0x20, .last = 0x7F } },
+
+    atlas_width: u32 = 512,
+    atlas_height: u32 = 512,
+};
+
+/// CPU-decoded font atlas + glyph metrics, owned by the caller's
+/// allocator. The bitmap, glyphs, codepoint_index, and kerning slices
+/// are ALL allocator-owned and ALL must be freed by the caller on both
+/// the success and discard paths (mirroring `DecodedImage.pixels` for
+/// images). Structurally identical to `labelle-engine`'s
+/// `DecodedPayload.font` inline struct so the assembler adapter is a
+/// field-by-field copy.
+pub const DecodedFont = struct {
+    /// 8-bit alpha atlas. Length == width * height.
+    bitmap: []u8,
+    width: u32,
+    height: u32,
+
+    /// Dense per-glyph metrics, indexed by `CodepointEntry.glyph_index`.
+    glyphs: []Glyph,
+
+    /// Codepoint → glyph_index lookup, sorted by codepoint.
+    codepoint_index: []const CodepointEntry,
+
+    /// Vertical metrics in pixels at the baked size.
+    ascent: f32,
+    descent: f32, // negative (below baseline)
+    line_gap: f32,
+    line_height: f32, // precomputed: ascent - descent + line_gap
+
+    /// Sparse kerning pairs. Empty when the font has no GPOS kern
+    /// table or the decoder chose to skip them.
+    kerning: []const KernPair,
+};
+
 /// Creates a validated backend interface from an implementation type.
 /// The implementation must provide all required types and functions.
 pub fn Backend(comptime Impl: type) type {
@@ -238,6 +328,62 @@ pub fn Backend(comptime Impl: type) type {
 
         pub inline fn unloadTexture(texture: Texture) void {
             Impl.unloadTexture(texture);
+        }
+
+        // ── Font atlas (Phase 4 of Asset Streaming RFC, labelle-engine#448) ──
+        //
+        // Backends opt in by declaring `FontAtlas` + `decodeFont` +
+        // `uploadFontAtlas` + `unloadFontAtlas`. Backends that don't
+        // implement fonts simply omit those decls; the wrappers below
+        // are `@hasDecl`-guarded so existing backends keep compiling
+        // unchanged. Once a backend implements one of the four, it
+        // should implement all four — there's no half-state we know
+        // how to handle.
+
+        /// Opaque backend-side font atlas handle. Resolves to the
+        /// backend's own type when present, or to a zero-sized struct
+        /// otherwise so the rest of the wrapper still typechecks. The
+        /// adapter on the assembler side narrows this to a real handle
+        /// before crossing into `labelle-engine`'s `FontId` shape.
+        pub const FontAtlas = if (@hasDecl(Impl, "FontAtlas")) Impl.FontAtlas else struct {};
+
+        /// Pure CPU bake — runs on the asset worker thread. Returns a
+        /// `DecodedFont` whose four owned slices (`bitmap`, `glyphs`,
+        /// `codepoint_index`, `kerning`) are all from `allocator`; the
+        /// caller frees each on BOTH the success and discard paths.
+        /// Errors `error.FontBackendNotImplemented` when `Impl` doesn't
+        /// supply a `decodeFont` — so the engine's loader surfaces a
+        /// clean error in `lastError` instead of a link failure.
+        pub inline fn decodeFont(
+            file_type: [:0]const u8,
+            data: []const u8,
+            params: FontBakeParams,
+            allocator: std.mem.Allocator,
+        ) !DecodedFont {
+            if (@hasDecl(Impl, "decodeFont")) {
+                return Impl.decodeFont(file_type, data, params, allocator);
+            }
+            return error.FontBackendNotImplemented;
+        }
+
+        /// Main/GL thread only. Uploads the alpha atlas to a GPU
+        /// texture and returns a backend `FontAtlas` handle. Does NOT
+        /// free any of the slices in `decoded` — the caller frees them
+        /// on both the success and discard paths, same contract as
+        /// `uploadTexture` for `DecodedImage.pixels`.
+        pub inline fn uploadFontAtlas(decoded: DecodedFont) !FontAtlas {
+            if (@hasDecl(Impl, "uploadFontAtlas")) {
+                return Impl.uploadFontAtlas(decoded);
+            }
+            return error.FontBackendNotImplemented;
+        }
+
+        /// Releases the GPU atlas + any backend-side glyph metadata
+        /// the upload allocated. Counterpart to `uploadFontAtlas`.
+        pub inline fn unloadFontAtlas(atlas: FontAtlas) void {
+            if (@hasDecl(Impl, "unloadFontAtlas")) {
+                Impl.unloadFontAtlas(atlas);
+            }
         }
 
         pub inline fn beginMode2D(camera: Camera2D) void {
