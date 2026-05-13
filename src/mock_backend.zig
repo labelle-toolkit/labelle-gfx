@@ -4,6 +4,16 @@ const backend_mod = @import("backend.zig");
 /// Mock backend for testing — records draw calls without any native dependencies.
 pub const MockBackend = struct {
     pub const DecodedImage = backend_mod.DecodedImage;
+    pub const DecodedFont = backend_mod.DecodedFont;
+    pub const FontBakeParams = backend_mod.FontBakeParams;
+
+    /// Mock font atlas handle — generation tagged to detect
+    /// use-after-free under test, parallel to `Texture.id` for images.
+    pub const FontAtlas = struct {
+        id: u32,
+        width: u32,
+        height: u32,
+    };
 
     pub const Texture = struct {
         id: u32,
@@ -97,6 +107,8 @@ pub const MockBackend = struct {
     threadlocal var screen_width_val: i32 = 800;
     threadlocal var screen_height_val: i32 = 600;
     threadlocal var texture_counter: u32 = 1;
+    threadlocal var font_atlas_counter: u32 = 1;
+    threadlocal var font_atlas_unload_calls: u32 = 0;
     threadlocal var in_camera_mode: bool = false;
 
     pub fn initMock(allocator: std.mem.Allocator) void {
@@ -107,6 +119,8 @@ pub const MockBackend = struct {
         line_calls_list = .empty;
         text_calls_list = .empty;
         texture_counter = 1;
+        font_atlas_counter = 1;
+        font_atlas_unload_calls = 0;
         in_camera_mode = false;
     }
 
@@ -133,7 +147,13 @@ pub const MockBackend = struct {
         line_calls_list.clearRetainingCapacity();
         text_calls_list.clearRetainingCapacity();
         texture_counter = 1;
+        font_atlas_counter = 1;
+        font_atlas_unload_calls = 0;
         in_camera_mode = false;
+    }
+
+    pub fn getFontAtlasUnloadCalls() u32 {
+        return font_atlas_unload_calls;
     }
 
     pub fn getDrawCalls() []const DrawCall {
@@ -283,6 +303,67 @@ pub const MockBackend = struct {
     }
 
     pub fn unloadTexture(_: Texture) void {}
+
+    /// Stub CPU bake: returns a 1×1 alpha atlas with a single glyph
+    /// covering codepoint `params.ranges[0].first` (or 0x20 if ranges
+    /// is empty). All four slices come from the caller's allocator;
+    /// the caller frees them on both the success and discard paths,
+    /// same contract as `decodeImage` for `pixels`.
+    pub fn decodeFont(
+        _: [:0]const u8,
+        _: []const u8,
+        params: backend_mod.FontBakeParams,
+        allocator: std.mem.Allocator,
+    ) !backend_mod.DecodedFont {
+        const bitmap = try allocator.alloc(u8, 1);
+        bitmap[0] = 255;
+
+        const glyphs = try allocator.alloc(backend_mod.Glyph, 1);
+        glyphs[0] = .{
+            .u0 = 0,
+            .v0 = 0,
+            .u1 = 1,
+            .v1 = 1,
+            .xoff = 0,
+            .yoff = 0,
+            .advance = params.pixel_height,
+        };
+
+        const idx = try allocator.alloc(backend_mod.CodepointEntry, 1);
+        const first_cp: u32 = if (params.ranges.len > 0) params.ranges[0].first else 0x20;
+        idx[0] = .{ .codepoint = first_cp, .glyph_index = 0 };
+
+        const kerning = try allocator.alloc(backend_mod.KernPair, 0);
+
+        return .{
+            .bitmap = bitmap,
+            .width = 1,
+            .height = 1,
+            .glyphs = glyphs,
+            .codepoint_index = idx,
+            .ascent = params.pixel_height * 0.8,
+            .descent = -params.pixel_height * 0.2,
+            .line_gap = 0,
+            .line_height = params.pixel_height,
+            .kerning = kerning,
+        };
+    }
+
+    /// Stub GPU upload: returns a fresh mock `FontAtlas` and records
+    /// nothing about the slices (the caller still owns them).
+    pub fn uploadFontAtlas(decoded: backend_mod.DecodedFont) !FontAtlas {
+        const id = font_atlas_counter;
+        font_atlas_counter += 1;
+        return FontAtlas{
+            .id = id,
+            .width = decoded.width,
+            .height = decoded.height,
+        };
+    }
+
+    pub fn unloadFontAtlas(_: FontAtlas) void {
+        font_atlas_unload_calls += 1;
+    }
 
     pub fn beginMode2D(_: Camera2D) void {
         in_camera_mode = true;

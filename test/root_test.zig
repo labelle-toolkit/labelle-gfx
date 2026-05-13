@@ -119,6 +119,77 @@ test "Backend: loadTextureFromMemory wrapper still works (no caller break)" {
     try testing.expect(tex.id != 0);
 }
 
+// ── decodeFont / uploadFontAtlas / unloadFontAtlas (Phase 4, #448) ────────
+
+test "Backend: font bake → upload → unload round trip" {
+    const B = Backend(MockBackend);
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const params: gfx.FontBakeParams = .{ .pixel_height = 16 };
+    const decoded = try B.decodeFont("ttf", &[_]u8{}, params, testing.allocator);
+
+    // Stub returns 1×1 alpha atlas with one glyph for the first codepoint
+    // of the default ASCII printable range (0x20 — space).
+    try testing.expectEqual(@as(u32, 1), decoded.width);
+    try testing.expectEqual(@as(u32, 1), decoded.height);
+    try testing.expectEqual(@as(usize, 1), decoded.bitmap.len);
+    try testing.expectEqual(@as(usize, 1), decoded.glyphs.len);
+    try testing.expectEqual(@as(u32, 0x20), decoded.codepoint_index[0].codepoint);
+    try testing.expectEqual(@as(f32, 16), decoded.line_height);
+
+    const atlas = try B.uploadFontAtlas(decoded);
+    try testing.expect(atlas.id != 0);
+
+    // Caller owns all four slices on the success path.
+    testing.allocator.free(decoded.bitmap);
+    testing.allocator.free(decoded.glyphs);
+    testing.allocator.free(decoded.codepoint_index);
+    testing.allocator.free(decoded.kerning);
+
+    try testing.expectEqual(@as(u32, 0), MockBackend.getFontAtlasUnloadCalls());
+    B.unloadFontAtlas(atlas);
+    try testing.expectEqual(@as(u32, 1), MockBackend.getFontAtlasUnloadCalls());
+}
+
+test "Backend: font discard path frees decoded slices without uploadFontAtlas" {
+    const B = Backend(MockBackend);
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const params: gfx.FontBakeParams = .{};
+    const decoded = try B.decodeFont("ttf", &[_]u8{}, params, testing.allocator);
+
+    // Refcount hit zero before the upload — the catalog frees the four owned
+    // slices through the same allocator with no GPU-side state to undo.
+    // testing.allocator is a GPA; it asserts on leaks or double-frees.
+    testing.allocator.free(decoded.bitmap);
+    testing.allocator.free(decoded.glyphs);
+    testing.allocator.free(decoded.codepoint_index);
+    testing.allocator.free(decoded.kerning);
+}
+
+test "Backend: decodeFont honours params.ranges first codepoint" {
+    const B = Backend(MockBackend);
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const ranges = [_]gfx.CodepointRange{
+        .{ .first = 0x41, .last = 0x5B }, // uppercase Latin
+    };
+    const params: gfx.FontBakeParams = .{ .ranges = &ranges, .pixel_height = 32 };
+    const decoded = try B.decodeFont("ttf", &[_]u8{}, params, testing.allocator);
+    defer {
+        testing.allocator.free(decoded.bitmap);
+        testing.allocator.free(decoded.glyphs);
+        testing.allocator.free(decoded.codepoint_index);
+        testing.allocator.free(decoded.kerning);
+    }
+
+    try testing.expectEqual(@as(u32, 0x41), decoded.codepoint_index[0].codepoint);
+    try testing.expectEqual(@as(f32, 32), decoded.line_height);
+}
+
 // ── RetainedEngine ─────────────────────────────────────────
 
 test "RetainedEngine: create and remove sprite" {
