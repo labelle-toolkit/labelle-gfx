@@ -52,7 +52,7 @@ pub fn SpatialGrid(comptime EntityId: type) type {
         cells: CellMap,
         cell_size: f32,
         allocator: std.mem.Allocator,
-        oversized: std.ArrayListUnmanaged(OversizedEntry) = .{},
+        oversized: std.ArrayListUnmanaged(OversizedEntry) = .empty,
 
         pub fn init(allocator: std.mem.Allocator, cell_size: f32) Self {
             return .{
@@ -126,7 +126,7 @@ pub fn SpatialGrid(comptime EntityId: type) type {
             for (cell_buf[0..count]) |coord| {
                 const gop = try self.cells.getOrPut(coord);
                 if (!gop.found_existing) {
-                    gop.value_ptr.* = .{};
+                    gop.value_ptr.* = .empty;
                 }
                 try gop.value_ptr.append(self.allocator, id);
             }
@@ -171,7 +171,7 @@ pub fn SpatialGrid(comptime EntityId: type) type {
 
         /// Query all entities overlapping the given viewport rectangle.
         pub fn query(self: *Self, viewport: Rect, allocator: std.mem.Allocator) !std.ArrayListUnmanaged(EntityId) {
-            var result = std.ArrayListUnmanaged(EntityId){};
+            var result: std.ArrayListUnmanaged(EntityId) = .empty;
             var seen = std.AutoHashMap(EntityId, void).init(allocator);
             defer seen.deinit();
 

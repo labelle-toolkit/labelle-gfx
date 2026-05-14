@@ -19,6 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: labelle-toolkit/labelle-core
+          ref: feat/zig-0.16-migration
           path: labelle-core-tmp
 
       - name: Move labelle-core to sibling directory
@@ -27,7 +28,7 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: '0.15.2'
+          version: '0.16.0'
 
       - name: Install raylib and sokol dependencies
         run: |
