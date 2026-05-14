@@ -9,8 +9,8 @@
             .hash = "labelle_core-1.1.0-OauRcBXiAABw6NKQxonsYQo83gJEAEbpkZJ7JQs-Dxom",
         },
         .zspec = .{
-            .url = "https://github.com/apotema/zspec/archive/v0.8.0.tar.gz",
-            .hash = "zspec-0.8.0-jaKLbSK-AwD6myJjkg3OfGAKJyj5iaFzFfVu-pcUsUn1",
+            .url = "https://github.com/apotema/zspec/archive/v0.9.1.tar.gz",
+            .hash = "zspec-0.9.1-jaKLbbX4AwBKANdetxzzWc3UTO0UY0lcJJzTagQHlt5K",
         },
     },
     .paths = .{
