@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: labelle-toolkit/labelle-core
-          ref: feat/zig-0.16-migration
+          ref: main
           path: labelle-core-tmp
 
       - name: Move labelle-core to sibling directory
