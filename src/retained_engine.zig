@@ -72,10 +72,10 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
 
         /// Cached entity AABB used to keep the spatial grid in sync — the
         /// grid's `remove`/`update` need the *old* bounds, which the
-        /// public mutation API does not pass in.
+        /// public mutation API does not pass in. Only entities with at
+        /// least one world-space visual have an entry here.
         const BoundsEntry = struct {
             bounds: CullRect,
-            cullable: bool,
         };
 
         allocator: std.mem.Allocator,
@@ -179,56 +179,160 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             return self.grid.occupiedCellCount();
         }
 
-        // Conservative AABB for an entity. Visuals are positioned by a
-        // pivot/anchor that differs per visual kind, so the box is grown
-        // symmetrically around the position by the visual's extent — a
-        // superset of the true footprint, which is always safe for
-        // culling (a never-clipped entity is correct, just not optimal).
+        // Cull AABB for an entity. The box must match what the renderer
+        // actually draws — the renderer positions each visual kind by a
+        // different anchor (sprites by a pivot, rectangles/text by their
+        // top-left, circles by their centre), so a box that simply
+        // centres on `position` would be offset from the real footprint
+        // and could clip a still-visible entity. Each `*Bounds` helper
+        // below reproduces its visual's draw geometry, including
+        // rotation, so the grid box is a tight superset of the rendered
+        // quad. A superset is always safe for culling (it can only keep
+        // an extra entity, never drop a visible one).
+
+        // Axis-aligned bounding box of a set of local corner points,
+        // rotated by `rotation` around `rot_pivot` and translated to
+        // world space by `pos`. `rotation` is in radians (the same unit
+        // the renderer feeds the backend).
+        fn rotatedAabb(
+            pos: Position,
+            rot_pivot: Position,
+            rotation: f32,
+            corners: []const Position,
+        ) CullRect {
+            const cos_r = @cos(rotation);
+            const sin_r = @sin(rotation);
+            var min_x: f32 = std.math.floatMax(f32);
+            var min_y: f32 = std.math.floatMax(f32);
+            var max_x: f32 = -std.math.floatMax(f32);
+            var max_y: f32 = -std.math.floatMax(f32);
+            for (corners) |c| {
+                // Rotate the corner around the rotation pivot.
+                const lx = c.x - rot_pivot.x;
+                const ly = c.y - rot_pivot.y;
+                const rx = rot_pivot.x + lx * cos_r - ly * sin_r;
+                const ry = rot_pivot.y + lx * sin_r + ly * cos_r;
+                const wx = pos.x + rx;
+                const wy = pos.y + ry;
+                min_x = @min(min_x, wx);
+                min_y = @min(min_y, wy);
+                max_x = @max(max_x, wx);
+                max_y = @max(max_y, wy);
+            }
+            return .{
+                .x = min_x,
+                .y = min_y,
+                .w = @max(max_x - min_x, 1),
+                .h = @max(max_y - min_y, 1),
+            };
+        }
+
+        // AABB of a sprite, matching `renderSpritesOnLayer`: the sprite
+        // quad has design size `dest_w x dest_h`, its top-left sits at
+        // `pos - origin` (origin = pivot offset into the quad), and it
+        // rotates about `pos` (the pivot point the renderer passes as
+        // the draw origin).
         fn spriteBounds(self: *const Self, entry: SpriteEntry) CullRect {
             const v = entry.visual;
-            var w: f32 = 64;
-            var h: f32 = 64;
+            var display_w: f32 = 64;
+            var display_h: f32 = 64;
             if (v.source_rect) |sr| {
-                w = if (sr.display_width > 0) sr.display_width else @abs(sr.width);
-                h = if (sr.display_height > 0) sr.display_height else @abs(sr.height);
+                display_w = if (sr.display_width > 0) sr.display_width else @abs(sr.width);
+                display_h = if (sr.display_height > 0) sr.display_height else @abs(sr.height);
             } else if (self.textures.get(v.texture.toInt())) |t| {
-                w = t.width;
-                h = t.height;
+                display_w = t.width;
+                display_h = t.height;
             }
-            w *= @abs(v.scale_x);
-            h *= @abs(v.scale_y);
-            return centeredBounds(entry.position, w, h);
+            const dest_w = display_w * @abs(v.scale_x);
+            const dest_h = display_h * @abs(v.scale_y);
+            const pivot_norm = v.pivot.getNormalized(v.pivot_x, v.pivot_y);
+            const origin_x = dest_w * pivot_norm.x;
+            const origin_y = dest_h * pivot_norm.y;
+            // Quad corners relative to `pos`: top-left is at `-origin`.
+            const corners = [_]Position{
+                .{ .x = -origin_x, .y = -origin_y },
+                .{ .x = dest_w - origin_x, .y = -origin_y },
+                .{ .x = dest_w - origin_x, .y = dest_h - origin_y },
+                .{ .x = -origin_x, .y = dest_h - origin_y },
+            };
+            return rotatedAabb(entry.position, .{ .x = 0, .y = 0 }, v.rotation, &corners);
         }
 
         fn shapeBounds(entry: ShapeEntry) CullRect {
             const v = entry.visual;
-            const extent: f32 = switch (v.shape) {
-                .circle => |c| c.radius * 2,
-                .rectangle => |r| @max(r.width, r.height),
-                .line => |l| @max(@abs(l.end.x), @abs(l.end.y)) * 2,
-                .triangle => |t| @max(
-                    @max(@abs(t.p2.x), @abs(t.p3.x)),
-                    @max(@abs(t.p2.y), @abs(t.p3.y)),
-                ) * 2,
-                .polygon => |p| p.radius * 2,
-            };
-            const e = extent * @max(@abs(v.scale_x), @abs(v.scale_y));
-            return centeredBounds(entry.position, e, e);
+            const pos = entry.position;
+            const sx = @abs(v.scale_x);
+            const sy = @abs(v.scale_y);
+            switch (v.shape) {
+                .circle => |c| {
+                    // Circles render centred on `pos`; scale_x drives the
+                    // radius (see `drawShapeEntry`).
+                    const r = c.radius * sx;
+                    const corners = [_]Position{
+                        .{ .x = -r, .y = -r },
+                        .{ .x = r, .y = -r },
+                        .{ .x = r, .y = r },
+                        .{ .x = -r, .y = r },
+                    };
+                    return rotatedAabb(pos, .{ .x = 0, .y = 0 }, 0, &corners);
+                },
+                .polygon => |p| {
+                    const r = p.radius * sx;
+                    const corners = [_]Position{
+                        .{ .x = -r, .y = -r },
+                        .{ .x = r, .y = -r },
+                        .{ .x = r, .y = r },
+                        .{ .x = -r, .y = r },
+                    };
+                    return rotatedAabb(pos, .{ .x = 0, .y = 0 }, 0, &corners);
+                },
+                .rectangle => |r| {
+                    // Rectangles render with `pos` as their top-left and
+                    // rotate about their centre `pos + (w/2, h/2)`.
+                    const w = r.width * sx;
+                    const h = r.height * sy;
+                    const corners = [_]Position{
+                        .{ .x = 0, .y = 0 },
+                        .{ .x = w, .y = 0 },
+                        .{ .x = w, .y = h },
+                        .{ .x = 0, .y = h },
+                    };
+                    return rotatedAabb(pos, .{ .x = w * 0.5, .y = h * 0.5 }, v.rotation, &corners);
+                },
+                .line => |l| {
+                    // Line spans `pos` -> `pos + end`.
+                    const corners = [_]Position{
+                        .{ .x = 0, .y = 0 },
+                        .{ .x = l.end.x, .y = l.end.y },
+                    };
+                    return rotatedAabb(pos, .{ .x = 0, .y = 0 }, 0, &corners);
+                },
+                .triangle => |t| {
+                    // Triangle vertices are `pos`, `pos + p2`, `pos + p3`.
+                    const corners = [_]Position{
+                        .{ .x = 0, .y = 0 },
+                        .{ .x = t.p2.x, .y = t.p2.y },
+                        .{ .x = t.p3.x, .y = t.p3.y },
+                    };
+                    return rotatedAabb(pos, .{ .x = 0, .y = 0 }, 0, &corners);
+                },
+            }
         }
 
         fn textBounds(entry: TextEntry) CullRect {
             const v = entry.visual;
-            // Width is unknown without measuring; approximate generously
-            // (every glyph at full em-square). Over-estimating only costs
-            // a few extra candidates.
-            const w = @as(f32, @floatFromInt(v.text.len)) * v.size;
-            return centeredBounds(entry.position, @max(w, v.size), v.size);
-        }
-
-        fn centeredBounds(pos: Position, w: f32, h: f32) CullRect {
-            const hw = @max(w, 1) * 0.5;
-            const hh = @max(h, 1) * 0.5;
-            return .{ .x = pos.x - hw, .y = pos.y - hh, .w = hw * 2, .h = hh * 2 };
+            // Text renders with `pos` as its top-left (see `drawTextEntry`).
+            // Width is unknown without measuring the font, so approximate
+            // generously (every glyph at a full em-square). Over-estimating
+            // only costs a few extra candidates — never a dropped draw.
+            const w = @max(@as(f32, @floatFromInt(v.text.len)) * v.size, v.size);
+            const corners = [_]Position{
+                .{ .x = 0, .y = 0 },
+                .{ .x = w, .y = 0 },
+                .{ .x = w, .y = v.size },
+                .{ .x = 0, .y = v.size },
+            };
+            return rotatedAabb(entry.position, .{ .x = 0, .y = 0 }, 0, &corners);
         }
 
         fn rectUnion(a: CullRect, b: CullRect) CullRect {
@@ -241,53 +345,81 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
 
         // Recompute the spatial-grid entry for `id` from whatever
         // visuals it currently owns. The engine permits one entity id
-        // to carry a sprite, a shape and a text at once; the grid is
-        // keyed by id, so the indexed AABB must be the *union* of every
-        // kind's box — anything smaller could drop a visual that
-        // overlaps the viewport. An id is `cullable` only if every
-        // visual it owns lives on a world-space layer (a screen-space
-        // visual must always draw, so such ids stay out of the grid and
-        // are emitted unconditionally by the renderer).
+        // to carry a sprite, a shape and a text at once, and those
+        // visuals may sit on *different* layers — some world-space,
+        // some screen-space.
+        //
+        // The grid only matters for world-space visuals (screen-space
+        // ones are pinned and always drawn). Cullability is therefore
+        // decided *per visual kind*, not per entity: the indexed AABB
+        // is the union of only the entity's world-space visual boxes,
+        // and an entity is placed in the grid as long as it has at
+        // least one such visual. A previous version marked the whole
+        // id non-cullable if *any* visual was screen-space, which made
+        // its world-space visuals vanish under culling — the
+        // renderer's world-layer pass only draws ids the grid returns.
         fn reindexEntity(self: *Self, id: u32) void {
             var bounds: ?CullRect = null;
-            var cullable = true;
             if (self.sprites.get(id)) |e| {
-                bounds = self.spriteBounds(e);
-                if (!isWorldLayer(e.visual.layer)) cullable = false;
+                if (isWorldLayer(e.visual.layer)) {
+                    const b = self.spriteBounds(e);
+                    bounds = if (bounds) |cur| rectUnion(cur, b) else b;
+                }
             }
             if (self.shapes.get(id)) |e| {
-                const b = shapeBounds(e);
-                bounds = if (bounds) |cur| rectUnion(cur, b) else b;
-                if (!isWorldLayer(e.visual.layer)) cullable = false;
+                if (isWorldLayer(e.visual.layer)) {
+                    const b = shapeBounds(e);
+                    bounds = if (bounds) |cur| rectUnion(cur, b) else b;
+                }
             }
             if (self.texts.get(id)) |e| {
-                const b = textBounds(e);
-                bounds = if (bounds) |cur| rectUnion(cur, b) else b;
-                if (!isWorldLayer(e.visual.layer)) cullable = false;
+                if (isWorldLayer(e.visual.layer)) {
+                    const b = textBounds(e);
+                    bounds = if (bounds) |cur| rectUnion(cur, b) else b;
+                }
             }
             if (bounds) |b| {
-                self.indexEntity(id, b, cullable);
+                self.indexEntity(id, b);
             } else {
                 self.unindexEntity(id);
             }
         }
 
-        // Insert or move an entity in the spatial grid. `cullable` is
-        // false for screen-space visuals — they are always drawn, so
-        // there is no point indexing them.
-        fn indexEntity(self: *Self, id: u32, bounds: CullRect, cullable: bool) void {
+        // Insert or move an entity in the spatial grid, replacing any
+        // previously-indexed AABB for the same id.
+        fn indexEntity(self: *Self, id: u32, bounds: CullRect) void {
             const gop = self.entity_bounds.getOrPut(id) catch return;
             if (gop.found_existing) {
-                const old = gop.value_ptr.*;
-                if (old.cullable) self.grid.remove(id, old.bounds);
+                self.grid.remove(id, gop.value_ptr.bounds);
             }
-            gop.value_ptr.* = .{ .bounds = bounds, .cullable = cullable };
-            if (cullable) self.grid.insert(id, bounds) catch {};
+            gop.value_ptr.* = .{ .bounds = bounds };
+            self.grid.insert(id, bounds) catch {
+                // Insert failed (OOM): drop the stale cache entry so a
+                // later reindex does not try to `remove` a box that was
+                // never inserted.
+                _ = self.entity_bounds.remove(id);
+            };
         }
 
         fn unindexEntity(self: *Self, id: u32) void {
             if (self.entity_bounds.fetchRemove(id)) |kv| {
-                if (kv.value.cullable) self.grid.remove(id, kv.value.bounds);
+                self.grid.remove(id, kv.value.bounds);
+            }
+        }
+
+        // Reindex every sprite that draws from `tex_id` and has no
+        // explicit `source_rect`. Such sprites size their cull AABB
+        // from the texture's dimensions, so a (re)registered texture
+        // changes their footprint — without this, a sprite created
+        // before its texture loads keeps a stale 64x64 fallback box and
+        // is wrongly culled once the real (larger) texture arrives.
+        fn reindexSpritesUsingTexture(self: *Self, tex_id: u32) void {
+            var it = self.sprites.iterator();
+            while (it.next()) |entry| {
+                const v = entry.value_ptr.visual;
+                if (v.source_rect != null) continue;
+                if (v.texture.toInt() != tex_id) continue;
+                self.reindexEntity(entry.key_ptr.*);
             }
         }
 
@@ -295,11 +427,17 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         // The grid query is a broad phase; callers still apply the
         // exact per-visual filters (layer, visibility), so the drawn
         // set matches the linear path exactly.
-        fn cullCandidates(self: *Self, viewport: CullRect) []const u32 {
+        //
+        // Returns `null` if the query or buffer copy fails to allocate.
+        // The caller MUST treat `null` as "fall back to the full linear
+        // scan" — returning an empty slice instead would make the
+        // renderer silently drop every world-space draw on an OOM,
+        // which is far worse than a one-frame loss of the acceleration.
+        fn cullCandidates(self: *Self, viewport: CullRect) ?[]const u32 {
             self.cull_scratch.clearRetainingCapacity();
-            var result = self.grid.query(viewport, self.allocator) catch return &.{};
+            var result = self.grid.query(viewport, self.allocator) catch return null;
             defer result.deinit(self.allocator);
-            self.cull_scratch.appendSlice(self.allocator, result.items) catch {};
+            self.cull_scratch.appendSlice(self.allocator, result.items) catch return null;
             return self.cull_scratch.items;
         }
 
@@ -313,6 +451,10 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 .width = @floatFromInt(tex.width),
                 .height = @floatFromInt(tex.height),
             }) catch {};
+            // Sprites already referencing this id sized their cull box
+            // from a fallback dimension — refresh them now the real
+            // texture dimensions are known.
+            self.reindexSpritesUsingTexture(id.toInt());
             return id;
         }
 
@@ -324,6 +466,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 .width = @floatFromInt(tex.width),
                 .height = @floatFromInt(tex.height),
             }) catch {};
+            self.reindexSpritesUsingTexture(id.toInt());
             return id;
         }
 
@@ -354,6 +497,10 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 .width = @floatFromInt(backend_tex.width),
                 .height = @floatFromInt(backend_tex.height),
             }) catch {};
+            // A sprite may be created (referencing this handle) before
+            // the catalog finishes uploading its texture; reindex so the
+            // cull box reflects the now-known dimensions.
+            self.reindexSpritesUsingTexture(handle);
         }
 
         pub fn getTextureInfo(self: *const Self, id: TextureId) ?TextureInfo {
@@ -507,6 +654,11 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // grid query instead of scanning every entity. Screen-space
             // layers (and the no-viewport case) keep the full scan —
             // their content is pinned and always visible.
+            //
+            // `cullCandidates` returns `null` when the query fails to
+            // allocate; that also lands here as a full linear scan, so
+            // an OOM degrades the acceleration for one frame instead of
+            // dropping every world-space draw.
             const candidates: ?[]const u32 = blk: {
                 if (!isWorldLayer(layer)) break :blk null;
                 const vp = self.cull_viewport orelse break :blk null;

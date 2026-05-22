@@ -1008,3 +1008,158 @@ test "culling: benchmark — spatial path slashes per-frame culling work" {
     // fold. Measured ~6.5x on this scenario — assert a conservative 4x.
     try testing.expect(spatial_candidates * 4 < linear_candidates);
 }
+
+test "culling: entity with both a world and a screen visual keeps its world draw" {
+    // Regression for the mixed-layer bug: a single entity id may carry
+    // a world-space sprite *and* a screen-space text. A previous
+    // `reindexEntity` marked the whole id non-cullable whenever any of
+    // its visuals was screen-space, which kept the id out of the grid
+    // entirely — so its world-space sprite silently vanished under
+    // culling. Both visuals must draw.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const id = EntityId.from(1);
+    // World-space sprite inside the viewport.
+    engine.createSprite(id, .{ .sprite_name = "world", .layer = .world }, .{ .x = 100, .y = 100 });
+    // Screen-space text on the *same* id (DefaultLayers.ui is screen-space).
+    engine.createText(id, .{ .text = "hud", .layer = .ui }, .{ .x = 100, .y = 100 });
+
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 400, .h = 400 });
+    engine.render();
+
+    // The world sprite must still produce a draw call...
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+    // ...and the screen-space text is pinned, so it draws too.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getTextCallCount());
+}
+
+test "culling: world visual on a mixed-layer entity is culled when off-screen" {
+    // Counterpart to the test above: the world-space sprite must still
+    // be culled normally when it leaves the viewport, even though the
+    // entity also owns a (pinned) screen-space text.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const id = EntityId.from(1);
+    engine.createSprite(id, .{ .sprite_name = "world", .layer = .world }, .{ .x = 9000, .y = 9000 });
+    engine.createText(id, .{ .text = "hud", .layer = .ui }, .{ .x = 9000, .y = 9000 });
+
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 400, .h = 400 });
+    engine.render();
+
+    // Sprite is off-screen -> no texture draw.
+    try testing.expectEqual(@as(usize, 0), MockBackend.getDrawCallCount());
+    // Screen-space text is never culled.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getTextCallCount());
+}
+
+test "culling: registering a catalog texture reindexes its sprites" {
+    // Regression for stale texture-dimension bounds: a sprite created
+    // before its texture is registered sizes its cull AABB from a 64x64
+    // fallback. Once the real (much larger) texture is registered, the
+    // sprite's footprint grows — `registerCatalogTexture` must reindex
+    // affected sprites so the grid box reflects the true size, or the
+    // sprite is wrongly culled when only its larger extent overlaps.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const handle: u32 = 4242;
+    const tex_id = gfx.TextureId.from(handle);
+
+    // Sprite at (500,500) with no source_rect: its cull box derives
+    // from the texture dimensions. The texture is not registered yet,
+    // so it falls back to 64x64 -> AABB (468,468)..(532,532).
+    engine.createSprite(
+        EntityId.from(1),
+        .{ .sprite_name = "big", .texture = tex_id, .layer = .world },
+        .{ .x = 500, .y = 500 },
+    );
+
+    // Viewport touches (500,500) only via the *large* texture extent:
+    // a 64x64 box around the sprite would NOT reach x<=400, but a
+    // 600x600 texture centred there spans (200,200)..(800,800).
+    const vp = gfx.retained_engine_mod.CullRect{ .x = 0, .y = 0, .w = 300, .h = 300 };
+    engine.setCullViewport(vp);
+
+    // With the stale 64x64 fallback box the sprite is culled.
+    engine.render();
+    try testing.expectEqual(@as(usize, 0), MockBackend.getDrawCallCount());
+
+    // Register the real 600x600 texture — this must reindex the sprite.
+    engine.registerCatalogTexture(handle, .{ .id = handle, .width = 600, .height = 600 });
+
+    MockBackend.resetMock();
+    engine.render();
+    // Now the 600x600 footprint overlaps the viewport -> drawn.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
+test "culling: loadTexture reindexes sprites sized from texture dimensions" {
+    // `loadTexture` (MockBackend yields a 256x256 texture) must also
+    // reindex sprites that were created referencing the id beforehand.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // MockBackend.loadTexture hands out ids from an incrementing
+    // counter starting at 1 — the first load returns id 1.
+    const tex_id = gfx.TextureId.from(1);
+    engine.createSprite(
+        EntityId.from(1),
+        .{ .sprite_name = "s", .texture = tex_id, .layer = .world },
+        .{ .x = 200, .y = 200 },
+    );
+
+    // Viewport reachable only via the 256x256 extent (centre pivot ->
+    // box (72,72)..(328,328)), not the 64x64 fallback (168..232).
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 120, .h = 120 });
+    engine.render();
+    try testing.expectEqual(@as(usize, 0), MockBackend.getDrawCallCount());
+
+    const loaded = try engine.loadTexture("dummy.png");
+    try testing.expectEqual(tex_id.toInt(), loaded.toInt());
+
+    MockBackend.resetMock();
+    engine.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
+test "culling: non-centred sprite pivot is not prematurely culled" {
+    // Regression for the origin-mismatch bug: the cull AABB used to be
+    // centred on `position` regardless of the sprite's pivot, but the
+    // renderer anchors a `top_left`-pivot sprite with its top-left
+    // corner at `position`. A viewport just past the position (in the
+    // +x/+y direction) overlaps the real quad but missed the old
+    // centred box.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // top_left pivot: the 64x64 sprite spans (300,300)..(364,364).
+    engine.createSprite(
+        EntityId.from(1),
+        .{ .sprite_name = "tl", .layer = .world, .pivot = .top_left },
+        .{ .x = 300, .y = 300 },
+    );
+
+    // Viewport (340,340,40,40) overlaps the real quad's lower-right
+    // region. A box centred on (300,300) would be (268,268)..(332,332)
+    // and would NOT overlap -> the sprite would be wrongly culled.
+    engine.setCullViewport(.{ .x = 340, .y = 340, .w = 40, .h = 40 });
+    engine.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
