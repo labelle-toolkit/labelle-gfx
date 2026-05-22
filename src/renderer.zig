@@ -369,7 +369,12 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
                 min_y = @min(min_y, center_y - half_h);
                 max_y = @max(max_y, center_y + half_h);
             }
-            if (!any) return;
+            // No active cameras — clear the cull rect rather than leave
+            // a stale one from a previous frame.
+            if (!any) {
+                self.inner.clearCullViewport();
+                return;
+            }
 
             // Y-up world box -> Y-down engine space (screen-flipped).
             self.inner.setCullViewport(.{
