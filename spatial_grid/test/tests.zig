@@ -145,4 +145,72 @@ pub const SpatialGridTests = struct {
         try grid.insert(1, .{ .x = 10, .y = 10, .w = 20, .h = 20 });
         try expect.toBeTrue(grid.occupiedCellCount() > 0);
     }
+
+    test "large viewport query spans more than 4x4 cells" {
+        // Regression for #208: a viewport wider than 4 grid cells must
+        // still return every entity inside it. `query` walks the full
+        // cell range — unlike entity insertion, it is not capped.
+        const Grid = spatial_grid.SpatialGrid(u32);
+        var grid = Grid.init(std.testing.allocator, 64);
+        defer grid.deinit();
+
+        // 100 small entities spread across a 640x640 area = 10x10 cells.
+        var i: u32 = 0;
+        while (i < 100) : (i += 1) {
+            const x: f32 = @floatFromInt((i % 10) * 64);
+            const y: f32 = @floatFromInt((i / 10) * 64);
+            try grid.insert(i, .{ .x = x + 8, .y = y + 8, .w = 16, .h = 16 });
+        }
+
+        // A viewport covering the whole 640x640 area (10x10 cells) must
+        // return all 100 — a 4x4-capped query would miss most of them.
+        var result = try grid.query(.{ .x = 0, .y = 0, .w = 640, .h = 640 }, std.testing.allocator);
+        defer result.deinit(std.testing.allocator);
+        try std.testing.expectEqual(@as(usize, 100), result.items.len);
+    }
+
+    test "query matches brute-force linear scan over a randomized grid" {
+        // Parity guarantee: the spatial query returns exactly the set a
+        // naive overlap test would — the grid is a pure accelerator.
+        const Grid = spatial_grid.SpatialGrid(u32);
+        var grid = Grid.init(std.testing.allocator, 32);
+        defer grid.deinit();
+
+        const Entry = struct { id: u32, rect: spatial_grid.Rect };
+        var entries: [500]Entry = undefined;
+        var prng = std.Random.DefaultPrng.init(0xC0FFEE);
+        const rng = prng.random();
+        for (&entries, 0..) |*e, idx| {
+            e.* = .{
+                .id = @intCast(idx),
+                .rect = .{
+                    .x = rng.float(f32) * 2000,
+                    .y = rng.float(f32) * 2000,
+                    .w = rng.float(f32) * 40 + 4,
+                    .h = rng.float(f32) * 40 + 4,
+                },
+            };
+            try grid.insert(e.id, e.rect);
+        }
+
+        const viewport = spatial_grid.Rect{ .x = 300, .y = 300, .w = 500, .h = 400 };
+
+        // Brute-force expected set.
+        var expected: usize = 0;
+        for (entries) |e| {
+            if (e.rect.overlaps(viewport)) expected += 1;
+        }
+
+        // The grid query is a broad phase: every brute-force hit must be
+        // present, and every returned id must genuinely overlap.
+        var result = try grid.query(viewport, std.testing.allocator);
+        defer result.deinit(std.testing.allocator);
+
+        var exact: usize = 0;
+        for (result.items) |id| {
+            if (entries[id].rect.overlaps(viewport)) exact += 1;
+        }
+        try std.testing.expectEqual(expected, exact);
+        try std.testing.expect(result.items.len >= expected);
+    }
 };

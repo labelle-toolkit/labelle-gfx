@@ -71,6 +71,14 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
         tracked: std.AutoHashMap(Entity, TrackedEntity),
         camera_mgr: CameraManagerT = CameraManagerT.init(),
         screen_height: f32 = 600,
+        /// When true, `render` culls world-space entities to the primary
+        /// camera viewport via the retained engine's spatial grid. Off
+        /// by default so existing callers see no behaviour change.
+        viewport_culling: bool = false,
+        /// Extra margin (world units) added on every side of the cull
+        /// viewport. Guards against popping at the screen edge for
+        /// entities whose drawn extent exceeds the indexed AABB.
+        cull_margin: f32 = 64,
 
         pub fn init(allocator: std.mem.Allocator) Self {
             return .{
@@ -87,6 +95,18 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
 
         pub fn setScreenHeight(self: *Self, height: f32) void {
             self.screen_height = height;
+        }
+
+        /// Enable/disable spatial-grid viewport culling for world-space
+        /// layers. When enabled, `render` only issues draw calls for
+        /// entities whose bounding box overlaps the primary camera's
+        /// viewport — the spatial grid turns the per-frame cull from
+        /// O(total entities) into O(visible entities). Screen-space
+        /// layers are unaffected (always drawn). Purely an
+        /// acceleration: the visible set is unchanged.
+        pub fn setViewportCulling(self: *Self, enabled: bool) void {
+            self.viewport_culling = enabled;
+            if (!enabled) self.inner.clearCullViewport();
         }
 
         pub fn loadTexture(self: *Self, path: [:0]const u8) !types_mod.TextureId {
@@ -299,6 +319,72 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
             }
         }
 
+        /// Derive the retained engine's cull viewport. The cull rect
+        /// must cover *every* active camera's view: in split-screen each
+        /// camera shows a different world region, so the rect is the
+        /// union (enclosing AABB) of all active cameras' world-space
+        /// viewports — using only the primary camera would wrongly cull
+        /// entities visible in a secondary camera (labelle-gfx#226 +
+        /// #208 interaction). A larger rect is always safe for culling:
+        /// it only keeps extra candidates, never drops a visible one.
+        /// The camera viewport is Y-up world space; entities are stored
+        /// Y-down (screen-flipped by `syncPosition`/`toScreenY`), so the
+        /// result is flipped before being handed to the engine. A
+        /// `cull_margin` is added on every side.
+        fn applyCullViewport(self: *Self) void {
+            const m = self.cull_margin;
+            const sh = self.screen_height;
+
+            var min_x: f32 = std.math.floatMax(f32);
+            var min_y: f32 = std.math.floatMax(f32);
+            var max_x: f32 = -std.math.floatMax(f32);
+            var max_y: f32 = -std.math.floatMax(f32);
+            var any = false;
+
+            var it = self.camera_mgr.activeIterator();
+            while (it.next()) |cam| {
+                any = true;
+                const vp = cam.getViewport();
+
+                // `getViewport()` returns the axis-aligned world box of
+                // an *unrotated* camera. When the camera is rotated the
+                // visible region is that box spun about its centre,
+                // whose enclosing AABB is larger — expand to that AABB
+                // so a rotated camera does not cull sprites it still
+                // shows at the view edges.
+                var half_w = vp.width / 2;
+                var half_h = vp.height / 2;
+                if (cam.rotation != 0) {
+                    const cos_r = @abs(@cos(cam.rotation));
+                    const sin_r = @abs(@sin(cam.rotation));
+                    const rot_half_w = half_w * cos_r + half_h * sin_r;
+                    const rot_half_h = half_w * sin_r + half_h * cos_r;
+                    half_w = rot_half_w;
+                    half_h = rot_half_h;
+                }
+                const center_x = vp.x + vp.width / 2;
+                const center_y = vp.y + vp.height / 2;
+                min_x = @min(min_x, center_x - half_w);
+                max_x = @max(max_x, center_x + half_w);
+                min_y = @min(min_y, center_y - half_h);
+                max_y = @max(max_y, center_y + half_h);
+            }
+            // No active cameras — clear the cull rect rather than leave
+            // a stale one from a previous frame.
+            if (!any) {
+                self.inner.clearCullViewport();
+                return;
+            }
+
+            // Y-up world box -> Y-down engine space (screen-flipped).
+            self.inner.setCullViewport(.{
+                .x = min_x - m,
+                .y = sh - max_y - m,
+                .w = (max_x - min_x) + 2 * m,
+                .h = (max_y - min_y) + 2 * m,
+            });
+        }
+
         /// Apply a camera's screen-space viewport (split-screen scissor /
         /// glViewport). Optional backend hook — backends that declare
         /// `setViewport(x, y, w, h)` get true split-screen rendering;
@@ -327,6 +413,12 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
         /// active cameras (labelle-gfx#226 — previously only the primary
         /// camera was ever rendered, so cameras 1-3 were invisible).
         pub fn render(self: *Self) void {
+            // Viewport culling (labelle-gfx#208) populates the engine's
+            // global cull rect once per frame, derived from the primary
+            // camera, before any camera pass.
+            if (self.viewport_culling) {
+                self.applyCullViewport();
+            }
             var it = self.camera_mgr.activeIterator();
             while (it.next()) |cam| {
                 applyViewport(cam);

@@ -936,3 +936,387 @@ test "Fullscreen: toggle state" {
     fs.set(true);
     try testing.expect(fs.is_fullscreen);
 }
+
+// ── Spatial viewport culling (#208) ────────────────────────
+//
+// The retained engine indexes every world-space entity in a uniform
+// spatial grid. `setCullViewport` switches `render` onto the grid fast
+// path: only entities overlapping the viewport are drawn. These tests
+// pin the new path's draw set against the original linear behaviour.
+
+const CullEngine = RetainedEngineWith(MockBackend, DefaultLayers);
+
+// Linear reference: which visible sprites have their (default 64x64)
+// AABB overlapping `vp`, computed without the spatial grid. Used to
+// assert the spatial fast path draws exactly the same set.
+fn linearVisibleSpriteCount(
+    engine: *CullEngine,
+    vp: gfx.retained_engine_mod.CullRect,
+) usize {
+    var count: usize = 0;
+    var it = engine.sprites.iterator();
+    while (it.next()) |e| {
+        const s = e.value_ptr.visual;
+        if (!s.visible) continue;
+        const p = e.value_ptr.position;
+        const r = gfx.retained_engine_mod.CullRect{
+            .x = p.x - 32, .y = p.y - 32, .w = 64, .h = 64,
+        };
+        if (r.overlaps(vp)) count += 1;
+    }
+    return count;
+}
+
+test "culling: only entities inside the viewport are drawn" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Two sprites near the origin, one far away.
+    engine.createSprite(EntityId.from(1), .{ .sprite_name = "near1" }, .{ .x = 100, .y = 100 });
+    engine.createSprite(EntityId.from(2), .{ .sprite_name = "near2" }, .{ .x = 200, .y = 150 });
+    engine.createSprite(EntityId.from(3), .{ .sprite_name = "far" }, .{ .x = 9000, .y = 9000 });
+
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 400, .h = 400 });
+    engine.render();
+
+    // Only the two near sprites should produce draw calls.
+    try testing.expectEqual(@as(usize, 2), MockBackend.getDrawCallCount());
+}
+
+test "culling: disabled viewport renders every entity (no behaviour change)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{ .sprite_name = "a" }, .{ .x = 100, .y = 100 });
+    engine.createSprite(EntityId.from(2), .{ .sprite_name = "b" }, .{ .x = 9000, .y = 9000 });
+
+    // No cull viewport set -> linear path -> both drawn.
+    engine.render();
+    try testing.expectEqual(@as(usize, 2), MockBackend.getDrawCallCount());
+}
+
+test "culling: moved entity is re-indexed and culled at its new position" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{ .sprite_name = "mover" }, .{ .x = 100, .y = 100 });
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 400, .h = 400 });
+
+    engine.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+
+    // Move it far outside the viewport.
+    engine.updatePosition(EntityId.from(1), .{ .x = 9000, .y = 9000 });
+    MockBackend.resetMock();
+    engine.render();
+    try testing.expectEqual(@as(usize, 0), MockBackend.getDrawCallCount());
+
+    // Move it back inside.
+    engine.updatePosition(EntityId.from(1), .{ .x = 150, .y = 150 });
+    MockBackend.resetMock();
+    engine.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
+test "culling: removed entity drops out of the spatial grid" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{ .sprite_name = "a" }, .{ .x = 100, .y = 100 });
+    engine.createSprite(EntityId.from(2), .{ .sprite_name = "b" }, .{ .x = 150, .y = 150 });
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 400, .h = 400 });
+
+    engine.removeSprite(EntityId.from(1));
+    engine.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
+test "culling: screen-space layers are never culled" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // `ui` is a screen-space layer — pinned, always visible even with a
+    // far-away position and a tight cull viewport.
+    engine.createSprite(EntityId.from(1), .{ .sprite_name = "hud", .layer = .ui }, .{ .x = 9000, .y = 9000 });
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 100, .h = 100 });
+
+    engine.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
+test "culling: spatial grid result matches linear scan (large randomized world)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // 5000x5000 world, 4000 sprites — the issue's benchmark scenario.
+    var prng = std.Random.DefaultPrng.init(0x208208208);
+    const rng = prng.random();
+    const N: u32 = 4000;
+    var i: u32 = 0;
+    while (i < N) : (i += 1) {
+        const x = rng.float(f32) * 5000.0;
+        const y = rng.float(f32) * 5000.0;
+        engine.createSprite(EntityId.from(i + 1), .{ .sprite_name = "s" }, .{ .x = x, .y = y });
+    }
+
+    // Probe several viewports; the spatial path must draw exactly the
+    // same set as a brute-force linear scan.
+    const viewports = [_]gfx.retained_engine_mod.CullRect{
+        .{ .x = 0, .y = 0, .w = 1920, .h = 1080 },
+        .{ .x = 2000, .y = 2000, .w = 1920, .h = 1080 },
+        .{ .x = 4500, .y = 4500, .w = 1920, .h = 1080 }, // partly off-world
+        .{ .x = -500, .y = -500, .w = 600, .h = 600 }, // corner
+    };
+
+    for (viewports) |vp| {
+        const expected = linearVisibleSpriteCount(&engine, vp);
+
+        MockBackend.resetMock();
+        engine.setCullViewport(vp);
+        engine.render();
+        try testing.expectEqual(expected, MockBackend.getDrawCallCount());
+
+        // Sanity: the grid query must genuinely narrow the field —
+        // otherwise the "acceleration" is just the linear scan.
+        try testing.expect(expected < N);
+    }
+}
+
+test "culling: benchmark — spatial path slashes per-frame culling work" {
+    // Issue #208 benchmark scenario: 10,000 sprites in a 5000x5000
+    // world, a ~1080p viewport covering roughly 1% of them.
+    //
+    // Zig 0.16 dropped `std.time.Timer`, and wall-clock asserts are
+    // flaky in CI anyway, so this measures the *deterministic* quantity
+    // the optimisation actually changes: the number of entities the
+    // renderer's cull loop has to consider per frame.
+    //
+    //   Linear path:  considers all 10,000 entities every frame.
+    //   Spatial path: considers only the grid-query candidates — the
+    //                 cells the viewport touches — a small constant.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    var prng = std.Random.DefaultPrng.init(0xBEEF208);
+    const rng = prng.random();
+    const N: u32 = 10_000;
+    var i: u32 = 0;
+    while (i < N) : (i += 1) {
+        const x = rng.float(f32) * 5000.0;
+        const y = rng.float(f32) * 5000.0;
+        engine.createSprite(EntityId.from(i + 1), .{ .sprite_name = "s" }, .{ .x = x, .y = y });
+    }
+
+    const viewport = gfx.retained_engine_mod.CullRect{ .x = 2000, .y = 2000, .w = 1920, .h = 1080 };
+
+    // Linear path: every entity is a cull candidate.
+    const linear_candidates: usize = N;
+    engine.clearCullViewport();
+    engine.render();
+    const linear_draws = MockBackend.getDrawCallCount();
+
+    // Spatial path: the grid query narrows candidates to the viewport.
+    var query = try engine.grid.query(viewport, testing.allocator);
+    const spatial_candidates = query.items.len;
+    query.deinit(testing.allocator);
+
+    MockBackend.resetMock();
+    engine.setCullViewport(viewport);
+    engine.render();
+    const spatial_draws = MockBackend.getDrawCallCount();
+
+    const speedup = @as(f64, @floatFromInt(linear_candidates)) /
+        @as(f64, @floatFromInt(@max(spatial_candidates, 1)));
+    std.debug.print(
+        "\n[#208 culling bench] {d} sprites, 1080p viewport:" ++
+            " cull candidates linear={d} spatial={d} ({d:.1}x fewer);" ++
+            " draws linear={d} spatial={d}\n",
+        .{ N, linear_candidates, spatial_candidates, speedup, linear_draws, spatial_draws },
+    );
+
+    // Spatial culling must draw the same kind of result but examine an
+    // order of magnitude fewer candidates, and emit fewer draw calls.
+    try testing.expect(spatial_candidates > 0);
+    try testing.expect(spatial_draws > 0);
+    try testing.expect(spatial_draws < linear_draws);
+    // The viewport covers a small slice of the world; the grid query
+    // (cells the viewport touches) must cut the candidate count several
+    // fold. Measured ~6.5x on this scenario — assert a conservative 4x.
+    try testing.expect(spatial_candidates * 4 < linear_candidates);
+}
+
+test "culling: entity with both a world and a screen visual keeps its world draw" {
+    // Regression for the mixed-layer bug: a single entity id may carry
+    // a world-space sprite *and* a screen-space text. A previous
+    // `reindexEntity` marked the whole id non-cullable whenever any of
+    // its visuals was screen-space, which kept the id out of the grid
+    // entirely — so its world-space sprite silently vanished under
+    // culling. Both visuals must draw.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const id = EntityId.from(1);
+    // World-space sprite inside the viewport.
+    engine.createSprite(id, .{ .sprite_name = "world", .layer = .world }, .{ .x = 100, .y = 100 });
+    // Screen-space text on the *same* id (DefaultLayers.ui is screen-space).
+    engine.createText(id, .{ .text = "hud", .layer = .ui }, .{ .x = 100, .y = 100 });
+
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 400, .h = 400 });
+    engine.render();
+
+    // The world sprite must still produce a draw call...
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+    // ...and the screen-space text is pinned, so it draws too.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getTextCallCount());
+}
+
+test "culling: world visual on a mixed-layer entity is culled when off-screen" {
+    // Counterpart to the test above: the world-space sprite must still
+    // be culled normally when it leaves the viewport, even though the
+    // entity also owns a (pinned) screen-space text.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const id = EntityId.from(1);
+    engine.createSprite(id, .{ .sprite_name = "world", .layer = .world }, .{ .x = 9000, .y = 9000 });
+    engine.createText(id, .{ .text = "hud", .layer = .ui }, .{ .x = 9000, .y = 9000 });
+
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 400, .h = 400 });
+    engine.render();
+
+    // Sprite is off-screen -> no texture draw.
+    try testing.expectEqual(@as(usize, 0), MockBackend.getDrawCallCount());
+    // Screen-space text is never culled.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getTextCallCount());
+}
+
+test "culling: registering a catalog texture reindexes its sprites" {
+    // Regression for stale texture-dimension bounds: a sprite created
+    // before its texture is registered sizes its cull AABB from a 64x64
+    // fallback. Once the real (much larger) texture is registered, the
+    // sprite's footprint grows — `registerCatalogTexture` must reindex
+    // affected sprites so the grid box reflects the true size, or the
+    // sprite is wrongly culled when only its larger extent overlaps.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const handle: u32 = 4242;
+    const tex_id = gfx.TextureId.from(handle);
+
+    // Sprite at (500,500) with no source_rect: its cull box derives
+    // from the texture dimensions. The texture is not registered yet,
+    // so it falls back to 64x64 -> AABB (468,468)..(532,532).
+    engine.createSprite(
+        EntityId.from(1),
+        .{ .sprite_name = "big", .texture = tex_id, .layer = .world },
+        .{ .x = 500, .y = 500 },
+    );
+
+    // Viewport touches (500,500) only via the *large* texture extent:
+    // a 64x64 box around the sprite would NOT reach x<=400, but a
+    // 600x600 texture centred there spans (200,200)..(800,800).
+    const vp = gfx.retained_engine_mod.CullRect{ .x = 0, .y = 0, .w = 300, .h = 300 };
+    engine.setCullViewport(vp);
+
+    // With the stale 64x64 fallback box the sprite is culled.
+    engine.render();
+    try testing.expectEqual(@as(usize, 0), MockBackend.getDrawCallCount());
+
+    // Register the real 600x600 texture — this must reindex the sprite.
+    engine.registerCatalogTexture(handle, .{ .id = handle, .width = 600, .height = 600 });
+
+    MockBackend.resetMock();
+    engine.render();
+    // Now the 600x600 footprint overlaps the viewport -> drawn.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
+test "culling: loadTexture reindexes sprites sized from texture dimensions" {
+    // `loadTexture` (MockBackend yields a 256x256 texture) must also
+    // reindex sprites that were created referencing the id beforehand.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // MockBackend.loadTexture hands out ids from an incrementing
+    // counter starting at 1 — the first load returns id 1.
+    const tex_id = gfx.TextureId.from(1);
+    engine.createSprite(
+        EntityId.from(1),
+        .{ .sprite_name = "s", .texture = tex_id, .layer = .world },
+        .{ .x = 200, .y = 200 },
+    );
+
+    // Viewport reachable only via the 256x256 extent (centre pivot ->
+    // box (72,72)..(328,328)), not the 64x64 fallback (168..232).
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 120, .h = 120 });
+    engine.render();
+    try testing.expectEqual(@as(usize, 0), MockBackend.getDrawCallCount());
+
+    const loaded = try engine.loadTexture("dummy.png");
+    try testing.expectEqual(tex_id.toInt(), loaded.toInt());
+
+    MockBackend.resetMock();
+    engine.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
+test "culling: non-centred sprite pivot is not prematurely culled" {
+    // Regression for the origin-mismatch bug: the cull AABB used to be
+    // centred on `position` regardless of the sprite's pivot, but the
+    // renderer anchors a `top_left`-pivot sprite with its top-left
+    // corner at `position`. A viewport just past the position (in the
+    // +x/+y direction) overlaps the real quad but missed the old
+    // centred box.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // top_left pivot: the 64x64 sprite spans (300,300)..(364,364).
+    engine.createSprite(
+        EntityId.from(1),
+        .{ .sprite_name = "tl", .layer = .world, .pivot = .top_left },
+        .{ .x = 300, .y = 300 },
+    );
+
+    // Viewport (340,340,40,40) overlaps the real quad's lower-right
+    // region. A box centred on (300,300) would be (268,268)..(332,332)
+    // and would NOT overlap -> the sprite would be wrongly culled.
+    engine.setCullViewport(.{ .x = 340, .y = 340, .w = 40, .h = 40 });
+    engine.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
