@@ -170,20 +170,32 @@ pub fn SpatialGrid(comptime EntityId: type) type {
         }
 
         /// Query all entities overlapping the given viewport rectangle.
+        ///
+        /// Unlike entity insertion (which caps very large entities to a
+        /// 4x4 cell footprint and tracks the rest in `oversized`), a
+        /// query walks the *full* cell range the viewport spans — a
+        /// camera viewport is bounded, and visiting exactly the cells it
+        /// covers is the intended O(visible-entities) cost. Capping the
+        /// query range would silently drop entities for any viewport
+        /// wider than 4 cells.
         pub fn query(self: *Self, viewport: Rect, allocator: std.mem.Allocator) !std.ArrayListUnmanaged(EntityId) {
             var result: std.ArrayListUnmanaged(EntityId) = .empty;
             var seen = std.AutoHashMap(EntityId, void).init(allocator);
             defer seen.deinit();
 
-            var cell_buf: [MAX_CELLS_PER_ENTITY]CellCoord = undefined;
-            const count = self.getCellsForRect(viewport, &cell_buf);
+            const min_c = self.worldToCell(viewport.x, viewport.y);
+            const max_c = self.worldToCell(viewport.x + viewport.w, viewport.y + viewport.h);
 
-            for (cell_buf[0..count]) |coord| {
-                if (self.cells.get(coord)) |bucket| {
-                    for (bucket.items) |id| {
-                        const gop = try seen.getOrPut(id);
-                        if (!gop.found_existing) {
-                            try result.append(allocator, id);
+            var cy: i32 = min_c.y;
+            while (cy <= max_c.y) : (cy += 1) {
+                var cx: i32 = min_c.x;
+                while (cx <= max_c.x) : (cx += 1) {
+                    if (self.cells.get(.{ .x = cx, .y = cy })) |bucket| {
+                        for (bucket.items) |id| {
+                            const gop = try seen.getOrPut(id);
+                            if (!gop.found_existing) {
+                                try result.append(allocator, id);
+                            }
                         }
                     }
                 }

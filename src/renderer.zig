@@ -71,6 +71,14 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
         tracked: std.AutoHashMap(Entity, TrackedEntity),
         camera_mgr: CameraManagerT = CameraManagerT.init(),
         screen_height: f32 = 600,
+        /// When true, `render` culls world-space entities to the primary
+        /// camera viewport via the retained engine's spatial grid. Off
+        /// by default so existing callers see no behaviour change.
+        viewport_culling: bool = false,
+        /// Extra margin (world units) added on every side of the cull
+        /// viewport. Guards against popping at the screen edge for
+        /// entities whose drawn extent exceeds the indexed AABB.
+        cull_margin: f32 = 64,
 
         pub fn init(allocator: std.mem.Allocator) Self {
             return .{
@@ -87,6 +95,18 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
 
         pub fn setScreenHeight(self: *Self, height: f32) void {
             self.screen_height = height;
+        }
+
+        /// Enable/disable spatial-grid viewport culling for world-space
+        /// layers. When enabled, `render` only issues draw calls for
+        /// entities whose bounding box overlaps the primary camera's
+        /// viewport — the spatial grid turns the per-frame cull from
+        /// O(total entities) into O(visible entities). Screen-space
+        /// layers are unaffected (always drawn). Purely an
+        /// acceleration: the visible set is unchanged.
+        pub fn setViewportCulling(self: *Self, enabled: bool) void {
+            self.viewport_culling = enabled;
+            if (!enabled) self.inner.clearCullViewport();
         }
 
         pub fn loadTexture(self: *Self, path: [:0]const u8) !types_mod.TextureId {
@@ -299,7 +319,29 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
             }
         }
 
+        /// Derive the retained engine's cull viewport from the primary
+        /// camera. The camera viewport is Y-up world space; entities are
+        /// stored Y-down (screen-flipped by `syncPosition`/`toScreenY`),
+        /// so the rectangle is flipped to match before being handed to
+        /// the engine. A `cull_margin` is added on every side.
+        fn applyCullViewport(self: *Self) void {
+            const cam = self.camera_mgr.getPrimaryCamera();
+            const vp = cam.getViewport();
+            const m = self.cull_margin;
+            const sh = self.screen_height;
+            // Y-up [vp.y, vp.y+height] -> Y-down [sh-(vp.y+height), sh-vp.y]
+            self.inner.setCullViewport(.{
+                .x = vp.x - m,
+                .y = sh - (vp.y + vp.height) - m,
+                .w = vp.width + 2 * m,
+                .h = vp.height + 2 * m,
+            });
+        }
+
         pub fn render(self: *Self) void {
+            if (self.viewport_culling) {
+                self.applyCullViewport();
+            }
             var in_camera = false;
             inline for (sorted_layers) |layer| {
                 const space = layer.config().space;

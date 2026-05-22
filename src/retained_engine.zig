@@ -4,6 +4,16 @@ const visual_types_mod = @import("visual_types.zig");
 const types = @import("types.zig");
 const layer_mod = @import("layer.zig");
 const visuals_mod = @import("visuals.zig");
+const spatial_grid = @import("spatial_grid");
+
+/// Viewport rectangle (engine coordinate space) used to cull off-screen
+/// entities. Stored axis-aligned; `x,y` is the top-left corner.
+pub const CullRect = spatial_grid.Rect;
+
+/// Default uniform-grid cell size (engine units). Tuned for typical
+/// sprite sizes — entities up to ~256 px land in a single cell, so a
+/// 1080p viewport touches roughly a 9×6 block of cells.
+const DEFAULT_CELL_SIZE: f32 = 256.0;
 
 
 /// Creates a retained-mode rendering engine parameterized by backend and layer enum.
@@ -27,6 +37,12 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         pub const Position = types.Position;
         pub const Pivot = types.Pivot;
         pub const TextureId = types.TextureId;
+
+        // World-space layers are camera-transformed and therefore
+        // cullable; screen-space layers are pinned and always drawn.
+        fn isWorldLayer(layer: LayerEnum) bool {
+            return layer.config().space == .world;
+        }
 
         const SpriteEntry = struct {
             visual: SpriteVisual,
@@ -52,6 +68,16 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             height: f32,
         };
 
+        pub const Grid = spatial_grid.SpatialGrid(u32);
+
+        /// Cached entity AABB used to keep the spatial grid in sync — the
+        /// grid's `remove`/`update` need the *old* bounds, which the
+        /// public mutation API does not pass in.
+        const BoundsEntry = struct {
+            bounds: CullRect,
+            cullable: bool,
+        };
+
         allocator: std.mem.Allocator,
         sprites: std.AutoHashMap(u32, SpriteEntry),
         shapes: std.AutoHashMap(u32, ShapeEntry),
@@ -61,10 +87,28 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         screen_height: f32,
         clear_color: Color,
 
+        // -- Spatial culling state --
+        //
+        // `grid` indexes every entity by an axis-aligned bounding box in
+        // the engine's own (screen-flipped) coordinate space — the same
+        // space `entry.position` lives in. `entity_bounds` caches each
+        // entity's last-indexed AABB so mutations can remove the stale
+        // entry. When `cull_viewport` is null the renderer keeps its
+        // original linear behaviour (no functional change); when set,
+        // world-space layers render only entities the grid query returns.
+        grid: Grid,
+        entity_bounds: std.AutoHashMap(u32, BoundsEntry),
+        cull_viewport: ?CullRect = null,
+        cull_scratch: std.ArrayListUnmanaged(u32) = .empty,
+
         pub const Config = struct {
             screen_width: f32 = 800,
             screen_height: f32 = 600,
             clear_color: Color = Color.black,
+            /// Uniform-grid cell size for spatial culling. Larger cells
+            /// mean fewer cells touched per query but more candidates
+            /// per cell; the default suits typical 2D sprite sizes.
+            cull_cell_size: f32 = DEFAULT_CELL_SIZE,
         };
 
         pub fn init(allocator: std.mem.Allocator, config: Config) Self {
@@ -77,6 +121,8 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 .screen_width = config.screen_width,
                 .screen_height = config.screen_height,
                 .clear_color = config.clear_color,
+                .grid = Grid.init(allocator, config.cull_cell_size),
+                .entity_bounds = std.AutoHashMap(u32, BoundsEntry).init(allocator),
             };
         }
 
@@ -90,6 +136,9 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             self.sprites.deinit();
             self.shapes.deinit();
             self.texts.deinit();
+            self.grid.deinit();
+            self.entity_bounds.deinit();
+            self.cull_scratch.deinit(self.allocator);
         }
 
         /// Clear all entity visuals but keep textures loaded.
@@ -99,6 +148,159 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             self.sprites.clearAndFree();
             self.shapes.clearAndFree();
             self.texts.clearAndFree();
+            self.grid.deinit();
+            self.grid = Grid.init(self.allocator, self.grid.cell_size);
+            self.entity_bounds.clearAndFree();
+        }
+
+        // -- Spatial culling --
+
+        /// Enable viewport culling: subsequent `render`/`renderLayer`
+        /// calls draw only entities whose bounding box overlaps
+        /// `viewport`. The rectangle is in the engine's coordinate
+        /// space (same as positions passed to `createSprite` etc.).
+        ///
+        /// This is a pure acceleration — the set of drawn entities is
+        /// identical to a linear viewport test; the spatial grid only
+        /// narrows the candidates the renderer has to consider.
+        pub fn setCullViewport(self: *Self, viewport: CullRect) void {
+            self.cull_viewport = viewport;
+        }
+
+        /// Disable viewport culling — restores the original behaviour
+        /// of rendering every entity on each layer.
+        pub fn clearCullViewport(self: *Self) void {
+            self.cull_viewport = null;
+        }
+
+        /// Number of grid cells currently holding at least one entity.
+        /// Exposed for tests / diagnostics.
+        pub fn occupiedCellCount(self: *const Self) usize {
+            return self.grid.occupiedCellCount();
+        }
+
+        // Conservative AABB for an entity. Visuals are positioned by a
+        // pivot/anchor that differs per visual kind, so the box is grown
+        // symmetrically around the position by the visual's extent — a
+        // superset of the true footprint, which is always safe for
+        // culling (a never-clipped entity is correct, just not optimal).
+        fn spriteBounds(self: *const Self, entry: SpriteEntry) CullRect {
+            const v = entry.visual;
+            var w: f32 = 64;
+            var h: f32 = 64;
+            if (v.source_rect) |sr| {
+                w = if (sr.display_width > 0) sr.display_width else @abs(sr.width);
+                h = if (sr.display_height > 0) sr.display_height else @abs(sr.height);
+            } else if (self.textures.get(v.texture.toInt())) |t| {
+                w = t.width;
+                h = t.height;
+            }
+            w *= @abs(v.scale_x);
+            h *= @abs(v.scale_y);
+            return centeredBounds(entry.position, w, h);
+        }
+
+        fn shapeBounds(entry: ShapeEntry) CullRect {
+            const v = entry.visual;
+            const extent: f32 = switch (v.shape) {
+                .circle => |c| c.radius * 2,
+                .rectangle => |r| @max(r.width, r.height),
+                .line => |l| @max(@abs(l.end.x), @abs(l.end.y)) * 2,
+                .triangle => |t| @max(
+                    @max(@abs(t.p2.x), @abs(t.p3.x)),
+                    @max(@abs(t.p2.y), @abs(t.p3.y)),
+                ) * 2,
+                .polygon => |p| p.radius * 2,
+            };
+            const e = extent * @max(@abs(v.scale_x), @abs(v.scale_y));
+            return centeredBounds(entry.position, e, e);
+        }
+
+        fn textBounds(entry: TextEntry) CullRect {
+            const v = entry.visual;
+            // Width is unknown without measuring; approximate generously
+            // (every glyph at full em-square). Over-estimating only costs
+            // a few extra candidates.
+            const w = @as(f32, @floatFromInt(v.text.len)) * v.size;
+            return centeredBounds(entry.position, @max(w, v.size), v.size);
+        }
+
+        fn centeredBounds(pos: Position, w: f32, h: f32) CullRect {
+            const hw = @max(w, 1) * 0.5;
+            const hh = @max(h, 1) * 0.5;
+            return .{ .x = pos.x - hw, .y = pos.y - hh, .w = hw * 2, .h = hh * 2 };
+        }
+
+        fn rectUnion(a: CullRect, b: CullRect) CullRect {
+            const min_x = @min(a.x, b.x);
+            const min_y = @min(a.y, b.y);
+            const max_x = @max(a.x + a.w, b.x + b.w);
+            const max_y = @max(a.y + a.h, b.y + b.h);
+            return .{ .x = min_x, .y = min_y, .w = max_x - min_x, .h = max_y - min_y };
+        }
+
+        // Recompute the spatial-grid entry for `id` from whatever
+        // visuals it currently owns. The engine permits one entity id
+        // to carry a sprite, a shape and a text at once; the grid is
+        // keyed by id, so the indexed AABB must be the *union* of every
+        // kind's box — anything smaller could drop a visual that
+        // overlaps the viewport. An id is `cullable` only if every
+        // visual it owns lives on a world-space layer (a screen-space
+        // visual must always draw, so such ids stay out of the grid and
+        // are emitted unconditionally by the renderer).
+        fn reindexEntity(self: *Self, id: u32) void {
+            var bounds: ?CullRect = null;
+            var cullable = true;
+            if (self.sprites.get(id)) |e| {
+                bounds = self.spriteBounds(e);
+                if (!isWorldLayer(e.visual.layer)) cullable = false;
+            }
+            if (self.shapes.get(id)) |e| {
+                const b = shapeBounds(e);
+                bounds = if (bounds) |cur| rectUnion(cur, b) else b;
+                if (!isWorldLayer(e.visual.layer)) cullable = false;
+            }
+            if (self.texts.get(id)) |e| {
+                const b = textBounds(e);
+                bounds = if (bounds) |cur| rectUnion(cur, b) else b;
+                if (!isWorldLayer(e.visual.layer)) cullable = false;
+            }
+            if (bounds) |b| {
+                self.indexEntity(id, b, cullable);
+            } else {
+                self.unindexEntity(id);
+            }
+        }
+
+        // Insert or move an entity in the spatial grid. `cullable` is
+        // false for screen-space visuals — they are always drawn, so
+        // there is no point indexing them.
+        fn indexEntity(self: *Self, id: u32, bounds: CullRect, cullable: bool) void {
+            const gop = self.entity_bounds.getOrPut(id) catch return;
+            if (gop.found_existing) {
+                const old = gop.value_ptr.*;
+                if (old.cullable) self.grid.remove(id, old.bounds);
+            }
+            gop.value_ptr.* = .{ .bounds = bounds, .cullable = cullable };
+            if (cullable) self.grid.insert(id, bounds) catch {};
+        }
+
+        fn unindexEntity(self: *Self, id: u32) void {
+            if (self.entity_bounds.fetchRemove(id)) |kv| {
+                if (kv.value.cullable) self.grid.remove(id, kv.value.bounds);
+            }
+        }
+
+        // Rebuild the candidate id list for `viewport` from the grid.
+        // The grid query is a broad phase; callers still apply the
+        // exact per-visual filters (layer, visibility), so the drawn
+        // set matches the linear path exactly.
+        fn cullCandidates(self: *Self, viewport: CullRect) []const u32 {
+            self.cull_scratch.clearRetainingCapacity();
+            var result = self.grid.query(viewport, self.allocator) catch return &.{};
+            defer result.deinit(self.allocator);
+            self.cull_scratch.appendSlice(self.allocator, result.items) catch {};
+            return self.cull_scratch.items;
         }
 
         // -- Texture registry --
@@ -161,12 +363,15 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         // -- Sprite operations --
 
         pub fn createSprite(self: *Self, entity_id: EntityId, visual: SpriteVisual, pos: Position) void {
-            self.sprites.put(entity_id.toInt(), .{ .visual = visual, .position = pos }) catch {};
+            const id = entity_id.toInt();
+            self.sprites.put(id, .{ .visual = visual, .position = pos }) catch {};
+            self.reindexEntity(id);
         }
 
         pub fn updateSprite(self: *Self, entity_id: EntityId, visual: SpriteVisual) void {
             if (self.sprites.getPtr(entity_id.toInt())) |entry| {
                 entry.visual = visual;
+                self.reindexEntity(entity_id.toInt());
             }
         }
 
@@ -178,54 +383,71 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         }
 
         pub fn removeSprite(self: *Self, entity_id: EntityId) void {
-            _ = self.sprites.remove(entity_id.toInt());
+            if (self.sprites.remove(entity_id.toInt())) {
+                self.reindexEntity(entity_id.toInt());
+            }
         }
 
         // -- Shape operations --
 
         pub fn createShape(self: *Self, entity_id: EntityId, visual: ShapeVisual, pos: Position) void {
-            self.shapes.put(entity_id.toInt(), .{ .visual = visual, .position = pos }) catch {};
+            const id = entity_id.toInt();
+            self.shapes.put(id, .{ .visual = visual, .position = pos }) catch {};
+            self.reindexEntity(id);
         }
 
         pub fn updateShape(self: *Self, entity_id: EntityId, visual: ShapeVisual) void {
             if (self.shapes.getPtr(entity_id.toInt())) |entry| {
                 entry.visual = visual;
+                self.reindexEntity(entity_id.toInt());
             }
         }
 
         pub fn removeShape(self: *Self, entity_id: EntityId) void {
-            _ = self.shapes.remove(entity_id.toInt());
+            if (self.shapes.remove(entity_id.toInt())) {
+                self.reindexEntity(entity_id.toInt());
+            }
         }
 
         // -- Text operations --
 
         pub fn createText(self: *Self, entity_id: EntityId, visual: TextVisual, pos: Position) void {
-            self.texts.put(entity_id.toInt(), .{ .visual = visual, .position = pos }) catch {};
+            const id = entity_id.toInt();
+            self.texts.put(id, .{ .visual = visual, .position = pos }) catch {};
+            self.reindexEntity(id);
         }
 
         pub fn updateText(self: *Self, entity_id: EntityId, visual: TextVisual) void {
             if (self.texts.getPtr(entity_id.toInt())) |entry| {
                 entry.visual = visual;
+                self.reindexEntity(entity_id.toInt());
             }
         }
 
         pub fn removeText(self: *Self, entity_id: EntityId) void {
-            _ = self.texts.remove(entity_id.toInt());
+            if (self.texts.remove(entity_id.toInt())) {
+                self.reindexEntity(entity_id.toInt());
+            }
         }
 
         // -- Position --
 
         pub fn updatePosition(self: *Self, entity_id: EntityId, pos: Position) void {
             const id = entity_id.toInt();
+            var touched = false;
             if (self.sprites.getPtr(id)) |entry| {
                 entry.position = pos;
+                touched = true;
             }
             if (self.shapes.getPtr(id)) |entry| {
                 entry.position = pos;
+                touched = true;
             }
             if (self.texts.getPtr(id)) |entry| {
                 entry.position = pos;
+                touched = true;
             }
+            if (touched) self.reindexEntity(id);
         }
 
         // -- Entity removal --
@@ -280,9 +502,19 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         }
 
         pub fn renderLayer(self: *Self, layer: LayerEnum) void {
-            self.renderSpritesOnLayer(layer);
-            self.renderShapesOnLayer(layer);
-            self.renderTextsOnLayer(layer);
+            // When a cull viewport is set and this is a world-space
+            // layer, narrow the candidate entities with one spatial
+            // grid query instead of scanning every entity. Screen-space
+            // layers (and the no-viewport case) keep the full scan —
+            // their content is pinned and always visible.
+            const candidates: ?[]const u32 = blk: {
+                if (!isWorldLayer(layer)) break :blk null;
+                const vp = self.cull_viewport orelse break :blk null;
+                break :blk self.cullCandidates(vp);
+            };
+            self.renderSpritesOnLayer(layer, candidates);
+            self.renderShapesOnLayer(layer, candidates);
+            self.renderTextsOnLayer(layer, candidates);
         }
 
         const SortEntry = struct {
@@ -290,18 +522,36 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             z_index: i16,
         };
 
-        fn renderSpritesOnLayer(self: *Self, layer: LayerEnum) void {
+        fn renderSpritesOnLayer(self: *Self, layer: LayerEnum, candidates: ?[]const u32) void {
             // Collect visible sprites for this layer, then sort by z_index
             var sort_buf: [4096]SortEntry = undefined;
             var sort_count: usize = 0;
 
-            var collect_iter = self.sprites.iterator();
-            while (collect_iter.next()) |entry| {
-                const sprite = &entry.value_ptr.visual;
-                if (sprite.layer != layer or !sprite.visible) continue;
-                if (sort_count < sort_buf.len) {
-                    sort_buf[sort_count] = .{ .key = entry.key_ptr.*, .z_index = sprite.z_index };
-                    sort_count += 1;
+            if (candidates) |ids| {
+                // Spatial-grid fast path: only consider entities the
+                // viewport query returned. An exact viewport recheck on
+                // each candidate keeps the drawn set identical to the
+                // linear path (the grid is a broad phase only).
+                const vp = self.cull_viewport.?;
+                for (ids) |id| {
+                    const entry = self.sprites.getPtr(id) orelse continue;
+                    const sprite = &entry.visual;
+                    if (sprite.layer != layer or !sprite.visible) continue;
+                    if (!self.spriteBounds(entry.*).overlaps(vp)) continue;
+                    if (sort_count < sort_buf.len) {
+                        sort_buf[sort_count] = .{ .key = id, .z_index = sprite.z_index };
+                        sort_count += 1;
+                    }
+                }
+            } else {
+                var collect_iter = self.sprites.iterator();
+                while (collect_iter.next()) |entry| {
+                    const sprite = &entry.value_ptr.visual;
+                    if (sprite.layer != layer or !sprite.visible) continue;
+                    if (sort_count < sort_buf.len) {
+                        sort_buf[sort_count] = .{ .key = entry.key_ptr.*, .z_index = sprite.z_index };
+                        sort_count += 1;
+                    }
                 }
             }
 
@@ -388,13 +638,29 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             }
         }
 
-        fn renderShapesOnLayer(self: *Self, layer: LayerEnum) void {
-            var shape_iter = self.shapes.iterator();
-            while (shape_iter.next()) |shape_entry| {
-                const shape = &shape_entry.value_ptr.visual;
-                if (shape.layer != layer or !shape.visible) continue;
+        fn renderShapesOnLayer(self: *Self, layer: LayerEnum, candidates: ?[]const u32) void {
+            if (candidates) |ids| {
+                const vp = self.cull_viewport.?;
+                for (ids) |id| {
+                    const entry = self.shapes.getPtr(id) orelse continue;
+                    if (entry.visual.layer != layer or !entry.visual.visible) continue;
+                    if (!shapeBounds(entry.*).overlaps(vp)) continue;
+                    drawShapeEntry(entry.*);
+                }
+            } else {
+                var shape_iter = self.shapes.iterator();
+                while (shape_iter.next()) |shape_entry| {
+                    const shape = &shape_entry.value_ptr.visual;
+                    if (shape.layer != layer or !shape.visible) continue;
+                    drawShapeEntry(shape_entry.value_ptr.*);
+                }
+            }
+        }
 
-                const spos = shape_entry.value_ptr.position;
+        fn drawShapeEntry(shape_entry: ShapeEntry) void {
+            const shape = &shape_entry.visual;
+            {
+                const spos = shape_entry.position;
                 const c = B.Color{ .r = shape.color.r, .g = shape.color.g, .b = shape.color.b, .a = shape.color.a };
 
                 switch (shape.shape) {
@@ -496,21 +762,34 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             }
         }
 
-        fn renderTextsOnLayer(self: *Self, layer: LayerEnum) void {
-            var text_iter = self.texts.iterator();
-            while (text_iter.next()) |entry| {
-                const text = &entry.value_ptr.visual;
-                if (text.layer != layer or !text.visible) continue;
-
-                const tpos = entry.value_ptr.position;
-                B.drawText(
-                    text.text,
-                    tpos.x,
-                    tpos.y,
-                    text.size,
-                    .{ .r = text.color.r, .g = text.color.g, .b = text.color.b, .a = text.color.a },
-                );
+        fn renderTextsOnLayer(self: *Self, layer: LayerEnum, candidates: ?[]const u32) void {
+            if (candidates) |ids| {
+                const vp = self.cull_viewport.?;
+                for (ids) |id| {
+                    const entry = self.texts.getPtr(id) orelse continue;
+                    if (entry.visual.layer != layer or !entry.visual.visible) continue;
+                    if (!textBounds(entry.*).overlaps(vp)) continue;
+                    drawTextEntry(entry.*);
+                }
+            } else {
+                var text_iter = self.texts.iterator();
+                while (text_iter.next()) |entry| {
+                    if (entry.value_ptr.visual.layer != layer or !entry.value_ptr.visual.visible) continue;
+                    drawTextEntry(entry.value_ptr.*);
+                }
             }
+        }
+
+        fn drawTextEntry(entry: TextEntry) void {
+            const text = &entry.visual;
+            const tpos = entry.position;
+            B.drawText(
+                text.text,
+                tpos.x,
+                tpos.y,
+                text.size,
+                .{ .r = text.color.r, .g = text.color.g, .b = text.color.b, .a = text.color.a },
+            );
         }
     };
 }
