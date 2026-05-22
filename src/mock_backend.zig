@@ -111,6 +111,26 @@ pub const MockBackend = struct {
     threadlocal var font_atlas_unload_calls: u32 = 0;
     threadlocal var in_camera_mode: bool = false;
 
+    /// One `beginMode2D` call, recorded for multi-camera render tests
+    /// (labelle-gfx#226). `target` is the camera's Y-down backend
+    /// target — split-screen tests assert one entry per active camera.
+    pub const CameraPass = struct {
+        target_x: f32,
+        target_y: f32,
+        zoom: f32,
+    };
+
+    /// One `setViewport` call. Empty list means full-window rendering.
+    pub const ViewportCall = struct {
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    };
+
+    threadlocal var camera_passes_list: std.ArrayListUnmanaged(CameraPass) = .empty;
+    threadlocal var viewport_calls_list: std.ArrayListUnmanaged(ViewportCall) = .empty;
+
     pub fn initMock(allocator: std.mem.Allocator) void {
         allocator_ref = allocator;
         draw_calls_list = .empty;
@@ -118,6 +138,8 @@ pub const MockBackend = struct {
         circle_calls_list = .empty;
         line_calls_list = .empty;
         text_calls_list = .empty;
+        camera_passes_list = .empty;
+        viewport_calls_list = .empty;
         texture_counter = 1;
         font_atlas_counter = 1;
         font_atlas_unload_calls = 0;
@@ -131,12 +153,16 @@ pub const MockBackend = struct {
             circle_calls_list.deinit(alloc);
             line_calls_list.deinit(alloc);
             text_calls_list.deinit(alloc);
+            camera_passes_list.deinit(alloc);
+            viewport_calls_list.deinit(alloc);
         }
         draw_calls_list = .empty;
         shape_calls_list = .empty;
         circle_calls_list = .empty;
         line_calls_list = .empty;
         text_calls_list = .empty;
+        camera_passes_list = .empty;
+        viewport_calls_list = .empty;
         allocator_ref = null;
     }
 
@@ -146,10 +172,24 @@ pub const MockBackend = struct {
         circle_calls_list.clearRetainingCapacity();
         line_calls_list.clearRetainingCapacity();
         text_calls_list.clearRetainingCapacity();
+        camera_passes_list.clearRetainingCapacity();
+        viewport_calls_list.clearRetainingCapacity();
         texture_counter = 1;
         font_atlas_counter = 1;
         font_atlas_unload_calls = 0;
         in_camera_mode = false;
+    }
+
+    /// Camera passes recorded since the last reset — one per
+    /// `beginMode2D`. Multi-camera render tests assert the count
+    /// equals the number of active cameras.
+    pub fn getCameraPasses() []const CameraPass {
+        return camera_passes_list.items;
+    }
+
+    /// Viewport calls recorded since the last reset.
+    pub fn getViewportCalls() []const ViewportCall {
+        return viewport_calls_list.items;
     }
 
     pub fn getFontAtlasUnloadCalls() u32 {
@@ -365,13 +405,38 @@ pub const MockBackend = struct {
         font_atlas_unload_calls += 1;
     }
 
-    pub fn beginMode2D(_: Camera2D) void {
+    pub fn beginMode2D(camera: Camera2D) void {
         in_camera_mode = true;
+        if (allocator_ref) |alloc| {
+            camera_passes_list.append(alloc, .{
+                .target_x = camera.target.x,
+                .target_y = camera.target.y,
+                .zoom = camera.zoom,
+            }) catch {};
+        }
     }
 
     pub fn endMode2D() void {
         in_camera_mode = false;
     }
+
+    /// Optional split-screen viewport hook (see
+    /// `GfxRenderer.applyViewport`). Recorded so multi-camera render
+    /// tests can assert each active camera scopes its draws to its own
+    /// screen viewport.
+    pub fn setViewport(x: i32, y: i32, width: i32, height: i32) void {
+        if (allocator_ref) |alloc| {
+            viewport_calls_list.append(alloc, .{
+                .x = x,
+                .y = y,
+                .width = width,
+                .height = height,
+            }) catch {};
+        }
+    }
+
+    /// Counterpart to `setViewport` — restores full-window rendering.
+    pub fn clearViewport() void {}
 
     pub fn getScreenWidth() i32 {
         return screen_width_val;

@@ -345,6 +345,13 @@ pub fn CameraManager(comptime BackendImpl: type) type {
         cameras: [MAX_CAMERAS]CameraT = [_]CameraT{CameraT.init()} ** MAX_CAMERAS,
         active_mask: u4 = 0b0001,
         primary_index: u2 = 0,
+        /// Camera that high-level operations (setters, follow, pan,
+        /// bounds) target. Defaults to camera 0. In single-camera mode
+        /// this is always 0; in multi-camera mode the game selects which
+        /// camera to drive via `selectCamera`. See labelle-gfx#226 — the
+        /// previous design hardcoded the primary camera for every setter,
+        /// so split-screen games could not move cameras 1-3.
+        selected_index: u2 = 0,
         current_layout: SplitScreenLayout = .single,
 
         pub fn init() Self {
@@ -371,6 +378,29 @@ pub fn CameraManager(comptime BackendImpl: type) type {
 
         pub fn setPrimaryCamera(self: *Self, index: u2) void {
             self.primary_index = index;
+        }
+
+        /// The camera that high-level operations target.
+        ///
+        /// In single-camera mode this is camera 0. In multi-camera /
+        /// split-screen mode it is whichever camera the game last
+        /// selected via `selectCamera`. This is the camera that all
+        /// position / zoom / bounds setters and the follow / pan logic
+        /// should write to — using `getPrimaryCamera` for those would
+        /// silently ignore the game's selection (labelle-gfx#226).
+        pub fn getSelectedCamera(self: *Self) *CameraT {
+            return &self.cameras[self.selected_index];
+        }
+
+        /// Choose which camera high-level setters / follow / pan / bounds
+        /// operate on. No-op-safe to call in single-camera mode (the
+        /// game can always select camera 0).
+        pub fn selectCamera(self: *Self, index: u2) void {
+            self.selected_index = index;
+        }
+
+        pub fn selectedCamera(self: *const Self) u2 {
+            return self.selected_index;
         }
 
         pub fn isActive(self: *const Self, index: u2) bool {
