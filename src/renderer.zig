@@ -319,43 +319,64 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
             }
         }
 
-        /// Derive the retained engine's cull viewport from the primary
-        /// camera. The camera viewport is Y-up world space; entities are
-        /// stored Y-down (screen-flipped by `syncPosition`/`toScreenY`),
-        /// so the rectangle is flipped to match before being handed to
-        /// the engine. A `cull_margin` is added on every side.
+        /// Derive the retained engine's cull viewport. The cull rect
+        /// must cover *every* active camera's view: in split-screen each
+        /// camera shows a different world region, so the rect is the
+        /// union (enclosing AABB) of all active cameras' world-space
+        /// viewports — using only the primary camera would wrongly cull
+        /// entities visible in a secondary camera (labelle-gfx#226 +
+        /// #208 interaction). A larger rect is always safe for culling:
+        /// it only keeps extra candidates, never drops a visible one.
+        /// The camera viewport is Y-up world space; entities are stored
+        /// Y-down (screen-flipped by `syncPosition`/`toScreenY`), so the
+        /// result is flipped before being handed to the engine. A
+        /// `cull_margin` is added on every side.
         fn applyCullViewport(self: *Self) void {
-            const cam = self.camera_mgr.getPrimaryCamera();
-            const vp = cam.getViewport();
             const m = self.cull_margin;
             const sh = self.screen_height;
 
-            // `getViewport()` returns the axis-aligned world box of an
-            // *unrotated* camera. When the camera is rotated the visible
-            // region is that box spun about its centre, whose enclosing
-            // AABB is larger. Expand the cull rect to that AABB so a
-            // rotated camera does not cull sprites it still shows at the
-            // view edges. (A larger rect is always safe for culling — it
-            // only keeps extra candidates, never drops a visible one.)
-            var half_w = vp.width / 2;
-            var half_h = vp.height / 2;
-            if (cam.rotation != 0) {
-                const cos_r = @abs(@cos(cam.rotation));
-                const sin_r = @abs(@sin(cam.rotation));
-                const rot_half_w = half_w * cos_r + half_h * sin_r;
-                const rot_half_h = half_w * sin_r + half_h * cos_r;
-                half_w = rot_half_w;
-                half_h = rot_half_h;
-            }
-            const center_x = vp.x + vp.width / 2;
-            const center_y = vp.y + vp.height / 2;
+            var min_x: f32 = std.math.floatMax(f32);
+            var min_y: f32 = std.math.floatMax(f32);
+            var max_x: f32 = -std.math.floatMax(f32);
+            var max_y: f32 = -std.math.floatMax(f32);
+            var any = false;
 
-            // Y-up world centre -> Y-down engine space (screen-flipped).
+            var it = self.camera_mgr.activeIterator();
+            while (it.next()) |cam| {
+                any = true;
+                const vp = cam.getViewport();
+
+                // `getViewport()` returns the axis-aligned world box of
+                // an *unrotated* camera. When the camera is rotated the
+                // visible region is that box spun about its centre,
+                // whose enclosing AABB is larger — expand to that AABB
+                // so a rotated camera does not cull sprites it still
+                // shows at the view edges.
+                var half_w = vp.width / 2;
+                var half_h = vp.height / 2;
+                if (cam.rotation != 0) {
+                    const cos_r = @abs(@cos(cam.rotation));
+                    const sin_r = @abs(@sin(cam.rotation));
+                    const rot_half_w = half_w * cos_r + half_h * sin_r;
+                    const rot_half_h = half_w * sin_r + half_h * cos_r;
+                    half_w = rot_half_w;
+                    half_h = rot_half_h;
+                }
+                const center_x = vp.x + vp.width / 2;
+                const center_y = vp.y + vp.height / 2;
+                min_x = @min(min_x, center_x - half_w);
+                max_x = @max(max_x, center_x + half_w);
+                min_y = @min(min_y, center_y - half_h);
+                max_y = @max(max_y, center_y + half_h);
+            }
+            if (!any) return;
+
+            // Y-up world box -> Y-down engine space (screen-flipped).
             self.inner.setCullViewport(.{
-                .x = center_x - half_w - m,
-                .y = sh - center_y - half_h - m,
-                .w = 2 * half_w + 2 * m,
-                .h = 2 * half_h + 2 * m,
+                .x = min_x - m,
+                .y = sh - max_y - m,
+                .w = (max_x - min_x) + 2 * m,
+                .h = (max_y - min_y) + 2 * m,
             });
         }
 
