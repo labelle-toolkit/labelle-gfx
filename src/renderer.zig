@@ -329,12 +329,33 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
             const vp = cam.getViewport();
             const m = self.cull_margin;
             const sh = self.screen_height;
-            // Y-up [vp.y, vp.y+height] -> Y-down [sh-(vp.y+height), sh-vp.y]
+
+            // `getViewport()` returns the axis-aligned world box of an
+            // *unrotated* camera. When the camera is rotated the visible
+            // region is that box spun about its centre, whose enclosing
+            // AABB is larger. Expand the cull rect to that AABB so a
+            // rotated camera does not cull sprites it still shows at the
+            // view edges. (A larger rect is always safe for culling — it
+            // only keeps extra candidates, never drops a visible one.)
+            var half_w = vp.width / 2;
+            var half_h = vp.height / 2;
+            if (cam.rotation != 0) {
+                const cos_r = @abs(@cos(cam.rotation));
+                const sin_r = @abs(@sin(cam.rotation));
+                const rot_half_w = half_w * cos_r + half_h * sin_r;
+                const rot_half_h = half_w * sin_r + half_h * cos_r;
+                half_w = rot_half_w;
+                half_h = rot_half_h;
+            }
+            const center_x = vp.x + vp.width / 2;
+            const center_y = vp.y + vp.height / 2;
+
+            // Y-up world centre -> Y-down engine space (screen-flipped).
             self.inner.setCullViewport(.{
-                .x = vp.x - m,
-                .y = sh - (vp.y + vp.height) - m,
-                .w = vp.width + 2 * m,
-                .h = vp.height + 2 * m,
+                .x = center_x - half_w - m,
+                .y = sh - center_y - half_h - m,
+                .w = 2 * half_w + 2 * m,
+                .h = 2 * half_h + 2 * m,
             });
         }
 

@@ -100,6 +100,12 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         entity_bounds: std.AutoHashMap(u32, BoundsEntry),
         cull_viewport: ?CullRect = null,
         cull_scratch: std.ArrayListUnmanaged(u32) = .empty,
+        // Set when a `grid.insert` fails (OOM): the grid is then missing
+        // at least one entity, so a viewport query would silently drop
+        // its draw. While set, `cullCandidates` forces the full linear
+        // scan. Cleared only by a complete, successful grid rebuild
+        // (see `rebuildGrid`) or by `clearEntities`/`init`.
+        grid_incomplete: bool = false,
 
         pub const Config = struct {
             screen_width: f32 = 800,
@@ -151,6 +157,9 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             self.grid.deinit();
             self.grid = Grid.init(self.allocator, self.grid.cell_size);
             self.entity_bounds.clearAndFree();
+            // The grid and the entity set are both empty and therefore
+            // trivially consistent again.
+            self.grid_incomplete = false;
         }
 
         // -- Spatial culling --
@@ -243,8 +252,15 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 display_w = t.width;
                 display_h = t.height;
             }
-            const dest_w = display_w * @abs(v.scale_x);
-            const dest_h = display_h * @abs(v.scale_y);
+            // Use *signed* scale: the renderer feeds signed `dest_w`/
+            // `dest_h` to `drawTexturePro` (see `renderSpritesOnLayer`),
+            // so a negative scale draws the quad mirrored about `pos`.
+            // `rotatedAabb` takes the min/max of the corners, so a
+            // negative span is handled correctly — using `@abs` here
+            // would produce a same-size box positioned on the wrong
+            // side of the pivot, prematurely culling flipped visuals.
+            const dest_w = display_w * v.scale_x;
+            const dest_h = display_h * v.scale_y;
             const pivot_norm = v.pivot.getNormalized(v.pivot_x, v.pivot_y);
             const origin_x = dest_w * pivot_norm.x;
             const origin_y = dest_h * pivot_norm.y;
@@ -261,8 +277,10 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         fn shapeBounds(entry: ShapeEntry) CullRect {
             const v = entry.visual;
             const pos = entry.position;
+            // Circle/polygon radii are symmetric, so a sign flip is
+            // irrelevant — `@abs` keeps the box stable. Rectangles use
+            // signed scale below to match the mirrored rendered quad.
             const sx = @abs(v.scale_x);
-            const sy = @abs(v.scale_y);
             switch (v.shape) {
                 .circle => |c| {
                     // Circles render centred on `pos`; scale_x drives the
@@ -289,8 +307,13 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 .rectangle => |r| {
                     // Rectangles render with `pos` as their top-left and
                     // rotate about their centre `pos + (w/2, h/2)`.
-                    const w = r.width * sx;
-                    const h = r.height * sy;
+                    // Use *signed* scale: `drawShapeEntry` feeds signed
+                    // `w`/`h` (`rect.width * shape.scale_x`), so a
+                    // negative scale mirrors the quad about `pos`.
+                    // `rotatedAabb` min/maxes the corners, so a negative
+                    // span is fine; `@abs` would mis-place the box.
+                    const w = r.width * v.scale_x;
+                    const h = r.height * v.scale_y;
                     const corners = [_]Position{
                         .{ .x = 0, .y = 0 },
                         .{ .x = w, .y = 0 },
@@ -396,9 +419,34 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             self.grid.insert(id, bounds) catch {
                 // Insert failed (OOM): drop the stale cache entry so a
                 // later reindex does not try to `remove` a box that was
-                // never inserted.
+                // never inserted, and flag the grid as incomplete. The
+                // entity is now absent from the grid, so a viewport
+                // query would silently drop its draw — `cullCandidates`
+                // sees the flag and falls back to the full linear scan
+                // until a later `rebuildGrid` reinserts everything.
                 _ = self.entity_bounds.remove(id);
+                self.grid_incomplete = true;
             };
+        }
+
+        // Attempt to rebuild the entire spatial grid from `entity_bounds`.
+        // Called when the grid is known to be missing entities (a prior
+        // `grid.insert` hit OOM). On full success the grid is consistent
+        // again and `grid_incomplete` is cleared; if any insert still
+        // fails the grid stays flagged and the renderer keeps using the
+        // linear fallback.
+        fn rebuildGrid(self: *Self) void {
+            self.grid.deinit();
+            self.grid = Grid.init(self.allocator, self.grid.cell_size);
+            var it = self.entity_bounds.iterator();
+            while (it.next()) |kv| {
+                self.grid.insert(kv.key_ptr.*, kv.value_ptr.bounds) catch {
+                    // Still cannot fit the grid in memory — leave the
+                    // flag set so the linear fallback stays active.
+                    return;
+                };
+            }
+            self.grid_incomplete = false;
         }
 
         fn unindexEntity(self: *Self, id: u32) void {
@@ -434,6 +482,14 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         // renderer silently drop every world-space draw on an OOM,
         // which is far worse than a one-frame loss of the acceleration.
         fn cullCandidates(self: *Self, viewport: CullRect) ?[]const u32 {
+            // If a prior `grid.insert` ran out of memory the grid is
+            // missing entities; querying it would silently drop their
+            // draws. Try once to rebuild it — if that still fails, fall
+            // back to the full linear scan (`null`).
+            if (self.grid_incomplete) {
+                self.rebuildGrid();
+                if (self.grid_incomplete) return null;
+            }
             self.cull_scratch.clearRetainingCapacity();
             var result = self.grid.query(viewport, self.allocator) catch return null;
             defer result.deinit(self.allocator);
@@ -643,26 +699,49 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 }
                 break :blk layers;
             };
+            // The cull viewport is constant for the whole frame, so the
+            // spatial-grid query only needs to run once per `render`
+            // call — not once per world layer. Compute the candidate id
+            // set here and reuse it for every world-space layer.
+            //
+            // `cullCandidates` returns `null` when the query fails to
+            // allocate (or the grid is incomplete); that propagates as
+            // "no candidate set" so each layer falls back to the full
+            // linear scan, degrading the acceleration for one frame
+            // instead of dropping every world-space draw.
+            const frame_candidates: ?[]const u32 = blk: {
+                const vp = self.cull_viewport orelse break :blk null;
+                break :blk self.cullCandidates(vp);
+            };
             inline for (sorted) |layer| {
-                self.renderLayer(layer);
+                self.renderLayerWithCandidates(layer, frame_candidates);
             }
         }
 
         pub fn renderLayer(self: *Self, layer: LayerEnum) void {
-            // When a cull viewport is set and this is a world-space
-            // layer, narrow the candidate entities with one spatial
-            // grid query instead of scanning every entity. Screen-space
-            // layers (and the no-viewport case) keep the full scan —
-            // their content is pinned and always visible.
-            //
-            // `cullCandidates` returns `null` when the query fails to
-            // allocate; that also lands here as a full linear scan, so
-            // an OOM degrades the acceleration for one frame instead of
-            // dropping every world-space draw.
+            // Standalone single-layer entry point: compute the candidate
+            // set for this layer on its own (the `render` fast path
+            // shares one query across all layers instead).
             const candidates: ?[]const u32 = blk: {
                 if (!isWorldLayer(layer)) break :blk null;
                 const vp = self.cull_viewport orelse break :blk null;
                 break :blk self.cullCandidates(vp);
+            };
+            self.renderSpritesOnLayer(layer, candidates);
+            self.renderShapesOnLayer(layer, candidates);
+            self.renderTextsOnLayer(layer, candidates);
+        }
+
+        // Render one layer using a candidate id set already computed for
+        // the frame. Screen-space layers ignore `frame_candidates` and
+        // keep the full scan — their content is pinned and always
+        // visible. World-space layers use the shared candidate set when
+        // a cull viewport is active.
+        fn renderLayerWithCandidates(self: *Self, layer: LayerEnum, frame_candidates: ?[]const u32) void {
+            const candidates: ?[]const u32 = blk: {
+                if (!isWorldLayer(layer)) break :blk null;
+                if (self.cull_viewport == null) break :blk null;
+                break :blk frame_candidates;
             };
             self.renderSpritesOnLayer(layer, candidates);
             self.renderShapesOnLayer(layer, candidates);
