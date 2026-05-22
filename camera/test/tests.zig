@@ -400,4 +400,54 @@ pub const CameraManagerTests = struct {
         mgr.setPrimaryCamera(2);
         try std.testing.expectEqual(@as(u2, 2), mgr.primary_index);
     }
+
+    // ── Regression: labelle-gfx#226 ─────────────────────────────
+    // High-level setters / follow / pan / bounds must target the
+    // *selected* camera, not always the primary one.
+
+    test "selected camera defaults to camera 0" {
+        const Mgr = camera.CameraManager(MockBackend);
+        var mgr = Mgr.init();
+        try std.testing.expectEqual(@as(u2, 0), mgr.selectedCamera());
+        try std.testing.expectEqual(&mgr.cameras[0], mgr.getSelectedCamera());
+    }
+
+    test "selectCamera routes getSelectedCamera to a non-primary camera" {
+        const Mgr = camera.CameraManager(MockBackend);
+        var mgr = Mgr.init();
+        mgr.setupSplitScreen(.vertical_split);
+        mgr.selectCamera(1);
+        // The selected camera is camera 1, distinct from the primary.
+        try std.testing.expectEqual(&mgr.cameras[1], mgr.getSelectedCamera());
+        try std.testing.expectEqual(&mgr.cameras[0], mgr.getPrimaryCamera());
+    }
+
+    test "setters applied to the selected camera do not leak to others" {
+        const Mgr = camera.CameraManager(MockBackend);
+        var mgr = Mgr.init();
+        mgr.setupSplitScreen(.vertical_split);
+
+        mgr.selectCamera(1);
+        mgr.getSelectedCamera().setPosition(500, 250);
+        mgr.getSelectedCamera().setZoom(2.0);
+
+        // Camera 1 moved...
+        try std.testing.expectEqual(@as(f32, 500), mgr.cameras[1].x);
+        try std.testing.expectEqual(@as(f32, 250), mgr.cameras[1].y);
+        try std.testing.expectEqual(@as(f32, 2.0), mgr.cameras[1].zoom);
+        // ...camera 0 (the primary) is untouched.
+        try std.testing.expectEqual(@as(f32, 0), mgr.cameras[0].x);
+        try std.testing.expectEqual(@as(f32, 0), mgr.cameras[0].y);
+        try std.testing.expectEqual(@as(f32, 1.0), mgr.cameras[0].zoom);
+    }
+
+    test "selection survives independently of the primary index" {
+        const Mgr = camera.CameraManager(MockBackend);
+        var mgr = Mgr.init();
+        mgr.setupSplitScreen(.quadrant);
+        mgr.setPrimaryCamera(0);
+        mgr.selectCamera(3);
+        try std.testing.expectEqual(@as(u2, 0), mgr.primary_index);
+        try std.testing.expectEqual(@as(u2, 3), mgr.selectedCamera());
+    }
 };
