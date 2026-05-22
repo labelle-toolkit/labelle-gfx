@@ -411,7 +411,17 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         // Insert or move an entity in the spatial grid, replacing any
         // previously-indexed AABB for the same id.
         fn indexEntity(self: *Self, id: u32, bounds: CullRect) void {
-            const gop = self.entity_bounds.getOrPut(id) catch return;
+            const gop = self.entity_bounds.getOrPut(id) catch {
+                // The bounds map could not grow (OOM): this id has no
+                // tracked AABB and is therefore absent from the grid.
+                // A viewport query would silently drop its draw, so
+                // flag the grid as incomplete — `cullCandidates` sees
+                // the flag and falls back to the full linear scan
+                // until a later `rebuildGrid` succeeds. This mirrors
+                // the `grid.insert` OOM path below.
+                self.grid_incomplete = true;
+                return;
+            };
             if (gop.found_existing) {
                 self.grid.remove(id, gop.value_ptr.bounds);
             }
@@ -429,24 +439,46 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             };
         }
 
-        // Attempt to rebuild the entire spatial grid from `entity_bounds`.
-        // Called when the grid is known to be missing entities (a prior
-        // `grid.insert` hit OOM). On full success the grid is consistent
-        // again and `grid_incomplete` is cleared; if any insert still
-        // fails the grid stays flagged and the renderer keeps using the
-        // linear fallback.
+        // Attempt to rebuild the entire spatial grid. Called when the
+        // grid is known to be missing entities (a prior `grid.insert`
+        // or `entity_bounds.getOrPut` hit OOM).
+        //
+        // The rebuild reindexes from the *authoritative* entity maps
+        // (`sprites`/`shapes`/`texts`), NOT from the `entity_bounds`
+        // cache. An OOM in `indexEntity` drops the affected id from
+        // `entity_bounds` entirely, so rebuilding from that cache
+        // alone would leave the dropped entity permanently missing
+        // while still clearing the incomplete flag — silently losing
+        // its draw. Replaying `reindexEntity` over the real entity set
+        // recovers those ids.
+        //
+        // `grid_incomplete` is optimistically cleared up front; any
+        // `indexEntity` call that OOMs again during the replay sets it
+        // back to `true`, so on exit the flag is `true` iff the grid
+        // is still missing at least one entity and the renderer keeps
+        // using the linear fallback.
         fn rebuildGrid(self: *Self) void {
             self.grid.deinit();
             self.grid = Grid.init(self.allocator, self.grid.cell_size);
-            var it = self.entity_bounds.iterator();
-            while (it.next()) |kv| {
-                self.grid.insert(kv.key_ptr.*, kv.value_ptr.bounds) catch {
-                    // Still cannot fit the grid in memory — leave the
-                    // flag set so the linear fallback stays active.
-                    return;
-                };
-            }
+            self.entity_bounds.clearRetainingCapacity();
             self.grid_incomplete = false;
+            // One entity id may carry a sprite, a shape and/or a text;
+            // `reindexEntity` unions all of its world-space visuals, so
+            // each id must be reindexed exactly once. Reindex on the
+            // first map that owns the id and skip it on the others.
+            var sprite_it = self.sprites.keyIterator();
+            while (sprite_it.next()) |id| self.reindexEntity(id.*);
+            var shape_it = self.shapes.keyIterator();
+            while (shape_it.next()) |id| {
+                if (self.sprites.contains(id.*)) continue;
+                self.reindexEntity(id.*);
+            }
+            var text_it = self.texts.keyIterator();
+            while (text_it.next()) |id| {
+                if (self.sprites.contains(id.*)) continue;
+                if (self.shapes.contains(id.*)) continue;
+                self.reindexEntity(id.*);
+            }
         }
 
         fn unindexEntity(self: *Self, id: u32) void {
