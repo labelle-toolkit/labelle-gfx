@@ -299,7 +299,46 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
             }
         }
 
+        /// Apply a camera's screen-space viewport (split-screen scissor /
+        /// glViewport). Optional backend hook — backends that declare
+        /// `setViewport(x, y, w, h)` get true split-screen rendering;
+        /// backends without it fall back to drawing every active camera
+        /// over the full window (the camera transforms are still
+        /// correct, the views just overlap). `clearViewport` restores
+        /// the full window.
+        fn applyViewport(cam: *const CameraT) void {
+            if (@hasDecl(BackendImpl, "setViewport")) {
+                if (cam.screen_viewport) |vp| {
+                    BackendImpl.setViewport(vp.x, vp.y, vp.width, vp.height);
+                } else if (@hasDecl(BackendImpl, "clearViewport")) {
+                    BackendImpl.clearViewport();
+                }
+            }
+        }
+
+        fn clearViewport() void {
+            if (@hasDecl(BackendImpl, "clearViewport")) {
+                BackendImpl.clearViewport();
+            }
+        }
+
+        /// Render every active camera. In single-camera mode this is one
+        /// pass through camera 0; in split-screen mode it iterates all
+        /// active cameras (labelle-gfx#226 — previously only the primary
+        /// camera was ever rendered, so cameras 1-3 were invisible).
         pub fn render(self: *Self) void {
+            var it = self.camera_mgr.activeIterator();
+            while (it.next()) |cam| {
+                applyViewport(cam);
+                self.renderThroughCamera(cam);
+            }
+            clearViewport();
+        }
+
+        /// Render all layers once, entering/exiting `cam` for world
+        /// layers. Factored out of `render` so each active camera in a
+        /// split-screen layout draws the full layer stack.
+        fn renderThroughCamera(self: *Self, cam: *const CameraT) void {
             var in_camera = false;
             inline for (sorted_layers) |layer| {
                 const space = layer.config().space;
@@ -308,7 +347,7 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
                 // Exit the camera FIRST if we're moving from a world
                 // layer to a non-world layer.
                 if (!is_world and in_camera) {
-                    self.camera_mgr.getPrimaryCamera().end();
+                    cam.end();
                     in_camera = false;
                 }
 
@@ -327,14 +366,14 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
 
                 // Now (re-)enter the camera if needed for this layer.
                 if (is_world and !in_camera) {
-                    self.camera_mgr.getPrimaryCamera().begin();
+                    cam.begin();
                     in_camera = true;
                 }
 
                 self.inner.renderLayer(layer);
             }
             if (in_camera) {
-                self.camera_mgr.getPrimaryCamera().end();
+                cam.end();
             }
             if (@hasDecl(BackendImpl, "setApplyFit")) {
                 BackendImpl.setApplyFit(true);
@@ -348,16 +387,23 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
         pub fn renderGizmoDraws(self: *Self, draws: []const GizmoDraw) void {
             if (draws.len == 0) return;
 
-            const camera = self.camera_mgr.getPrimaryCamera();
             const sh = self.screen_height;
 
-            // World-space gizmos (Y-flipped, through camera)
-            camera.begin();
-            for (draws) |d| {
-                if (d.space != .world) continue;
-                drawGizmoPrimitive(d, sh);
+            // World-space gizmos (Y-flipped, through camera). Drawn once
+            // per active camera so split-screen views each get the debug
+            // overlay (labelle-gfx#226 — previously only the primary
+            // camera's view showed gizmos).
+            var it = self.camera_mgr.activeIterator();
+            while (it.next()) |camera| {
+                applyViewport(camera);
+                camera.begin();
+                for (draws) |d| {
+                    if (d.space != .world) continue;
+                    drawGizmoPrimitive(d, sh);
+                }
+                camera.end();
             }
-            camera.end();
+            clearViewport();
 
             // Screen-space gizmos (no camera, no flip)
             for (draws) |d| {
@@ -402,8 +448,30 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
             return &self.camera_mgr;
         }
 
+        /// The camera that high-level operations (position / zoom /
+        /// bounds setters, follow, pan) act on.
+        ///
+        /// In single-camera mode this is camera 0. In multi-camera /
+        /// split-screen mode it is the camera last chosen via
+        /// `selectCamera` — falling back to the primary camera when the
+        /// selected camera is not active (so a setter is never silently
+        /// dropped onto an off-screen camera). This is the fix for
+        /// labelle-gfx#226: previously this hardcoded the primary
+        /// camera, so setters and follow/pan/bounds had no effect on any
+        /// non-primary split-screen camera.
         pub fn getCamera(self: *Self) *CameraT {
-            return self.camera_mgr.getPrimaryCamera();
+            const mgr = &self.camera_mgr;
+            const sel = mgr.selectedCamera();
+            if (mgr.isActive(sel)) return mgr.getCamera(sel);
+            return mgr.getPrimaryCamera();
+        }
+
+        /// Choose which camera `getCamera` (and therefore every
+        /// high-level setter / follow / pan / bounds call routed through
+        /// it) operates on. Safe in single-camera mode — selecting
+        /// camera 0 is always valid.
+        pub fn selectCamera(self: *Self, index: u2) void {
+            self.camera_mgr.selectCamera(index);
         }
 
         // ── Position resolution ─────────────────────────────────────────

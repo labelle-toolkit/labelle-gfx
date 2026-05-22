@@ -518,6 +518,163 @@ test "GfxRenderer: screenToDesign callable on a const renderer reference" {
     try testing.expectEqual(@as(f32, 8.0), out.y);
 }
 
+// ── GfxRenderer multi-camera (regression: labelle-gfx#226) ──
+
+test "GfxRenderer: getCamera targets the selected camera in split-screen" {
+    // Before #226 getCamera always returned the primary camera, so
+    // every high-level setter routed through it ignored the game's
+    // camera selection. selectCamera(1) must redirect getCamera to
+    // camera 1.
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    renderer.getCameraManager().setupSplitScreen(.vertical_split);
+
+    // Default selection is camera 0 (the primary).
+    try testing.expectEqual(
+        renderer.getCameraManager().getPrimaryCamera(),
+        renderer.getCamera(),
+    );
+
+    // Selecting camera 1 redirects every setter routed through getCamera.
+    renderer.selectCamera(1);
+    renderer.getCamera().setPosition(640, 360);
+    renderer.getCamera().setZoom(2.0);
+
+    const mgr = renderer.getCameraManager();
+    try testing.expectEqual(@as(f32, 640), mgr.getCamera(1).x);
+    try testing.expectEqual(@as(f32, 360), mgr.getCamera(1).y);
+    try testing.expectEqual(@as(f32, 2.0), mgr.getCamera(1).zoom);
+    // Primary camera (0) is untouched — the setter no longer leaks.
+    try testing.expectEqual(@as(f32, 0), mgr.getCamera(0).x);
+    try testing.expectEqual(@as(f32, 1.0), mgr.getCamera(0).zoom);
+}
+
+test "GfxRenderer: getCamera falls back to primary when selection is inactive" {
+    // Single-camera mode: only camera 0 is active. Selecting an
+    // inactive camera must not silently drop setters onto an
+    // off-screen camera — getCamera falls back to the primary.
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    renderer.selectCamera(2); // camera 2 is not active in single mode
+    try testing.expectEqual(
+        renderer.getCameraManager().getPrimaryCamera(),
+        renderer.getCamera(),
+    );
+}
+
+test "GfxRenderer: render draws through every active camera" {
+    // The core #226 bug: render() only ever entered the primary
+    // camera, so split-screen cameras 1-3 were never rendered. With
+    // a single world layer, each active camera produces exactly one
+    // beginMode2D pass.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    // Single-camera baseline.
+    renderer.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+
+    // Vertical split — two active cameras, two passes.
+    MockBackend.resetMock();
+    renderer.getCameraManager().setupSplitScreen(.vertical_split);
+    renderer.render();
+    try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
+
+    // Quadrant — four active cameras, four passes.
+    MockBackend.resetMock();
+    renderer.getCameraManager().setupSplitScreen(.quadrant);
+    renderer.render();
+    try testing.expectEqual(@as(usize, 4), MockBackend.getCameraPasses().len);
+}
+
+test "GfxRenderer: each split-screen camera renders with its own transform" {
+    // Per-camera follow/pan must actually reach rendering: position
+    // camera 0 and camera 1 differently, then assert both targets
+    // show up among the recorded camera passes.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    renderer.getCameraManager().setupSplitScreen(.vertical_split);
+
+    renderer.selectCamera(0);
+    renderer.getCamera().setPosition(100, 0);
+    renderer.selectCamera(1);
+    renderer.getCamera().setPosition(700, 0);
+
+    renderer.render();
+
+    const passes = MockBackend.getCameraPasses();
+    try testing.expectEqual(@as(usize, 2), passes.len);
+    // Camera.toBackend leaves `target.x` as the world x (only y is
+    // flipped), so the two passes carry x=100 and x=700.
+    var saw_100 = false;
+    var saw_700 = false;
+    for (passes) |p| {
+        if (p.target_x == 100) saw_100 = true;
+        if (p.target_x == 700) saw_700 = true;
+    }
+    try testing.expect(saw_100);
+    try testing.expect(saw_700);
+}
+
+test "GfxRenderer: render scopes each camera to its screen viewport" {
+    // MockBackend defines the optional setViewport hook, so split-
+    // screen rendering must scope each camera's draws to its own
+    // viewport rect.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    renderer.getCameraManager().setupSplitScreen(.vertical_split);
+    renderer.render();
+
+    // MockBackend is 800x600 → left half {0,0,400,600}, right half
+    // {400,0,400,600}.
+    const vps = MockBackend.getViewportCalls();
+    try testing.expectEqual(@as(usize, 2), vps.len);
+    try testing.expectEqual(@as(i32, 0), vps[0].x);
+    try testing.expectEqual(@as(i32, 400), vps[0].width);
+    try testing.expectEqual(@as(i32, 400), vps[1].x);
+    try testing.expectEqual(@as(i32, 400), vps[1].width);
+}
+
+test "GfxRenderer: renderGizmoDraws draws into every active camera" {
+    // Gizmo overlays were also primary-camera-only before #226.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    renderer.getCameraManager().setupSplitScreen(.vertical_split);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    // One beginMode2D pass per active camera (two for vertical split).
+    try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
+    // The world-space line is drawn once per camera.
+    try testing.expectEqual(@as(usize, 2), MockBackend.getLineCallCount());
+}
+
 // ── Components ─────────────────────────────────────────────
 
 test "SpriteComponent.toVisual produces correct SpriteVisual" {
