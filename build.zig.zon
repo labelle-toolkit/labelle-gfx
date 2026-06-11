@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .labelle_core = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-core.git?ref=feat/gamepad-event-contract#8fcf67641a1d6e021bc305ee62092944456f8f69",
-            .hash = "labelle_core-1.14.1-OauRcH-BAgDVjH3gOO534hhVb1n8Ey9uMjK5dRFaMazj",
+            .url = "https://github.com/labelle-toolkit/labelle-core/archive/refs/tags/v1.15.0.tar.gz",
+            .hash = "labelle_core-1.15.0-OauRcIDMAwCys-pGbaVktdIZZk65hbXkrzzqd0Jk_XjY",
         },
         .spatial_grid = .{
             .path = "spatial_grid",
