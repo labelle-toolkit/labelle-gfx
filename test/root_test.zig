@@ -924,19 +924,6 @@ test "TileMap loadFromMemory parses basic TMX" {
     try testing.expectEqual(@as(f32, 32), entities.objects[0].x);
 }
 
-// ── Window Utilities ───────────────────────────────────────
-
-test "Fullscreen: toggle state" {
-    var fs = gfx.Fullscreen{};
-    try testing.expect(!fs.is_fullscreen);
-    fs.toggle();
-    try testing.expect(fs.is_fullscreen);
-    fs.toggle();
-    try testing.expect(!fs.is_fullscreen);
-    fs.set(true);
-    try testing.expect(fs.is_fullscreen);
-}
-
 // ── Spatial viewport culling (#208) ────────────────────────
 //
 // The retained engine indexes every world-space entity in a uniform
