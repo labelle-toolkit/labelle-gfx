@@ -1,22 +1,13 @@
-//! Window utilities — fullscreen toggle and screenshot capture.
+//! Window utilities — screenshot capture.
 //!
-//! Backend-agnostic state tracking. Actual windowing calls are
-//! delegated to the backend via comptime-resolved function pointers.
+//! Fullscreen lives in the engine (`game.setFullscreen` /
+//! `toggleFullscreen` / `isFullscreen`) and is applied by the generated
+//! main loop through the backend window module (`window.setFullscreen`).
+//! The old `Fullscreen` bool-flipping struct here never called a backend
+//! and has been removed — it was a no-op that misled callers into
+//! thinking gfx owned fullscreen.
 
 const std = @import("std");
-
-/// Fullscreen state tracker
-pub const Fullscreen = struct {
-    is_fullscreen: bool = false,
-
-    pub fn toggle(self: *Fullscreen) void {
-        self.is_fullscreen = !self.is_fullscreen;
-    }
-
-    pub fn set(self: *Fullscreen, fullscreen: bool) void {
-        self.is_fullscreen = fullscreen;
-    }
-};
 
 /// Screenshot writer — saves raw RGBA pixels to BMP format
 pub const Screenshot = struct {

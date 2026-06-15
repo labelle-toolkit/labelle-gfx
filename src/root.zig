@@ -94,5 +94,4 @@ pub const SourceRect = types_mod.SourceRect;
 pub const ScreenPoint = types_mod.ScreenPoint;
 
 // Window Utilities
-pub const Fullscreen = window_utils_mod.Fullscreen;
 pub const Screenshot = window_utils_mod.Screenshot;
