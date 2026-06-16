@@ -333,6 +333,21 @@ pub fn Backend(comptime Impl: type) type {
         /// existing synchronous callers (renderer, retained engine, single-
         /// threaded games) keep working unchanged.
         pub inline fn loadTextureFromMemory(file_type: [:0]const u8, data: []const u8) !Texture {
+            // GPU-compressed blobs (e.g. ASTC) upload as-is — no CPU decode —
+            // on backends that support them. A backend opts in by exposing
+            // `isCompressed` + `uploadCompressed`; every other backend, and any
+            // non-compressed blob, falls through to the decode path below, so
+            // PNG/BMP/TGA loading is unchanged (labelle-gfx#269 / assembler#341).
+            comptime {
+                // The two are a unit — a backend that defines one but not the
+                // other would silently fall back to CPU decode (then fail), so
+                // make that a compile error instead of a runtime mystery.
+                if (@hasDecl(Impl, "isCompressed") != @hasDecl(Impl, "uploadCompressed"))
+                    @compileError("Backend must define both 'isCompressed' and 'uploadCompressed', or neither");
+            }
+            if (@hasDecl(Impl, "isCompressed") and @hasDecl(Impl, "uploadCompressed")) {
+                if (Impl.isCompressed(data)) return Impl.uploadCompressed(data);
+            }
             const allocator = decode_allocator;
             const decoded = try Impl.decodeImage(file_type, data, allocator);
             defer allocator.free(decoded.pixels);
@@ -455,4 +470,19 @@ pub fn Backend(comptime Impl: type) type {
             }
         }
     };
+}
+
+test "loadTextureFromMemory diverts compressed blobs past the CPU decoder" {
+    // #341: a backend exposing isCompressed/uploadCompressed gets compressed
+    // blobs uploaded as-is; everything else takes the decode path unchanged.
+    const MockBackend = @import("mock_backend.zig").MockBackend;
+    const B = Backend(MockBackend);
+
+    // Sentinel-"MOCK" blob → uploadCompressed (sentinel 4096×4096), no decode.
+    const compressed = try B.loadTextureFromMemory("astc", "MOCK\x00\x00\x00\x00payload");
+    try std.testing.expectEqual(@as(i32, 4096), compressed.width);
+
+    // Ordinary blob → decodeImage + uploadTexture (the 1×1 mock stub).
+    const decoded = try B.loadTextureFromMemory("png", "ordinary-non-compressed-bytes");
+    try std.testing.expectEqual(@as(i32, 1), decoded.width);
 }
