@@ -358,6 +358,44 @@ pub fn Backend(comptime Impl: type) type {
             Impl.unloadTexture(texture);
         }
 
+        // ── GPU-compressed (ASTC) for the async asset catalog ───────────────
+        // The synchronous `loadTextureFromMemory` above diverts compressed
+        // blobs to `uploadCompressed` itself. The async streaming catalog
+        // (labelle-engine#450) does NOT go through that wrapper — it splits
+        // worker-thread `decodeImage` from main-thread `uploadTexture` — so its
+        // generated adapter needs these namespace-level probes to route a
+        // compressed blob past the CPU decoder. `@hasDecl`-guarded so a backend
+        // without ASTC support still compiles (isCompressed → always false).
+
+        /// True if `data` is a GPU-compressed blob this backend can upload
+        /// as-is (no CPU decode). False on backends without compressed support.
+        pub inline fn isCompressed(data: []const u8) bool {
+            if (@hasDecl(Impl, "isCompressed") and @hasDecl(Impl, "uploadCompressed")) {
+                return Impl.isCompressed(data);
+            }
+            return false;
+        }
+
+        /// Upload a GPU-compressed blob straight to the GPU — no CPU decode.
+        /// Only valid when `isCompressed(data)` is true.
+        pub inline fn uploadCompressed(data: []const u8) !Texture {
+            if (@hasDecl(Impl, "isCompressed") and @hasDecl(Impl, "uploadCompressed")) {
+                return Impl.uploadCompressed(data);
+            }
+            return error.CompressedTexturesUnsupported;
+        }
+
+        /// Image dimensions of a compressed blob, read from its header without
+        /// decoding. Lets the catalog adapter set a correct DecodedImage
+        /// width/height (for sprite-scale math) before the GPU upload. Null if
+        /// unsupported or the blob isn't a compressed format we accept.
+        pub inline fn compressedDims(data: []const u8) ?struct { width: u32, height: u32 } {
+            if (@hasDecl(Impl, "compressedDims")) {
+                return Impl.compressedDims(data);
+            }
+            return null;
+        }
+
         // ── Font atlas (Phase 4 of Asset Streaming RFC, labelle-engine#448) ──
         //
         // Backends opt in by declaring `FontAtlas` + `decodeFont` +
