@@ -338,6 +338,13 @@ pub fn Backend(comptime Impl: type) type {
             // `isCompressed` + `uploadCompressed`; every other backend, and any
             // non-compressed blob, falls through to the decode path below, so
             // PNG/BMP/TGA loading is unchanged (labelle-gfx#269 / assembler#341).
+            comptime {
+                // The two are a unit — a backend that defines one but not the
+                // other would silently fall back to CPU decode (then fail), so
+                // make that a compile error instead of a runtime mystery.
+                if (@hasDecl(Impl, "isCompressed") != @hasDecl(Impl, "uploadCompressed"))
+                    @compileError("Backend must define both 'isCompressed' and 'uploadCompressed', or neither");
+            }
             if (@hasDecl(Impl, "isCompressed") and @hasDecl(Impl, "uploadCompressed")) {
                 if (Impl.isCompressed(data)) return Impl.uploadCompressed(data);
             }
