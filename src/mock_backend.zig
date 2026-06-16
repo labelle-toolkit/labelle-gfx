@@ -344,6 +344,22 @@ pub const MockBackend = struct {
 
     pub fn unloadTexture(_: Texture) void {}
 
+    /// GPU-compressed-texture support, exercised by the dispatch test in
+    /// `backend.zig`. Real backends key this on a format magic (e.g. ASTC);
+    /// the mock uses a `"MOCK"` sentinel so it only diverts blobs the tests
+    /// explicitly mark compressed — ordinary decode-path tests are unaffected.
+    pub fn isCompressed(data: []const u8) bool {
+        return data.len >= 4 and std.mem.eql(u8, data[0..4], "MOCK");
+    }
+
+    /// Stub compressed upload: returns a texture with sentinel 4096×4096 dims
+    /// so a test can tell the compressed path was taken (vs the 1×1 decode stub).
+    pub fn uploadCompressed(_: []const u8) !Texture {
+        const id = texture_counter;
+        texture_counter += 1;
+        return Texture{ .id = id, .width = 4096, .height = 4096 };
+    }
+
     /// Stub CPU bake: returns a 1×1 alpha atlas with a single glyph
     /// covering codepoint `params.ranges[0].first` (or 0x20 if ranges
     /// is empty). All four slices come from the caller's allocator;
