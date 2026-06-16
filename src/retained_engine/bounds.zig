@@ -67,7 +67,7 @@ pub fn CullBounds(comptime Self: type) type {
         // `pos - origin` (origin = pivot offset into the quad), and it
         // rotates about `pos` (the pivot point the renderer passes as
         // the draw origin).
-        pub fn spriteBounds(self: *const Self, entry: SpriteEntry) CullRect {
+        pub fn spriteBounds(self: *const Self, entry: *const SpriteEntry) CullRect {
             const v = entry.visual;
             var display_w: f32 = 64;
             var display_h: f32 = 64;
@@ -100,7 +100,7 @@ pub fn CullBounds(comptime Self: type) type {
             return rotatedAabb(entry.position, .{ .x = 0, .y = 0 }, v.rotation, &corners);
         }
 
-        pub fn shapeBounds(entry: ShapeEntry) CullRect {
+        pub fn shapeBounds(entry: *const ShapeEntry) CullRect {
             const v = entry.visual;
             const pos = entry.position;
             // Circle/polygon radii are symmetric, so a sign flip is
@@ -168,7 +168,7 @@ pub fn CullBounds(comptime Self: type) type {
             }
         }
 
-        pub fn textBounds(entry: TextEntry) CullRect {
+        pub fn textBounds(entry: *const TextEntry) CullRect {
             const v = entry.visual;
             // Text renders with `pos` as its top-left (see `drawTextEntry`).
             // Width is unknown without measuring the font, so approximate

@@ -21,7 +21,7 @@ pub fn DrawHelpers(comptime Self: type) type {
         // display dimensions, applies pivot/scale/flip, then issues the
         // backend `drawTexturePro` — identical to the inlined body that
         // previously lived in `renderSpritesOnLayer`.
-        pub fn drawSpriteEntry(self: *const Self, entry: SpriteEntry) void {
+        pub fn drawSpriteEntry(self: *const Self, entry: *const SpriteEntry) void {
             const sprite = &entry.visual;
             const pos = entry.position;
             const tex_id = sprite.texture.toInt();
@@ -88,7 +88,7 @@ pub fn DrawHelpers(comptime Self: type) type {
             );
         }
 
-        pub fn drawShapeEntry(shape_entry: ShapeEntry) void {
+        pub fn drawShapeEntry(shape_entry: *const ShapeEntry) void {
             const shape = &shape_entry.visual;
             {
                 const spos = shape_entry.position;
@@ -193,7 +193,7 @@ pub fn DrawHelpers(comptime Self: type) type {
             }
         }
 
-        pub fn drawTextEntry(entry: TextEntry) void {
+        pub fn drawTextEntry(entry: *const TextEntry) void {
             const text = &entry.visual;
             const tpos = entry.position;
             B.drawText(

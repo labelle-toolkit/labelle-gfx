@@ -235,19 +235,19 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             var bounds: ?CullRect = null;
             if (self.sprites.get(id)) |e| {
                 if (isWorldLayer(e.visual.layer)) {
-                    const b = self.spriteBounds(e);
+                    const b = self.spriteBounds(&e);
                     bounds = if (bounds) |cur| rectUnion(cur, b) else b;
                 }
             }
             if (self.shapes.get(id)) |e| {
                 if (isWorldLayer(e.visual.layer)) {
-                    const b = shapeBounds(e);
+                    const b = shapeBounds(&e);
                     bounds = if (bounds) |cur| rectUnion(cur, b) else b;
                 }
             }
             if (self.texts.get(id)) |e| {
                 if (isWorldLayer(e.visual.layer)) {
-                    const b = textBounds(e);
+                    const b = textBounds(&e);
                     bounds = if (bounds) |cur| rectUnion(cur, b) else b;
                 }
             }
@@ -650,7 +650,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                     const entry = self.sprites.getPtr(id) orelse continue;
                     const sprite = &entry.visual;
                     if (sprite.layer != layer or !sprite.visible) continue;
-                    if (!self.spriteBounds(entry.*).overlaps(vp)) continue;
+                    if (!self.spriteBounds(entry).overlaps(vp)) continue;
                     if (sort_count < sort_buf.len) {
                         sort_buf[sort_count] = .{ .key = id, .z_index = sprite.z_index };
                         sort_count += 1;
@@ -684,7 +684,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // Draw in sorted order
             for (sort_buf[0..sort_count]) |sorted| {
                 const entry = self.sprites.getPtr(sorted.key) orelse continue;
-                Draw.drawSpriteEntry(self, entry.*);
+                Draw.drawSpriteEntry(self, entry);
             }
         }
 
@@ -694,15 +694,15 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 for (ids) |id| {
                     const entry = self.shapes.getPtr(id) orelse continue;
                     if (entry.visual.layer != layer or !entry.visual.visible) continue;
-                    if (!shapeBounds(entry.*).overlaps(vp)) continue;
-                    drawShapeEntry(entry.*);
+                    if (!shapeBounds(entry).overlaps(vp)) continue;
+                    drawShapeEntry(entry);
                 }
             } else {
                 var shape_iter = self.shapes.iterator();
                 while (shape_iter.next()) |shape_entry| {
                     const shape = &shape_entry.value_ptr.visual;
                     if (shape.layer != layer or !shape.visible) continue;
-                    drawShapeEntry(shape_entry.value_ptr.*);
+                    drawShapeEntry(shape_entry.value_ptr);
                 }
             }
         }
@@ -718,14 +718,14 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 for (ids) |id| {
                     const entry = self.texts.getPtr(id) orelse continue;
                     if (entry.visual.layer != layer or !entry.visual.visible) continue;
-                    if (!textBounds(entry.*).overlaps(vp)) continue;
-                    drawTextEntry(entry.*);
+                    if (!textBounds(entry).overlaps(vp)) continue;
+                    drawTextEntry(entry);
                 }
             } else {
                 var text_iter = self.texts.iterator();
                 while (text_iter.next()) |entry| {
                     if (entry.value_ptr.visual.layer != layer or !entry.value_ptr.visual.visible) continue;
-                    drawTextEntry(entry.value_ptr.*);
+                    drawTextEntry(entry.value_ptr);
                 }
             }
         }
