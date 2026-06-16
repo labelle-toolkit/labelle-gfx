@@ -360,6 +360,14 @@ pub const MockBackend = struct {
         return Texture{ .id = id, .width = 4096, .height = 4096 };
     }
 
+    /// Stub header probe: reports the same sentinel 4096×4096 dims for a
+    /// `"MOCK"` blob (matching `uploadCompressed`), null otherwise — so a
+    /// test can confirm the catalog adapter reads dims without decoding.
+    pub fn compressedDims(data: []const u8) ?struct { width: u32, height: u32 } {
+        if (!isCompressed(data)) return null;
+        return .{ .width = 4096, .height = 4096 };
+    }
+
     /// Stub CPU bake: returns a 1×1 alpha atlas with a single glyph
     /// covering codepoint `params.ranges[0].first` (or 0x20 if ranges
     /// is empty). All four slices come from the caller's allocator;

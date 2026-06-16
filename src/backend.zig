@@ -178,6 +178,12 @@ pub fn Backend(comptime Impl: type) type {
         pub const Vector2 = Impl.Vector2;
         pub const Camera2D = Impl.Camera2D;
 
+        /// Image dimensions of a GPU-compressed blob, read from its header
+        /// without decoding. Named (not anonymous) so the type unifies across
+        /// declaration sites — a backend's own `compressedDims` result coerces
+        /// cleanly into this when returned through the wrapper.
+        pub const CompressedDims = struct { width: u32, height: u32 };
+
         pub const white = Impl.white;
         pub const black = Impl.black;
         pub const red = Impl.red;
@@ -389,7 +395,7 @@ pub fn Backend(comptime Impl: type) type {
         /// decoding. Lets the catalog adapter set a correct DecodedImage
         /// width/height (for sprite-scale math) before the GPU upload. Null if
         /// unsupported or the blob isn't a compressed format we accept.
-        pub inline fn compressedDims(data: []const u8) ?struct { width: u32, height: u32 } {
+        pub inline fn compressedDims(data: []const u8) ?CompressedDims {
             if (@hasDecl(Impl, "compressedDims")) {
                 return Impl.compressedDims(data);
             }
@@ -523,4 +529,22 @@ test "loadTextureFromMemory diverts compressed blobs past the CPU decoder" {
     // Ordinary blob → decodeImage + uploadTexture (the 1×1 mock stub).
     const decoded = try B.loadTextureFromMemory("png", "ordinary-non-compressed-bytes");
     try std.testing.expectEqual(@as(i32, 1), decoded.width);
+}
+
+test "compressedDims reads dims from a compressed blob without decoding" {
+    // The async catalog adapter probes header dims via the namespace-level
+    // wrapper; the named CompressedDims type must unify with the backend's
+    // own anonymous result.
+    const MockBackend = @import("mock_backend.zig").MockBackend;
+    const B = Backend(MockBackend);
+
+    // Sentinel-"MOCK" blob → mock reports its sentinel 4096×4096 dims.
+    const dims = B.compressedDims("MOCK\x00\x00\x00\x00payload");
+    try std.testing.expect(dims != null);
+    try std.testing.expectEqual(@as(u32, 4096), dims.?.width);
+    try std.testing.expectEqual(@as(u32, 4096), dims.?.height);
+    try std.testing.expectEqual(B.CompressedDims, @TypeOf(dims.?));
+
+    // Non-compressed blob → null (no dims to read without decoding).
+    try std.testing.expectEqual(@as(?B.CompressedDims, null), B.compressedDims("ordinary-bytes"));
 }
