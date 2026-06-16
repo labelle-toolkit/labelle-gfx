@@ -1,11 +1,4 @@
-//! Window utilities — screenshot capture.
-//!
-//! Fullscreen lives in the engine (`game.setFullscreen` /
-//! `toggleFullscreen` / `isFullscreen`) and is applied by the generated
-//! main loop through the backend window module (`window.setFullscreen`).
-//! The old `Fullscreen` bool-flipping struct here never called a backend
-//! and has been removed — it was a no-op that misled callers into
-//! thinking gfx owned fullscreen.
+//! Window utilities — screenshot capture (RGBA → 24-bit BMP).
 
 const std = @import("std");
 
