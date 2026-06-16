@@ -5,6 +5,8 @@ const types = @import("types.zig");
 const layer_mod = @import("layer.zig");
 const visuals_mod = @import("visuals.zig");
 const spatial_grid = @import("spatial_grid");
+const bounds_mod = @import("retained_engine/bounds.zig");
+const draw_mod = @import("retained_engine/draw.zig");
 
 /// Viewport rectangle (engine coordinate space) used to cull off-screen
 /// entities. Stored axis-aligned; `x,y` is the top-left corner.
@@ -44,20 +46,28 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             return layer.config().space == .world;
         }
 
-        const SpriteEntry = struct {
+        // Entry types are `pub` so the extracted `bounds` / `draw`
+        // sub-modules can reach them via `Self.SpriteEntry` etc. They
+        // remain internal in practice — not re-exported by the facade.
+        pub const SpriteEntry = struct {
             visual: SpriteVisual,
             position: Position,
         };
 
-        const ShapeEntry = struct {
+        pub const ShapeEntry = struct {
             visual: ShapeVisual,
             position: Position,
         };
 
-        const TextEntry = struct {
+        pub const TextEntry = struct {
             visual: TextVisual,
             position: Position,
         };
+
+        // Cull-AABB and per-visual draw helpers live in sibling
+        // sub-modules, instantiated against this concrete engine type.
+        const Bounds = bounds_mod.CullBounds(Self);
+        const Draw = draw_mod.DrawHelpers(Self);
 
         /// Loaded texture info — maps TextureId to backend texture + dimensions.
         /// Public so the `GfxRenderer` wrapper can forward `getTextureInfo`
@@ -193,178 +203,18 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         // different anchor (sprites by a pivot, rectangles/text by their
         // top-left, circles by their centre), so a box that simply
         // centres on `position` would be offset from the real footprint
-        // and could clip a still-visible entity. Each `*Bounds` helper
-        // below reproduces its visual's draw geometry, including
-        // rotation, so the grid box is a tight superset of the rendered
-        // quad. A superset is always safe for culling (it can only keep
-        // an extra entity, never drop a visible one).
-
-        // Axis-aligned bounding box of a set of local corner points,
-        // rotated by `rotation` around `rot_pivot` and translated to
-        // world space by `pos`. `rotation` is in radians (the same unit
-        // the renderer feeds the backend).
-        fn rotatedAabb(
-            pos: Position,
-            rot_pivot: Position,
-            rotation: f32,
-            corners: []const Position,
-        ) CullRect {
-            const cos_r = @cos(rotation);
-            const sin_r = @sin(rotation);
-            var min_x: f32 = std.math.floatMax(f32);
-            var min_y: f32 = std.math.floatMax(f32);
-            var max_x: f32 = -std.math.floatMax(f32);
-            var max_y: f32 = -std.math.floatMax(f32);
-            for (corners) |c| {
-                // Rotate the corner around the rotation pivot.
-                const lx = c.x - rot_pivot.x;
-                const ly = c.y - rot_pivot.y;
-                const rx = rot_pivot.x + lx * cos_r - ly * sin_r;
-                const ry = rot_pivot.y + lx * sin_r + ly * cos_r;
-                const wx = pos.x + rx;
-                const wy = pos.y + ry;
-                min_x = @min(min_x, wx);
-                min_y = @min(min_y, wy);
-                max_x = @max(max_x, wx);
-                max_y = @max(max_y, wy);
-            }
-            return .{
-                .x = min_x,
-                .y = min_y,
-                .w = @max(max_x - min_x, 1),
-                .h = @max(max_y - min_y, 1),
-            };
-        }
-
-        // AABB of a sprite, matching `renderSpritesOnLayer`: the sprite
-        // quad has design size `dest_w x dest_h`, its top-left sits at
-        // `pos - origin` (origin = pivot offset into the quad), and it
-        // rotates about `pos` (the pivot point the renderer passes as
-        // the draw origin).
-        fn spriteBounds(self: *const Self, entry: SpriteEntry) CullRect {
-            const v = entry.visual;
-            var display_w: f32 = 64;
-            var display_h: f32 = 64;
-            if (v.source_rect) |sr| {
-                display_w = if (sr.display_width > 0) sr.display_width else @abs(sr.width);
-                display_h = if (sr.display_height > 0) sr.display_height else @abs(sr.height);
-            } else if (self.textures.get(v.texture.toInt())) |t| {
-                display_w = t.width;
-                display_h = t.height;
-            }
-            // Use *signed* scale: the renderer feeds signed `dest_w`/
-            // `dest_h` to `drawTexturePro` (see `renderSpritesOnLayer`),
-            // so a negative scale draws the quad mirrored about `pos`.
-            // `rotatedAabb` takes the min/max of the corners, so a
-            // negative span is handled correctly — using `@abs` here
-            // would produce a same-size box positioned on the wrong
-            // side of the pivot, prematurely culling flipped visuals.
-            const dest_w = display_w * v.scale_x;
-            const dest_h = display_h * v.scale_y;
-            const pivot_norm = v.pivot.getNormalized(v.pivot_x, v.pivot_y);
-            const origin_x = dest_w * pivot_norm.x;
-            const origin_y = dest_h * pivot_norm.y;
-            // Quad corners relative to `pos`: top-left is at `-origin`.
-            const corners = [_]Position{
-                .{ .x = -origin_x, .y = -origin_y },
-                .{ .x = dest_w - origin_x, .y = -origin_y },
-                .{ .x = dest_w - origin_x, .y = dest_h - origin_y },
-                .{ .x = -origin_x, .y = dest_h - origin_y },
-            };
-            return rotatedAabb(entry.position, .{ .x = 0, .y = 0 }, v.rotation, &corners);
-        }
-
-        fn shapeBounds(entry: ShapeEntry) CullRect {
-            const v = entry.visual;
-            const pos = entry.position;
-            // Circle/polygon radii are symmetric, so a sign flip is
-            // irrelevant — `@abs` keeps the box stable. Rectangles use
-            // signed scale below to match the mirrored rendered quad.
-            const sx = @abs(v.scale_x);
-            switch (v.shape) {
-                .circle => |c| {
-                    // Circles render centred on `pos`; scale_x drives the
-                    // radius (see `drawShapeEntry`).
-                    const r = c.radius * sx;
-                    const corners = [_]Position{
-                        .{ .x = -r, .y = -r },
-                        .{ .x = r, .y = -r },
-                        .{ .x = r, .y = r },
-                        .{ .x = -r, .y = r },
-                    };
-                    return rotatedAabb(pos, .{ .x = 0, .y = 0 }, 0, &corners);
-                },
-                .polygon => |p| {
-                    const r = p.radius * sx;
-                    const corners = [_]Position{
-                        .{ .x = -r, .y = -r },
-                        .{ .x = r, .y = -r },
-                        .{ .x = r, .y = r },
-                        .{ .x = -r, .y = r },
-                    };
-                    return rotatedAabb(pos, .{ .x = 0, .y = 0 }, 0, &corners);
-                },
-                .rectangle => |r| {
-                    // Rectangles render with `pos` as their top-left and
-                    // rotate about their centre `pos + (w/2, h/2)`.
-                    // Use *signed* scale: `drawShapeEntry` feeds signed
-                    // `w`/`h` (`rect.width * shape.scale_x`), so a
-                    // negative scale mirrors the quad about `pos`.
-                    // `rotatedAabb` min/maxes the corners, so a negative
-                    // span is fine; `@abs` would mis-place the box.
-                    const w = r.width * v.scale_x;
-                    const h = r.height * v.scale_y;
-                    const corners = [_]Position{
-                        .{ .x = 0, .y = 0 },
-                        .{ .x = w, .y = 0 },
-                        .{ .x = w, .y = h },
-                        .{ .x = 0, .y = h },
-                    };
-                    return rotatedAabb(pos, .{ .x = w * 0.5, .y = h * 0.5 }, v.rotation, &corners);
-                },
-                .line => |l| {
-                    // Line spans `pos` -> `pos + end`.
-                    const corners = [_]Position{
-                        .{ .x = 0, .y = 0 },
-                        .{ .x = l.end.x, .y = l.end.y },
-                    };
-                    return rotatedAabb(pos, .{ .x = 0, .y = 0 }, 0, &corners);
-                },
-                .triangle => |t| {
-                    // Triangle vertices are `pos`, `pos + p2`, `pos + p3`.
-                    const corners = [_]Position{
-                        .{ .x = 0, .y = 0 },
-                        .{ .x = t.p2.x, .y = t.p2.y },
-                        .{ .x = t.p3.x, .y = t.p3.y },
-                    };
-                    return rotatedAabb(pos, .{ .x = 0, .y = 0 }, 0, &corners);
-                },
-            }
-        }
-
-        fn textBounds(entry: TextEntry) CullRect {
-            const v = entry.visual;
-            // Text renders with `pos` as its top-left (see `drawTextEntry`).
-            // Width is unknown without measuring the font, so approximate
-            // generously (every glyph at a full em-square). Over-estimating
-            // only costs a few extra candidates — never a dropped draw.
-            const w = @max(@as(f32, @floatFromInt(v.text.len)) * v.size, v.size);
-            const corners = [_]Position{
-                .{ .x = 0, .y = 0 },
-                .{ .x = w, .y = 0 },
-                .{ .x = w, .y = v.size },
-                .{ .x = 0, .y = v.size },
-            };
-            return rotatedAabb(entry.position, .{ .x = 0, .y = 0 }, 0, &corners);
-        }
-
-        fn rectUnion(a: CullRect, b: CullRect) CullRect {
-            const min_x = @min(a.x, b.x);
-            const min_y = @min(a.y, b.y);
-            const max_x = @max(a.x + a.w, b.x + b.w);
-            const max_y = @max(a.y + a.h, b.y + b.h);
-            return .{ .x = min_x, .y = min_y, .w = max_x - min_x, .h = max_y - min_y };
-        }
+        // and could clip a still-visible entity. The `*Bounds` helpers
+        // (in `retained_engine/bounds.zig`) reproduce each visual's draw
+        // geometry, including rotation, so the grid box is a tight
+        // superset of the rendered quad. A superset is always safe for
+        // culling (it can only keep an extra entity, never drop a
+        // visible one). They are re-bound here as thin aliases so the
+        // engine body keeps calling `self.spriteBounds(...)` etc.
+        const rotatedAabb = Bounds.rotatedAabb;
+        const spriteBounds = Bounds.spriteBounds;
+        const shapeBounds = Bounds.shapeBounds;
+        const textBounds = Bounds.textBounds;
+        const rectUnion = Bounds.rectUnion;
 
         // Recompute the spatial-grid entry for `id` from whatever
         // visuals it currently owns. The engine permits one entity id
@@ -385,19 +235,19 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             var bounds: ?CullRect = null;
             if (self.sprites.get(id)) |e| {
                 if (isWorldLayer(e.visual.layer)) {
-                    const b = self.spriteBounds(e);
+                    const b = self.spriteBounds(&e);
                     bounds = if (bounds) |cur| rectUnion(cur, b) else b;
                 }
             }
             if (self.shapes.get(id)) |e| {
                 if (isWorldLayer(e.visual.layer)) {
-                    const b = shapeBounds(e);
+                    const b = shapeBounds(&e);
                     bounds = if (bounds) |cur| rectUnion(cur, b) else b;
                 }
             }
             if (self.texts.get(id)) |e| {
                 if (isWorldLayer(e.visual.layer)) {
-                    const b = textBounds(e);
+                    const b = textBounds(&e);
                     bounds = if (bounds) |cur| rectUnion(cur, b) else b;
                 }
             }
@@ -800,7 +650,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                     const entry = self.sprites.getPtr(id) orelse continue;
                     const sprite = &entry.visual;
                     if (sprite.layer != layer or !sprite.visible) continue;
-                    if (!self.spriteBounds(entry.*).overlaps(vp)) continue;
+                    if (!self.spriteBounds(entry).overlaps(vp)) continue;
                     if (sort_count < sort_buf.len) {
                         sort_buf[sort_count] = .{ .key = id, .z_index = sprite.z_index };
                         sort_count += 1;
@@ -834,70 +684,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // Draw in sorted order
             for (sort_buf[0..sort_count]) |sorted| {
                 const entry = self.sprites.getPtr(sorted.key) orelse continue;
-                const sprite = &entry.visual;
-                const pos = entry.position;
-                const tex_id = sprite.texture.toInt();
-
-                // Resolve source rect and display dimensions
-                const tex_info = self.textures.get(tex_id);
-                var src_x: f32 = 0;
-                var src_y: f32 = 0;
-                var src_w: f32 = 0;
-                var src_h: f32 = 0;
-                var display_w: f32 = 0;
-                var display_h: f32 = 0;
-
-                if (sprite.source_rect) |sr| {
-                    src_x = sr.x;
-                    src_y = sr.y;
-                    src_w = @abs(sr.width);
-                    src_h = @abs(sr.height);
-                    // `display_*` carry the design-space rendered size.
-                    // When 0, source-rect width/height double as the
-                    // display size — matching the legacy behavior for 1:1
-                    // atlases. Atlas loaders that downscale the texture
-                    // populate `display_*` separately so the on-screen
-                    // size stays put while UV sampling tracks the smaller
-                    // physical texture.
-                    display_w = if (sr.display_width > 0) sr.display_width else src_w;
-                    display_h = if (sr.display_height > 0) sr.display_height else src_h;
-                } else {
-                    display_w = if (tex_info) |t| t.width else 64;
-                    display_h = if (tex_info) |t| t.height else 64;
-                    src_w = display_w;
-                    src_h = display_h;
-                }
-
-                const backend_tex: B.Texture = if (tex_info) |t| t.backend_texture else .{
-                    .id = tex_id,
-                    .width = @intFromFloat(display_w),
-                    .height = @intFromFloat(display_h),
-                };
-
-                const pivot_norm = sprite.pivot.getNormalized(sprite.pivot_x, sprite.pivot_y);
-                const dest_w = display_w * sprite.scale_x;
-                const dest_h = display_h * sprite.scale_y;
-                const origin_x = dest_w * pivot_norm.x;
-                const origin_y = dest_h * pivot_norm.y;
-
-                var final_src_w = src_w;
-                var final_src_h = src_h;
-
-                if (sprite.flip_x) {
-                    final_src_w = -src_w;
-                }
-                if (sprite.flip_y) {
-                    final_src_h = -src_h;
-                }
-
-                B.drawTexturePro(
-                    backend_tex,
-                    .{ .x = src_x, .y = src_y, .width = final_src_w, .height = final_src_h },
-                    .{ .x = pos.x, .y = pos.y, .width = dest_w, .height = dest_h },
-                    .{ .x = origin_x, .y = origin_y },
-                    sprite.rotation,
-                    .{ .r = sprite.tint.r, .g = sprite.tint.g, .b = sprite.tint.b, .a = sprite.tint.a },
-                );
+                Draw.drawSpriteEntry(self, entry);
             }
         }
 
@@ -907,123 +694,23 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 for (ids) |id| {
                     const entry = self.shapes.getPtr(id) orelse continue;
                     if (entry.visual.layer != layer or !entry.visual.visible) continue;
-                    if (!shapeBounds(entry.*).overlaps(vp)) continue;
-                    drawShapeEntry(entry.*);
+                    if (!shapeBounds(entry).overlaps(vp)) continue;
+                    drawShapeEntry(entry);
                 }
             } else {
                 var shape_iter = self.shapes.iterator();
                 while (shape_iter.next()) |shape_entry| {
                     const shape = &shape_entry.value_ptr.visual;
                     if (shape.layer != layer or !shape.visible) continue;
-                    drawShapeEntry(shape_entry.value_ptr.*);
+                    drawShapeEntry(shape_entry.value_ptr);
                 }
             }
         }
 
-        fn drawShapeEntry(shape_entry: ShapeEntry) void {
-            const shape = &shape_entry.visual;
-            {
-                const spos = shape_entry.position;
-                const c = B.Color{ .r = shape.color.r, .g = shape.color.g, .b = shape.color.b, .a = shape.color.a };
-
-                switch (shape.shape) {
-                    .rectangle => |rect| {
-                        const w = rect.width * shape.scale_x;
-                        const h = rect.height * shape.scale_y;
-                        if (shape.rotation == 0) {
-                            const rec = B.Rectangle{
-                                .x = spos.x,
-                                .y = spos.y,
-                                .width = w,
-                                .height = h,
-                            };
-                            if (rect.fill == .outline) {
-                                B.drawRectangleLinesEx(rec, rect.thickness, c);
-                            } else {
-                                B.drawRectangleRec(rec, c);
-                            }
-                        } else {
-                            // Rotated rectangle. Filled goes through
-                            // `drawRectanglePro` (sokol renders a
-                            // rotated sgl quad; backends without the
-                            // primitive emit a rotated outline via
-                            // the backend shim's fallback). Outlines
-                            // emit 4 line segments between the
-                            // rotated corner points — `drawLine`
-                            // takes arbitrary endpoints so the
-                            // rotation is exact on every backend.
-                            //
-                            // Known cosmetic divergence: the
-                            // axis-aligned outline uses
-                            // `drawRectangleLinesEx` (backend-defined
-                            // stroke: sokol is always 1 px, raylib
-                            // centres the line on the rect edge); the
-                            // rotated outline uses `drawLine` which
-                            // centres the line on the segment. For
-                            // thin outlines the difference is
-                            // sub-pixel; for thick outlines the
-                            // rotated rect can appear slightly larger
-                            // than its axis-aligned counterpart.
-                            // Accepted as a non-regression: thin
-                            // outlines look identical, and there's
-                            // currently no backend with a
-                            // rotated-outline-with-inner-stroke
-                            // primitive to target.
-                            const cx = spos.x + w * 0.5;
-                            const cy = spos.y + h * 0.5;
-                            if (rect.fill == .outline) {
-                                const hw = w * 0.5;
-                                const hh = h * 0.5;
-                                const cos_r = @cos(shape.rotation);
-                                const sin_r = @sin(shape.rotation);
-                                const Pt = struct { x: f32, y: f32 };
-                                const corners = [_]Pt{
-                                    .{ .x = -hw, .y = -hh },
-                                    .{ .x = hw, .y = -hh },
-                                    .{ .x = hw, .y = hh },
-                                    .{ .x = -hw, .y = hh },
-                                };
-                                var rotated: [4]Pt = undefined;
-                                for (corners, 0..) |p, i| {
-                                    rotated[i] = .{
-                                        .x = cx + p.x * cos_r - p.y * sin_r,
-                                        .y = cy + p.x * sin_r + p.y * cos_r,
-                                    };
-                                }
-                                var i: usize = 0;
-                                while (i < 4) : (i += 1) {
-                                    const a = rotated[i];
-                                    const b = rotated[(i + 1) % 4];
-                                    B.drawLine(a.x, a.y, b.x, b.y, rect.thickness, c);
-                                }
-                            } else {
-                                B.drawRectanglePro(cx, cy, w, h, shape.rotation, c);
-                            }
-                        }
-                    },
-                    .circle => |circle| {
-                        if (circle.fill == .outline) {
-                            B.drawCircleLines(spos.x, spos.y, circle.radius * shape.scale_x, c);
-                        } else {
-                            B.drawCircle(spos.x, spos.y, circle.radius * shape.scale_x, c);
-                        }
-                    },
-                    .line => |line| {
-                        B.drawLine(spos.x, spos.y, spos.x + line.end.x, spos.y + line.end.y, line.thickness, c);
-                    },
-                    .triangle => |tri| {
-                        // Draw triangle as 3 lines
-                        B.drawLine(spos.x, spos.y, spos.x + tri.p2.x, spos.y + tri.p2.y, tri.thickness, c);
-                        B.drawLine(spos.x + tri.p2.x, spos.y + tri.p2.y, spos.x + tri.p3.x, spos.y + tri.p3.y, tri.thickness, c);
-                        B.drawLine(spos.x + tri.p3.x, spos.y + tri.p3.y, spos.x, spos.y, tri.thickness, c);
-                    },
-                    .polygon => |poly| {
-                        // Approximate polygon as circle for now (same center, same radius)
-                        B.drawCircle(spos.x, spos.y, poly.radius * shape.scale_x, c);
-                    },
-                }
-            }
-        }
+        // Per-visual draw leaves live in `retained_engine/draw.zig`,
+        // re-bound here as thin aliases so the renderer body keeps
+        // calling `drawShapeEntry(...)` / `drawTextEntry(...)`.
+        const drawShapeEntry = Draw.drawShapeEntry;
 
         fn renderTextsOnLayer(self: *Self, layer: LayerEnum, candidates: ?[]const u32) void {
             if (candidates) |ids| {
@@ -1031,28 +718,18 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 for (ids) |id| {
                     const entry = self.texts.getPtr(id) orelse continue;
                     if (entry.visual.layer != layer or !entry.visual.visible) continue;
-                    if (!textBounds(entry.*).overlaps(vp)) continue;
-                    drawTextEntry(entry.*);
+                    if (!textBounds(entry).overlaps(vp)) continue;
+                    drawTextEntry(entry);
                 }
             } else {
                 var text_iter = self.texts.iterator();
                 while (text_iter.next()) |entry| {
                     if (entry.value_ptr.visual.layer != layer or !entry.value_ptr.visual.visible) continue;
-                    drawTextEntry(entry.value_ptr.*);
+                    drawTextEntry(entry.value_ptr);
                 }
             }
         }
 
-        fn drawTextEntry(entry: TextEntry) void {
-            const text = &entry.visual;
-            const tpos = entry.position;
-            B.drawText(
-                text.text,
-                tpos.x,
-                tpos.y,
-                text.size,
-                .{ .r = text.color.r, .g = text.color.g, .b = text.color.b, .a = text.color.a },
-            );
-        }
+        const drawTextEntry = Draw.drawTextEntry;
     };
 }
