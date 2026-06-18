@@ -145,6 +145,7 @@ pub fn Backend(comptime Impl: type) type {
         if (!@hasDecl(Impl, "drawTexturePro")) @compileError("Backend must define 'drawTexturePro'");
         if (!@hasDecl(Impl, "drawRectangleRec")) @compileError("Backend must define 'drawRectangleRec'");
         if (!@hasDecl(Impl, "drawCircle")) @compileError("Backend must define 'drawCircle'");
+        if (!@hasDecl(Impl, "drawTriangle")) @compileError("Backend must define 'drawTriangle'");
         if (!@hasDecl(Impl, "drawLine")) @compileError("Backend must define 'drawLine'");
         if (!@hasDecl(Impl, "drawText")) @compileError("Backend must define 'drawText'");
         if (!@hasDecl(Impl, "loadTexture")) @compileError("Backend must define 'loadTexture'");
@@ -277,6 +278,15 @@ pub fn Backend(comptime Impl: type) type {
 
         pub inline fn drawCircle(center_x: f32, center_y: f32, radius: f32, tint: Color) void {
             Impl.drawCircle(center_x, center_y, radius, tint);
+        }
+
+        /// Filled triangle through the three absolute vertices `v1`,
+        /// `v2`, `v3` (already in world/screen space — the caller has
+        /// applied position + scale). Point/Color signature mirrors the
+        /// backend's other primitives. Outlined triangles take the
+        /// `drawLine` path in the retained-engine draw helper instead.
+        pub inline fn drawTriangle(v1: Vector2, v2: Vector2, v3: Vector2, tint: Color) void {
+            Impl.drawTriangle(v1, v2, v3, tint);
         }
 
         pub inline fn drawRectangleLinesEx(rec: Rectangle, line_thick: f32, tint: Color) void {

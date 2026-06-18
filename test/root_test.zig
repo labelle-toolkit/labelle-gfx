@@ -121,6 +121,51 @@ test "Backend: loadTextureFromMemory wrapper still works (no caller break)" {
 
 // ── decodeFont / uploadFontAtlas / unloadFontAtlas (Phase 4, #448) ────────
 
+// ── Shape draw: triangle fill (labelle-toolkit/labelle-gfx#272) ──────────
+
+test "RetainedEngine: filled triangle takes drawTriangle, outline takes drawLine" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    const Position = gfx.Position;
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Filled triangle (the default fill) → one drawTriangle, no lines.
+    engine.createShape(
+        EntityId.from(1),
+        .{ .shape = .{ .triangle = .{
+            .p2 = .{ .x = 10, .y = 0 },
+            .p3 = .{ .x = 0, .y = 10 },
+            .fill = .filled,
+        } } },
+        Position{ .x = 100, .y = 100 },
+    );
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getTriangleCallCount());
+    try testing.expectEqual(@as(usize, 0), MockBackend.getLineCallCount());
+
+    // Outline triangle → three drawLine segments, no drawTriangle.
+    MockBackend.resetMock();
+    engine.removeShape(EntityId.from(1));
+    engine.createShape(
+        EntityId.from(2),
+        .{ .shape = .{ .triangle = .{
+            .p2 = .{ .x = 10, .y = 0 },
+            .p3 = .{ .x = 0, .y = 10 },
+            .fill = .outline,
+        } } },
+        Position{ .x = 100, .y = 100 },
+    );
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 0), MockBackend.getTriangleCallCount());
+    try testing.expectEqual(@as(usize, 3), MockBackend.getLineCallCount());
+}
+
 test "Backend: font bake → upload → unload round trip" {
     const B = Backend(MockBackend);
     MockBackend.initMock(testing.allocator);

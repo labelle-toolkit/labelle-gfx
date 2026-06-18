@@ -91,6 +91,13 @@ pub const MockBackend = struct {
         color: Color,
     };
 
+    pub const TriangleCall = struct {
+        v1: Vector2,
+        v2: Vector2,
+        v3: Vector2,
+        color: Color,
+    };
+
     pub const TextCall = struct {
         x: f32,
         y: f32,
@@ -102,6 +109,7 @@ pub const MockBackend = struct {
     threadlocal var shape_calls_list: std.ArrayListUnmanaged(ShapeCall) = .empty;
     threadlocal var circle_calls_list: std.ArrayListUnmanaged(CircleCall) = .empty;
     threadlocal var line_calls_list: std.ArrayListUnmanaged(LineCall) = .empty;
+    threadlocal var triangle_calls_list: std.ArrayListUnmanaged(TriangleCall) = .empty;
     threadlocal var text_calls_list: std.ArrayListUnmanaged(TextCall) = .empty;
     threadlocal var allocator_ref: ?std.mem.Allocator = null;
     threadlocal var screen_width_val: i32 = 800;
@@ -137,6 +145,7 @@ pub const MockBackend = struct {
         shape_calls_list = .empty;
         circle_calls_list = .empty;
         line_calls_list = .empty;
+        triangle_calls_list = .empty;
         text_calls_list = .empty;
         camera_passes_list = .empty;
         viewport_calls_list = .empty;
@@ -152,6 +161,7 @@ pub const MockBackend = struct {
             shape_calls_list.deinit(alloc);
             circle_calls_list.deinit(alloc);
             line_calls_list.deinit(alloc);
+            triangle_calls_list.deinit(alloc);
             text_calls_list.deinit(alloc);
             camera_passes_list.deinit(alloc);
             viewport_calls_list.deinit(alloc);
@@ -160,6 +170,7 @@ pub const MockBackend = struct {
         shape_calls_list = .empty;
         circle_calls_list = .empty;
         line_calls_list = .empty;
+        triangle_calls_list = .empty;
         text_calls_list = .empty;
         camera_passes_list = .empty;
         viewport_calls_list = .empty;
@@ -171,6 +182,7 @@ pub const MockBackend = struct {
         shape_calls_list.clearRetainingCapacity();
         circle_calls_list.clearRetainingCapacity();
         line_calls_list.clearRetainingCapacity();
+        triangle_calls_list.clearRetainingCapacity();
         text_calls_list.clearRetainingCapacity();
         camera_passes_list.clearRetainingCapacity();
         viewport_calls_list.clearRetainingCapacity();
@@ -228,6 +240,14 @@ pub const MockBackend = struct {
         return line_calls_list.items.len;
     }
 
+    pub fn getTriangleCalls() []const TriangleCall {
+        return triangle_calls_list.items;
+    }
+
+    pub fn getTriangleCallCount() usize {
+        return triangle_calls_list.items.len;
+    }
+
     pub fn getTextCalls() []const TextCall {
         return text_calls_list.items;
     }
@@ -279,6 +299,17 @@ pub const MockBackend = struct {
                 .center_x = center_x,
                 .center_y = center_y,
                 .radius = radius,
+                .color = tint,
+            }) catch {};
+        }
+    }
+
+    pub fn drawTriangle(v1: Vector2, v2: Vector2, v3: Vector2, tint: Color) void {
+        if (allocator_ref) |alloc| {
+            triangle_calls_list.append(alloc, .{
+                .v1 = v1,
+                .v2 = v2,
+                .v3 = v3,
                 .color = tint,
             }) catch {};
         }
