@@ -455,6 +455,106 @@ test "Custom layers work with RetainedEngine" {
     try testing.expectEqual(2, engine.spriteCount());
 }
 
+// ── GfxRenderer Y-axis offset composition (regression: gfx#274 part 2) ──
+//
+// A Shape sub-offset (`line.end`, `triangle` p2/p3) is authored in *logical*
+// space. The renderer flips the entity `position` into screen space
+// (`screen_height - y`); before gfx#274 part 2 the offset was added to the
+// *already-flipped* position, so the endpoint landed mirrored in Y. The fix
+// composes `position + offset` in logical space and flips the final point
+// once — so the recorded endpoint matches `flip(position + offset)` with **no**
+// manual `end.y` negation by the caller.
+
+test "GfxRenderer: line endpoint is composed in logical space then flipped once (no Y mirror)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    const screen_h: f32 = 600;
+    renderer.setScreenHeight(screen_h);
+
+    const pos = core.Position{ .x = 100, .y = 200 };
+    const end = core.Position{ .x = 30, .y = 40 }; // logical offset, authored as-is
+
+    const entity = ecs.createEntity();
+    ecs.addComponent(entity, pos);
+    ecs.addComponent(entity, Renderer.Shape{
+        .shape = .{ .line = .{ .end = end } },
+        .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    });
+
+    renderer.trackEntity(entity, .shape);
+    renderer.sync(MockEcs, &ecs);
+    renderer.render();
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getLineCallCount());
+    const line = MockBackend.getLineCalls()[0];
+
+    // Start = flip(position).
+    try testing.expectEqual(pos.x, line.start_x);
+    try testing.expectEqual(screen_h - pos.y, line.start_y);
+
+    // End = flip(position + offset), NOT flip(position) + offset.
+    // flip(position + offset).y = screen_h - (pos.y + end.y) = 600 - 240 = 360,
+    // i.e. start_y - end.y (360), never the mirrored start_y + end.y (440).
+    try testing.expectEqual(pos.x + end.x, line.end_x);
+    try testing.expectEqual(screen_h - (pos.y + end.y), line.end_y);
+    try testing.expectEqual(line.start_y - end.y, line.end_y);
+}
+
+test "GfxRenderer: filled triangle vertices compose in logical space then flip once" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    const screen_h: f32 = 600;
+    renderer.setScreenHeight(screen_h);
+
+    const pos = core.Position{ .x = 100, .y = 200 };
+    const p2 = core.Position{ .x = 50, .y = 0 };
+    const p3 = core.Position{ .x = 0, .y = 60 };
+
+    const entity = ecs.createEntity();
+    ecs.addComponent(entity, pos);
+    ecs.addComponent(entity, Renderer.Shape{
+        .shape = .{ .triangle = .{ .p2 = p2, .p3 = p3, .fill = .filled } },
+        .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    });
+
+    renderer.trackEntity(entity, .shape);
+    renderer.sync(MockEcs, &ecs);
+    renderer.render();
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getTriangleCallCount());
+    const tri = MockBackend.getTriangleCalls()[0];
+
+    // v1 = flip(position).
+    try testing.expectEqual(pos.x, tri.v1.x);
+    try testing.expectEqual(screen_h - pos.y, tri.v1.y);
+    // v2 = flip(position + p2): p2.y == 0 so only the flipped base moves in x.
+    try testing.expectEqual(pos.x + p2.x, tri.v2.x);
+    try testing.expectEqual(screen_h - (pos.y + p2.y), tri.v2.y);
+    // v3 = flip(position + p3): logical +60 in y must move UP on screen
+    // (smaller screen y), i.e. v1.y - 60, never the mirrored v1.y + 60.
+    try testing.expectEqual(pos.x + p3.x, tri.v3.x);
+    try testing.expectEqual(screen_h - (pos.y + p3.y), tri.v3.y);
+    try testing.expectEqual(tri.v1.y - p3.y, tri.v3.y);
+}
+
 // ── GfxRenderer ────────────────────────────────────────────
 
 test "GfxRenderer satisfies RenderInterface" {
