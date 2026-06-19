@@ -1,6 +1,10 @@
 /// Camera system — single + multi-camera with viewport culling.
 /// Ported from v1. Uses Backend(Impl) for coordinate conversion.
 const std = @import("std");
+const core = @import("labelle-core");
+
+/// The vertical-axis convention, re-exported so callers can name it.
+pub const YAxis = core.YAxis;
 
 /// Visible rectangle in world coordinates (for culling).
 pub const ViewportRect = struct {
@@ -75,7 +79,19 @@ pub const SplitScreenLayout = enum {
 
 /// Camera — world view with zoom, rotation, bounds, viewport culling.
 /// Uses Backend for screen dimensions and coordinate conversion.
+///
+/// `y_axis` defaults to `.up` (today's behavior): `worldToScreen` /
+/// `screenToWorld` flip Y-up world ↔ Y-down screen via the canonical core
+/// transform. The renderer instantiates `CameraWith(Backend, y_axis)` with the
+/// project's convention so the camera path and the no-camera flip can never
+/// disagree (RFC Q2). Zig has no default comptime params, so `Camera` is the
+/// `.up` alias of `CameraWith`.
 pub fn Camera(comptime BackendImpl: type) type {
+    return CameraWith(BackendImpl, .up);
+}
+
+/// Camera parameterized by the project's Y-axis convention. See `Camera`.
+pub fn CameraWith(comptime BackendImpl: type, comptime y_axis: YAxis) type {
     return struct {
         const Self = @This();
 
@@ -204,8 +220,12 @@ pub fn Camera(comptime BackendImpl: type) type {
         pub fn screenToWorld(self: *const Self, screen_x: f32, screen_y: f32) struct { x: f32, y: f32 } {
             const cam2d = self.toBackend();
             const result = BackendImpl.screenToWorld(.{ .x = screen_x, .y = screen_y }, cam2d);
-            // Backend returns Y-down; camera API is Y-up world.
-            return .{ .x = result.x, .y = flipReferenceHeight() - result.y };
+            // Backend returns screen (Y-down) space; map back to the project's
+            // logical convention via the *same* canonical core transform the
+            // renderer's flip uses (RFC Q2). Under `.up` this is
+            // `flipReferenceHeight() - y` (today's behavior); under `.down` it
+            // is the identity, matching the renderer's no-op flip.
+            return .{ .x = result.x, .y = core.screenToLogicalY(y_axis, result.y, flipReferenceHeight()) };
         }
 
         /// Convert world coordinate to screen pixel.
@@ -225,8 +245,11 @@ pub fn Camera(comptime BackendImpl: type) type {
         /// [1]: https://github.com/labelle-toolkit/labelle-gfx/issues/253
         pub fn worldToScreen(self: *const Self, world_x: f32, world_y: f32) struct { x: f32, y: f32 } {
             const cam2d = self.toBackend();
-            // Flip Y-up world → Y-down pixel space the backend expects.
-            const result = BackendImpl.worldToScreen(.{ .x = world_x, .y = flipReferenceHeight() - world_y }, cam2d);
+            // Map logical world Y → Y-down pixel space the backend expects, via
+            // the *same* canonical core transform the renderer's flip uses
+            // (RFC Q2). Under `.up` this is `flipReferenceHeight() - y` (today's
+            // behavior); under `.down` it is the identity.
+            const result = BackendImpl.worldToScreen(.{ .x = world_x, .y = core.toScreenY(y_axis, world_y, flipReferenceHeight()) }, cam2d);
             return .{ .x = result.x, .y = result.y };
         }
 
@@ -316,7 +339,12 @@ pub fn Camera(comptime BackendImpl: type) type {
             const dims = self.getViewportDimensions();
             return .{
                 .offset = .{ .x = dims.width / 2.0, .y = dims.height / 2.0 },
-                .target = .{ .x = self.x, .y = flipReferenceHeight() - self.y },
+                // The camera's own position is logical (y-up under `.up`).
+                // `beginMode2D` pans the *already-flipped* entity store, so the
+                // target is mapped to screen space via the same canonical core
+                // transform as the entities (RFC Q2). `.up` => `h - y` (today);
+                // `.down` => identity, matching the renderer's no-op flip.
+                .target = .{ .x = self.x, .y = core.toScreenY(y_axis, self.y, flipReferenceHeight()) },
                 .rotation = self.rotation,
                 .zoom = self.zoom,
             };
@@ -335,8 +363,17 @@ pub fn Camera(comptime BackendImpl: type) type {
 }
 
 /// Multi-camera manager — up to 4 cameras, split-screen layouts.
+///
+/// `.up` alias of `CameraManagerWith` (Zig has no default comptime params).
 pub fn CameraManager(comptime BackendImpl: type) type {
-    const CameraT = Camera(BackendImpl);
+    return CameraManagerWith(BackendImpl, .up);
+}
+
+/// Multi-camera manager parameterized by the project's Y-axis convention.
+/// The renderer instantiates this with the project's `y_axis` so every camera
+/// it manages flips through the same core transform as the no-camera path.
+pub fn CameraManagerWith(comptime BackendImpl: type, comptime y_axis: YAxis) type {
+    const CameraT = CameraWith(BackendImpl, y_axis);
     const MAX_CAMERAS: usize = 4;
 
     return struct {

@@ -15,7 +15,37 @@ const VisualType = core.VisualType;
 const GizmoDraw = core.GizmoDraw;
 const EntityId = types_mod.EntityId;
 
+/// Retained-mode renderer with the project's Y-axis convention defaulted to
+/// `.up`. Zig has no default comptime params, so `GfxRenderer` is the `.up`
+/// alias of `GfxRendererWith` — three-arg callers (the assembler-emitted
+/// `GameConfig`) keep working unchanged and reproduce today's flip exactly.
 pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptime Entity: type) type {
+    return GfxRendererWith(BackendImpl, LayerEnum, Entity, .up);
+}
+
+/// Retained-mode renderer parameterized by the project's Y-axis convention.
+///
+/// `y_axis` is the project's logical vertical convention (RFC engine#640),
+/// threaded as a **comptime** parameter (mirroring how the backend is
+/// parameterized) so the flip costs nothing per frame:
+///
+///   - `.up`   (DEFAULT, today's behavior): the renderer flips logical Y to
+///             screen via `core.toScreenY(.up, y, h)` = `h - y`.
+///   - `.down` (screen-native): the flip is the identity (`y`).
+///
+/// **The code-level default is `.up` on purpose.** gfx#276 lands before the
+/// assembler emits `.y_axis`; during that window existing games' generated
+/// config doesn't specify an axis, so the renderer falls back to this default.
+/// It must be `.up` (today's flip) or every existing game renders upside-down
+/// on the gfx bump. `.down` only ever arrives as an *explicit* value the engine
+/// passes down from project config. The RFC's "default `.down`" is the
+/// project-config default (labelle-init + the assembler unset-guard), NOT this
+/// struct default.
+///
+/// Both the renderer flip and the camera transform route through the *same*
+/// `core.toScreenY`, so a camera layer and a screen-space layer can never
+/// disagree (RFC Q2).
+pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, comptime Entity: type, comptime y_axis: core.YAxis) type {
     const GfxEngine = retained_engine_mod.RetainedEngineWith(BackendImpl, LayerEnum);
     const SpriteComp = components_mod.SpriteComponent(LayerEnum);
     const ShapeComp = components_mod.ShapeComponent(LayerEnum);
@@ -26,8 +56,11 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
     const Children = core.ChildrenComponent(Entity);
 
     const B = backend_mod.Backend(BackendImpl);
-    const CameraT = camera_mod.Camera(BackendImpl);
-    const CameraManagerT = camera_mod.CameraManager(BackendImpl);
+    // The camera transform must use the *same* Y-axis convention as the
+    // renderer's flip below, or a camera layer and a screen-space layer would
+    // disagree (RFC Q2). Both route through `core.toScreenY`.
+    const CameraT = camera_mod.CameraWith(BackendImpl, y_axis);
+    const CameraManagerT = camera_mod.CameraManagerWith(BackendImpl, y_axis);
     const sorted_layers = layer_mod.getSortedLayers(LayerEnum);
 
     return struct {
@@ -161,40 +194,61 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
             return self.inner.getTextureInfo(id);
         }
 
+        /// The project's logical Y-axis convention this renderer was built
+        /// with. Exposed so the engine / tests can assert which way is +Y.
+        /// Defaults to `.up` (today's flip) — see `GfxRendererWith` docs.
+        pub const yAxis: core.YAxis = y_axis;
+
+        /// Flip a logical Y to screen space via the *one* canonical core
+        /// transform. `.up` => `screen_height - y` (today's behavior);
+        /// `.down` => `y` (identity). The camera's `worldToScreen` /
+        /// `screenToWorld` route through the same `core.toScreenY` with the
+        /// same `y_axis`, so the two paths can never diverge (RFC Q2).
         fn toScreenY(self: *const Self, y: f32) f32 {
-            return self.screen_height - y;
+            return core.toScreenY(y_axis, y, self.screen_height);
         }
+
+        // Sign applied to a Shape's logical-space Y sub-offset so it composes
+        // in the *same* screen space the entity `position` is flipped into by
+        // `toScreenY`. A logical Y *delta* maps to a screen-space delta of
+        // `toScreenY(y + d) - toScreenY(y)`, which is `-d` under `.up` (the
+        // mirror) and `+d` under `.down` (the identity). Comptime, so the
+        // multiply folds away.
+        const offset_y_sign: f32 = switch (y_axis) {
+            .up => -1,
+            .down => 1,
+        };
 
         // Map a Shape's *logical-space sub-offsets* into the same screen
         // space the entity `position` is flipped into by `toScreenY`.
         //
         // `position` is composed `position + offset` in logical space and
-        // then flipped once. Because `toScreenY` is a pure vertical mirror
-        // (`screen_height - y`), the flip of the endpoint
-        // `flip(pos + end)` equals `flip(pos) + (end.x, -end.y)` — i.e. a
-        // *delta* in flipped space is the logical delta with its y negated,
-        // independent of `screen_height`. So we hand the inner engine the
-        // already-screen-space offset (negated y) alongside the already
-        // flipped `position`; `drawShapeEntry`/`shapeBounds` then compose
-        // `position + offset` in one consistent space and the endpoint is
-        // no longer mirrored (gfx#274 part 2).
+        // then flipped once. Because `toScreenY` is a pure vertical mirror,
+        // the flip of the endpoint `flip(pos + end)` equals
+        // `flip(pos) + (end.x, sign*end.y)`, where `sign` is `-1` under `.up`
+        // and `+1` under `.down` (`offset_y_sign`) — i.e. a *delta* in screen
+        // space is the logical delta scaled by the flip's sign, independent of
+        // `screen_height`. So we hand the inner engine the already-screen-space
+        // offset alongside the already flipped `position`;
+        // `drawShapeEntry`/`shapeBounds` then compose `position + offset` in
+        // one consistent space and the endpoint is no longer mirrored
+        // (gfx#274 part 2).
         //
-        // This is the standalone composition fix: it carries no `YAxis`
-        // dependency. It mirrors offsets the *same* way the position is
-        // mirrored, so it stays correct whatever the renderer's flip is.
-        // `circle`/`polygon` radii are scalar (symmetric) and need no
-        // change; `rectangle` extent is verified separately (the anchored
-        // corner does not invert — the rect renders top-left-anchored in
-        // screen space exactly as `shapeBounds` models it).
+        // Under `.up` (the default) this reproduces today's behavior exactly
+        // (`sign = -1`); under `.down` the renderer doesn't flip, so the offset
+        // is left untouched. `circle`/`polygon` radii are scalar (symmetric)
+        // and need no change; `rectangle` extent is verified separately (the
+        // anchored corner does not invert — the rect renders top-left-anchored
+        // in screen space exactly as `shapeBounds` models it).
         fn shapeToScreenSpace(visual: ShapeComp.ShapeVisual) ShapeComp.ShapeVisual {
             var out = visual;
             switch (out.shape) {
                 .line => |*line| {
-                    line.end.y = -line.end.y;
+                    line.end.y *= offset_y_sign;
                 },
                 .triangle => |*tri| {
-                    tri.p2.y = -tri.p2.y;
-                    tri.p3.y = -tri.p3.y;
+                    tri.p2.y *= offset_y_sign;
+                    tri.p3.y *= offset_y_sign;
                 },
                 else => {},
             }
@@ -412,10 +466,18 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
                 return;
             }
 
-            // Y-up world box -> Y-down engine space (screen-flipped).
+            // Logical world box -> engine (screen) space. The engine stores
+            // entities flipped by `toScreenY`, so the cull box must use the
+            // *same* transform. Under `.up` the box's logical-top `max_y` maps
+            // to the engine-space top `sh - max_y`; under `.down` it is the
+            // identity and the engine-space top is `min_y`. Routing both
+            // corners through `core.toScreenY` and taking the min keeps the box
+            // correct for either convention without special-casing.
+            const ey0 = core.toScreenY(y_axis, min_y, sh);
+            const ey1 = core.toScreenY(y_axis, max_y, sh);
             self.inner.setCullViewport(.{
                 .x = min_x - m,
-                .y = sh - max_y - m,
+                .y = @min(ey0, ey1) - m,
                 .w = (max_x - min_x) + 2 * m,
                 .h = (max_y - min_y) + 2 * m,
             });
@@ -547,9 +609,14 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
             const a: u8 = @truncate((d.color >> 24) & 0xFF);
             const c = B.color(r, gr, b, a);
 
-            // Flip Y for world-space draws (game Y-up → screen Y-down)
-            const y1 = if (screen_height > 0) screen_height - d.y1 else d.y1;
-            const y2 = if (screen_height > 0) screen_height - d.y2 else d.y2;
+            // Map world-space gizmo Y to screen via the same canonical core
+            // transform as entity positions. `screen_height == 0` is the
+            // sentinel for screen-space gizmos (passed by the caller above),
+            // which are already in screen space and never flip. Under `.up`
+            // this is `screen_height - y` (today's behavior); under `.down` it
+            // is the identity.
+            const y1 = if (screen_height > 0) core.toScreenY(y_axis, d.y1, screen_height) else d.y1;
+            const y2 = if (screen_height > 0) core.toScreenY(y_axis, d.y2, screen_height) else d.y2;
 
             switch (d.kind) {
                 .line => B.drawLine(d.x1, y1, d.x2, y2, 2, c),

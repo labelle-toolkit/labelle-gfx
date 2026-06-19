@@ -1,12 +1,12 @@
 .{
     .fingerprint = 0x348f3b533c42ca9c,
     .name = .labelle_gfx,
-    .version = "1.15.0",
+    .version = "1.16.0",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .labelle_core = .{
-            .url = "https://github.com/labelle-toolkit/labelle-core/archive/refs/tags/v1.15.0.tar.gz",
-            .hash = "labelle_core-1.15.0-OauRcIDMAwCys-pGbaVktdIZZk65hbXkrzzqd0Jk_XjY",
+            .url = "https://github.com/labelle-toolkit/labelle-core/archive/refs/tags/v1.18.0.tar.gz",
+            .hash = "labelle_core-1.18.0-OauRcLN5BABfXKVA4ah6kxuEceB0nOD6Y1eo068Pc53H",
         },
         .spatial_grid = .{
             .path = "spatial_grid",
