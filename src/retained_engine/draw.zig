@@ -180,10 +180,28 @@ pub fn DrawHelpers(comptime Self: type) type {
                         B.drawLine(spos.x, spos.y, spos.x + line.end.x, spos.y + line.end.y, line.thickness, c);
                     },
                     .triangle => |tri| {
-                        // Draw triangle as 3 lines
-                        B.drawLine(spos.x, spos.y, spos.x + tri.p2.x, spos.y + tri.p2.y, tri.thickness, c);
-                        B.drawLine(spos.x + tri.p2.x, spos.y + tri.p2.y, spos.x + tri.p3.x, spos.y + tri.p3.y, tri.thickness, c);
-                        B.drawLine(spos.x + tri.p3.x, spos.y + tri.p3.y, spos.x, spos.y, tri.thickness, c);
+                        // Three absolute vertices. `p1` is the shape
+                        // position; `p2`/`p3` are offsets scaled the
+                        // same way the rect/circle cases apply scale
+                        // (scale_x on x, scale_y on y) so the filled
+                        // and outlined geometry line up exactly.
+                        const p1 = B.Vector2{ .x = spos.x, .y = spos.y };
+                        const p2 = B.Vector2{
+                            .x = spos.x + tri.p2.x * shape.scale_x,
+                            .y = spos.y + tri.p2.y * shape.scale_y,
+                        };
+                        const p3 = B.Vector2{
+                            .x = spos.x + tri.p3.x * shape.scale_x,
+                            .y = spos.y + tri.p3.y * shape.scale_y,
+                        };
+                        if (tri.fill == .outline) {
+                            // Outline: 3 line segments p1→p2→p3→p1.
+                            B.drawLine(p1.x, p1.y, p2.x, p2.y, tri.thickness, c);
+                            B.drawLine(p2.x, p2.y, p3.x, p3.y, tri.thickness, c);
+                            B.drawLine(p3.x, p3.y, p1.x, p1.y, tri.thickness, c);
+                        } else {
+                            B.drawTriangle(p1, p2, p3, c);
+                        }
                     },
                     .polygon => |poly| {
                         // Approximate polygon as circle for now (same center, same radius)
