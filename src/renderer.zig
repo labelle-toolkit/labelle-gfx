@@ -165,6 +165,42 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
             return self.screen_height - y;
         }
 
+        // Map a Shape's *logical-space sub-offsets* into the same screen
+        // space the entity `position` is flipped into by `toScreenY`.
+        //
+        // `position` is composed `position + offset` in logical space and
+        // then flipped once. Because `toScreenY` is a pure vertical mirror
+        // (`screen_height - y`), the flip of the endpoint
+        // `flip(pos + end)` equals `flip(pos) + (end.x, -end.y)` — i.e. a
+        // *delta* in flipped space is the logical delta with its y negated,
+        // independent of `screen_height`. So we hand the inner engine the
+        // already-screen-space offset (negated y) alongside the already
+        // flipped `position`; `drawShapeEntry`/`shapeBounds` then compose
+        // `position + offset` in one consistent space and the endpoint is
+        // no longer mirrored (gfx#274 part 2).
+        //
+        // This is the standalone composition fix: it carries no `YAxis`
+        // dependency. It mirrors offsets the *same* way the position is
+        // mirrored, so it stays correct whatever the renderer's flip is.
+        // `circle`/`polygon` radii are scalar (symmetric) and need no
+        // change; `rectangle` extent is verified separately (the anchored
+        // corner does not invert — the rect renders top-left-anchored in
+        // screen space exactly as `shapeBounds` models it).
+        fn shapeToScreenSpace(visual: ShapeComp.ShapeVisual) ShapeComp.ShapeVisual {
+            var out = visual;
+            switch (out.shape) {
+                .line => |*line| {
+                    line.end.y = -line.end.y;
+                },
+                .triangle => |*tri| {
+                    tri.p2.y = -tri.p2.y;
+                    tri.p3.y = -tri.p3.y;
+                },
+                else => {},
+            }
+            return out;
+        }
+
 
         pub fn trackEntity(self: *Self, entity: Entity, visual_type: VisualType) void {
             const eid = entityToGfxId(entity);
@@ -264,7 +300,7 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
                         },
                         .shape => {
                             if (ecs.getComponent(entity, ShapeComp)) |shape_comp| {
-                                self.inner.createShape(tracked.entity_id, shape_comp.toVisual(), screen_pos);
+                                self.inner.createShape(tracked.entity_id, shapeToScreenSpace(shape_comp.toVisual()), screen_pos);
                                 created = true;
                             }
                         },
@@ -292,7 +328,7 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
                         },
                         .shape => {
                             if (ecs.getComponent(entity, ShapeComp)) |s| {
-                                self.inner.updateShape(tracked.entity_id, s.toVisual());
+                                self.inner.updateShape(tracked.entity_id, shapeToScreenSpace(s.toVisual()));
                             }
                         },
                         .text => {
