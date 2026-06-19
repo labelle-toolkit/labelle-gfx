@@ -13,6 +13,7 @@ const Backend = gfx.Backend;
 const MockBackend = gfx.MockBackend;
 const RetainedEngineWith = gfx.RetainedEngineWith;
 const GfxRenderer = gfx.GfxRenderer;
+const GfxRendererWith = gfx.GfxRendererWith;
 const EntityId = gfx.EntityId;
 const Pivot = gfx.Pivot;
 const DefaultLayers = gfx.DefaultLayers;
@@ -553,6 +554,180 @@ test "GfxRenderer: filled triangle vertices compose in logical space then flip o
     try testing.expectEqual(pos.x + p3.x, tri.v3.x);
     try testing.expectEqual(screen_h - (pos.y + p3.y), tri.v3.y);
     try testing.expectEqual(tri.v1.y - p3.y, tri.v3.y);
+}
+
+// ── Y-axis convention (gfx#276) ────────────────────────────
+//
+// The renderer's vertical flip is comptime-parameterized by the project's
+// `.y_axis`, routed through labelle-core's canonical `toScreenY`. The
+// code-level default is `.up` (today's flip) — `GfxRenderer` is the three-arg
+// `.up` alias of `GfxRendererWith`, so existing games (whose generated config
+// does not yet specify a y-axis) reproduce today's behavior exactly until the
+// engine threads `.down` explicitly.
+
+test "gfx#276: default-constructed GfxRenderer defaults to .up (reproduces today's flip)" {
+    // The struct-level default MUST be `.up`. If this regresses to `.down`,
+    // every existing game renders upside-down on the gfx bump.
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    try testing.expectEqual(core.YAxis.up, Renderer.yAxis);
+}
+
+test "gfx#276: .up renderer flips a circle position exactly as today (screen_h - y)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32); // default .up
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    const screen_h: f32 = 600;
+    renderer.setScreenHeight(screen_h);
+
+    const pos = core.Position{ .x = 100, .y = 200 };
+    const entity = ecs.createEntity();
+    ecs.addComponent(entity, pos);
+    ecs.addComponent(entity, Renderer.Shape{
+        .shape = .{ .circle = .{ .radius = 10 } },
+        .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    });
+
+    renderer.trackEntity(entity, .shape);
+    renderer.sync(MockEcs, &ecs);
+    renderer.render();
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCircleCallCount());
+    const circle = MockBackend.getCircleCalls()[0];
+    try testing.expectEqual(pos.x, circle.center_x);
+    // .up flips: screen_y = screen_h - y = 600 - 200 = 400.
+    try testing.expectEqual(screen_h - pos.y, circle.center_y);
+}
+
+test "gfx#276: .down renderer does NOT flip a circle position (identity)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRendererWith(MockBackend, DefaultLayers, u32, .down);
+    try testing.expectEqual(core.YAxis.down, Renderer.yAxis);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    const pos = core.Position{ .x = 100, .y = 200 };
+    const entity = ecs.createEntity();
+    ecs.addComponent(entity, pos);
+    ecs.addComponent(entity, Renderer.Shape{
+        .shape = .{ .circle = .{ .radius = 10 } },
+        .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    });
+
+    renderer.trackEntity(entity, .shape);
+    renderer.sync(MockEcs, &ecs);
+    renderer.render();
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCircleCallCount());
+    const circle = MockBackend.getCircleCalls()[0];
+    try testing.expectEqual(pos.x, circle.center_x);
+    // .down is identity: screen_y = y = 200, NOT flipped.
+    try testing.expectEqual(pos.y, circle.center_y);
+}
+
+test "gfx#276: .down renderer leaves a line offset un-negated (no mirror)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRendererWith(MockBackend, DefaultLayers, u32, .down);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    const pos = core.Position{ .x = 100, .y = 200 };
+    const end = core.Position{ .x = 30, .y = 40 };
+    const entity = ecs.createEntity();
+    ecs.addComponent(entity, pos);
+    ecs.addComponent(entity, Renderer.Shape{
+        .shape = .{ .line = .{ .end = end } },
+        .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    });
+
+    renderer.trackEntity(entity, .shape);
+    renderer.sync(MockEcs, &ecs);
+    renderer.render();
+
+    const line = MockBackend.getLineCalls()[0];
+    // Under .down both position and offset are identity (no flip).
+    try testing.expectEqual(pos.y, line.start_y);
+    // Endpoint = position + offset with NO negation: 200 + 40 = 240.
+    try testing.expectEqual(pos.y + end.y, line.end_y);
+}
+
+// Q2 (load-bearing): the camera transform and the renderer flip route through
+// the *same* core `toScreenY`, so a camera layer and a screen-space layer can
+// never disagree about which way is +Y. Two properties pin this down:
+//
+//   1. `screenToWorld(worldToScreen(y)) == y` under each axis (the camera's
+//      flip is a clean involution, exactly like the renderer's).
+//   2. Switching axis from `.up` to `.down` changes the camera's vertical
+//      mapping by *exactly* the core flip delta — the same delta the renderer
+//      would apply — proving both consume the one transform.
+
+test "gfx#276 Q2: camera screen<->world round-trips under .up" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    MockBackend.setScreenSize(800, 600);
+
+    const Cam = gfx.CameraWith(MockBackend, .up);
+    var cam = Cam.init();
+
+    const logical_y: f32 = 200;
+    const sc = cam.worldToScreen(0, logical_y);
+    const back = cam.screenToWorld(sc.x, sc.y);
+    try testing.expectEqual(logical_y, back.y);
+}
+
+test "gfx#276 Q2: camera screen<->world round-trips under .down" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    MockBackend.setScreenSize(800, 600);
+
+    const Cam = gfx.CameraWith(MockBackend, .down);
+    var cam = Cam.init();
+
+    const logical_y: f32 = 200;
+    const sc = cam.worldToScreen(0, logical_y);
+    const back = cam.screenToWorld(sc.x, sc.y);
+    try testing.expectEqual(logical_y, back.y);
+}
+
+test "gfx#276 Q2: .up camera worldToScreen reproduces today's exact value" {
+    // The `.up` path must be byte-identical to pre-#276 behavior: both the
+    // camera target and the world point are flipped with `screen_h - y`
+    // (= `core.toScreenY(.up,...)`), so the camera path FP relies on is
+    // unchanged. With an identity (x=0,y=0,zoom=1) camera on an 800x600 canvas:
+    //   target.y = 600-0 = 600, offset = (400,300)
+    //   world (0,200) flips to (0, 400)
+    //   backend: y = (400 - 600)*1 + 300 = 100
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    MockBackend.setScreenSize(800, 600);
+
+    const Cam = gfx.CameraWith(MockBackend, .up);
+    var cam = Cam.init();
+    const sc = cam.worldToScreen(0, 200);
+    try testing.expectEqual(@as(f32, 100), sc.y);
 }
 
 // ── GfxRenderer ────────────────────────────────────────────
