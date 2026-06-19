@@ -16,6 +16,17 @@ pub fn build(b: *std.Build) void {
     const camera_dep = b.dependency("camera", .{ .target = target, .optimize = optimize });
     const camera_module = camera_dep.module("camera");
 
+    // Unify `labelle-core` across gfx and its `camera` sub-package. The camera
+    // sub-package pins its OWN `labelle-core` tarball (camera/build.zig.zon).
+    // gfx#276 threads the project `y_axis` (a `core.YAxis`) from gfx's renderer
+    // into `camera.CameraWith(..., y_axis)`, so the camera module's core MUST
+    // be the SAME module instance as gfx's `core_module` — otherwise two
+    // distinct `core.YAxis` enums fail to unify ("expected 'YAxis', found
+    // 'YAxis'") in any consumer's composed build graph (e.g. the assembler's
+    // generated example build). Override camera's `labelle-core` onto gfx's.
+    // (Idempotent: `addImport` replaces the existing entry by name.)
+    camera_module.addImport("labelle-core", core_module);
+
     const gfx_module = b.addModule("labelle-gfx", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
