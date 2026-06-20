@@ -1,0 +1,44 @@
+name: CI
+
+# Runs the test suite on every push (so feature branches get a real check —
+# note GitHub runs `pull_request` workflows from the BASE branch copy, so a
+# workflow added in a PR branch only gates via `push` until it lands on main)
+# and on PRs targeting main.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: '0.16.0'
+
+      # labelle-gfx is backend-agnostic and the suite runs on MockBackend, but
+      # the build graph still pulls in the raylib/sokol native libs — same deps
+      # the Coverage workflow installs.
+      - name: Install native deps (raylib/sokol)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev \
+            libxinerama-dev libxi-dev libxext-dev libxfixes-dev \
+            libxrender-dev libwayland-dev libxkbcommon-dev libasound2-dev
+
+      - name: Cache Zig dependencies
+        uses: actions/cache@v4
+        with:
+          path: .zig-cache
+          key: zig-cache-ci-${{ runner.os }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-cache-ci-${{ runner.os }}-
+
+      - name: Run tests
+        run: zig build test --summary all
