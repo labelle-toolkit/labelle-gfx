@@ -2,11 +2,11 @@
     .fingerprint = 0x3b1cee052cc54ce8,
     .name = .camera,
     .version = "0.1.0",
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .labelle_core = .{
-            .url = "https://github.com/labelle-toolkit/labelle-core/archive/refs/tags/v1.1.0.tar.gz",
-            .hash = "labelle_core-1.1.0-OauRcBXiAABw6NKQxonsYQo83gJEAEbpkZJ7JQs-Dxom",
+            .url = "https://github.com/labelle-toolkit/labelle-core/archive/refs/tags/v1.18.0.tar.gz",
+            .hash = "labelle_core-1.18.0-OauRcLN5BABfXKVA4ah6kxuEceB0nOD6Y1eo068Pc53H",
         },
         .zspec = .{
             .url = "https://github.com/apotema/zspec/archive/v0.9.1.tar.gz",

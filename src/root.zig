@@ -25,6 +25,10 @@ pub const KernPair = backend_mod.KernPair;
 pub const MockBackend = mock_backend_mod.MockBackend;
 pub const RetainedEngineWith = retained_engine_mod.RetainedEngineWith;
 pub const GfxRenderer = renderer_mod.GfxRenderer;
+/// Renderer parameterized by the project's Y-axis convention. `GfxRenderer`
+/// is the `.up` alias (today's flip). The engine passes the project's
+/// `.y_axis` here once it reads it from config (engine#639).
+pub const GfxRendererWith = renderer_mod.GfxRendererWith;
 
 // Components
 pub const SpriteComponent = components_mod.SpriteComponent;
@@ -71,7 +75,12 @@ pub const Components = struct {
 
 // Camera
 pub const Camera = camera_mod.Camera;
+pub const CameraWith = camera_mod.CameraWith;
 pub const CameraManager = camera_mod.CameraManager;
+pub const CameraManagerWith = camera_mod.CameraManagerWith;
+/// The Y-axis convention enum (`.up` / `.down`), re-exported from
+/// labelle-core. The renderer and camera are comptime-parameterized by this.
+pub const YAxis = camera_mod.YAxis;
 pub const ViewportRect = camera_mod.ViewportRect;
 pub const ScreenViewport = camera_mod.ScreenViewport;
 pub const SplitScreenLayout = camera_mod.SplitScreenLayout;
@@ -94,5 +103,4 @@ pub const SourceRect = types_mod.SourceRect;
 pub const ScreenPoint = types_mod.ScreenPoint;
 
 // Window Utilities
-pub const Fullscreen = window_utils_mod.Fullscreen;
 pub const Screenshot = window_utils_mod.Screenshot;

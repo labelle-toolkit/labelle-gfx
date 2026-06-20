@@ -145,6 +145,7 @@ pub fn Backend(comptime Impl: type) type {
         if (!@hasDecl(Impl, "drawTexturePro")) @compileError("Backend must define 'drawTexturePro'");
         if (!@hasDecl(Impl, "drawRectangleRec")) @compileError("Backend must define 'drawRectangleRec'");
         if (!@hasDecl(Impl, "drawCircle")) @compileError("Backend must define 'drawCircle'");
+        if (!@hasDecl(Impl, "drawTriangle")) @compileError("Backend must define 'drawTriangle'");
         if (!@hasDecl(Impl, "drawLine")) @compileError("Backend must define 'drawLine'");
         if (!@hasDecl(Impl, "drawText")) @compileError("Backend must define 'drawText'");
         if (!@hasDecl(Impl, "loadTexture")) @compileError("Backend must define 'loadTexture'");
@@ -177,6 +178,12 @@ pub fn Backend(comptime Impl: type) type {
         pub const Rectangle = Impl.Rectangle;
         pub const Vector2 = Impl.Vector2;
         pub const Camera2D = Impl.Camera2D;
+
+        /// Image dimensions of a GPU-compressed blob, read from its header
+        /// without decoding. Named (not anonymous) so the type unifies across
+        /// declaration sites — a backend's own `compressedDims` result coerces
+        /// cleanly into this when returned through the wrapper.
+        pub const CompressedDims = struct { width: u32, height: u32 };
 
         pub const white = Impl.white;
         pub const black = Impl.black;
@@ -279,6 +286,15 @@ pub fn Backend(comptime Impl: type) type {
             Impl.drawCircle(center_x, center_y, radius, tint);
         }
 
+        /// Filled triangle through the three absolute vertices `v1`,
+        /// `v2`, `v3` (already in world/screen space — the caller has
+        /// applied position + scale). Point/Color signature mirrors the
+        /// backend's other primitives. Outlined triangles take the
+        /// `drawLine` path in the retained-engine draw helper instead.
+        pub inline fn drawTriangle(v1: Vector2, v2: Vector2, v3: Vector2, tint: Color) void {
+            Impl.drawTriangle(v1, v2, v3, tint);
+        }
+
         pub inline fn drawRectangleLinesEx(rec: Rectangle, line_thick: f32, tint: Color) void {
             if (@hasDecl(Impl, "drawRectangleLinesEx")) {
                 Impl.drawRectangleLinesEx(rec, line_thick, tint);
@@ -333,6 +349,21 @@ pub fn Backend(comptime Impl: type) type {
         /// existing synchronous callers (renderer, retained engine, single-
         /// threaded games) keep working unchanged.
         pub inline fn loadTextureFromMemory(file_type: [:0]const u8, data: []const u8) !Texture {
+            // GPU-compressed blobs (e.g. ASTC) upload as-is — no CPU decode —
+            // on backends that support them. A backend opts in by exposing
+            // `isCompressed` + `uploadCompressed`; every other backend, and any
+            // non-compressed blob, falls through to the decode path below, so
+            // PNG/BMP/TGA loading is unchanged (labelle-gfx#269 / assembler#341).
+            comptime {
+                // The two are a unit — a backend that defines one but not the
+                // other would silently fall back to CPU decode (then fail), so
+                // make that a compile error instead of a runtime mystery.
+                if (@hasDecl(Impl, "isCompressed") != @hasDecl(Impl, "uploadCompressed"))
+                    @compileError("Backend must define both 'isCompressed' and 'uploadCompressed', or neither");
+            }
+            if (@hasDecl(Impl, "isCompressed") and @hasDecl(Impl, "uploadCompressed")) {
+                if (Impl.isCompressed(data)) return Impl.uploadCompressed(data);
+            }
             const allocator = decode_allocator;
             const decoded = try Impl.decodeImage(file_type, data, allocator);
             defer allocator.free(decoded.pixels);
@@ -341,6 +372,44 @@ pub fn Backend(comptime Impl: type) type {
 
         pub inline fn unloadTexture(texture: Texture) void {
             Impl.unloadTexture(texture);
+        }
+
+        // ── GPU-compressed (ASTC) for the async asset catalog ───────────────
+        // The synchronous `loadTextureFromMemory` above diverts compressed
+        // blobs to `uploadCompressed` itself. The async streaming catalog
+        // (labelle-engine#450) does NOT go through that wrapper — it splits
+        // worker-thread `decodeImage` from main-thread `uploadTexture` — so its
+        // generated adapter needs these namespace-level probes to route a
+        // compressed blob past the CPU decoder. `@hasDecl`-guarded so a backend
+        // without ASTC support still compiles (isCompressed → always false).
+
+        /// True if `data` is a GPU-compressed blob this backend can upload
+        /// as-is (no CPU decode). False on backends without compressed support.
+        pub inline fn isCompressed(data: []const u8) bool {
+            if (@hasDecl(Impl, "isCompressed") and @hasDecl(Impl, "uploadCompressed")) {
+                return Impl.isCompressed(data);
+            }
+            return false;
+        }
+
+        /// Upload a GPU-compressed blob straight to the GPU — no CPU decode.
+        /// Only valid when `isCompressed(data)` is true.
+        pub inline fn uploadCompressed(data: []const u8) !Texture {
+            if (@hasDecl(Impl, "isCompressed") and @hasDecl(Impl, "uploadCompressed")) {
+                return Impl.uploadCompressed(data);
+            }
+            return error.CompressedTexturesUnsupported;
+        }
+
+        /// Image dimensions of a compressed blob, read from its header without
+        /// decoding. Lets the catalog adapter set a correct DecodedImage
+        /// width/height (for sprite-scale math) before the GPU upload. Null if
+        /// unsupported or the blob isn't a compressed format we accept.
+        pub inline fn compressedDims(data: []const u8) ?CompressedDims {
+            if (@hasDecl(Impl, "compressedDims")) {
+                return Impl.compressedDims(data);
+            }
+            return null;
         }
 
         // ── Font atlas (Phase 4 of Asset Streaming RFC, labelle-engine#448) ──
@@ -455,4 +524,37 @@ pub fn Backend(comptime Impl: type) type {
             }
         }
     };
+}
+
+test "loadTextureFromMemory diverts compressed blobs past the CPU decoder" {
+    // #341: a backend exposing isCompressed/uploadCompressed gets compressed
+    // blobs uploaded as-is; everything else takes the decode path unchanged.
+    const MockBackend = @import("mock_backend.zig").MockBackend;
+    const B = Backend(MockBackend);
+
+    // Sentinel-"MOCK" blob → uploadCompressed (sentinel 4096×4096), no decode.
+    const compressed = try B.loadTextureFromMemory("astc", "MOCK\x00\x00\x00\x00payload");
+    try std.testing.expectEqual(@as(i32, 4096), compressed.width);
+
+    // Ordinary blob → decodeImage + uploadTexture (the 1×1 mock stub).
+    const decoded = try B.loadTextureFromMemory("png", "ordinary-non-compressed-bytes");
+    try std.testing.expectEqual(@as(i32, 1), decoded.width);
+}
+
+test "compressedDims reads dims from a compressed blob without decoding" {
+    // The async catalog adapter probes header dims via the namespace-level
+    // wrapper; the named CompressedDims type must unify with the backend's
+    // own anonymous result.
+    const MockBackend = @import("mock_backend.zig").MockBackend;
+    const B = Backend(MockBackend);
+
+    // Sentinel-"MOCK" blob → mock reports its sentinel 4096×4096 dims.
+    const dims = B.compressedDims("MOCK\x00\x00\x00\x00payload");
+    try std.testing.expect(dims != null);
+    try std.testing.expectEqual(@as(u32, 4096), dims.?.width);
+    try std.testing.expectEqual(@as(u32, 4096), dims.?.height);
+    try std.testing.expectEqual(B.CompressedDims, @TypeOf(dims.?));
+
+    // Non-compressed blob → null (no dims to read without decoding).
+    try std.testing.expectEqual(@as(?B.CompressedDims, null), B.compressedDims("ordinary-bytes"));
 }

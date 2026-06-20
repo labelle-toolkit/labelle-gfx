@@ -1,22 +1,6 @@
-//! Window utilities — fullscreen toggle and screenshot capture.
-//!
-//! Backend-agnostic state tracking. Actual windowing calls are
-//! delegated to the backend via comptime-resolved function pointers.
+//! Window utilities — screenshot capture (RGBA → 24-bit BMP).
 
 const std = @import("std");
-
-/// Fullscreen state tracker
-pub const Fullscreen = struct {
-    is_fullscreen: bool = false,
-
-    pub fn toggle(self: *Fullscreen) void {
-        self.is_fullscreen = !self.is_fullscreen;
-    }
-
-    pub fn set(self: *Fullscreen, fullscreen: bool) void {
-        self.is_fullscreen = fullscreen;
-    }
-};
 
 /// Screenshot writer — saves raw RGBA pixels to BMP format
 pub const Screenshot = struct {

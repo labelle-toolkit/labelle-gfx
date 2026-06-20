@@ -91,6 +91,13 @@ pub const MockBackend = struct {
         color: Color,
     };
 
+    pub const TriangleCall = struct {
+        v1: Vector2,
+        v2: Vector2,
+        v3: Vector2,
+        color: Color,
+    };
+
     pub const TextCall = struct {
         x: f32,
         y: f32,
@@ -102,6 +109,7 @@ pub const MockBackend = struct {
     threadlocal var shape_calls_list: std.ArrayListUnmanaged(ShapeCall) = .empty;
     threadlocal var circle_calls_list: std.ArrayListUnmanaged(CircleCall) = .empty;
     threadlocal var line_calls_list: std.ArrayListUnmanaged(LineCall) = .empty;
+    threadlocal var triangle_calls_list: std.ArrayListUnmanaged(TriangleCall) = .empty;
     threadlocal var text_calls_list: std.ArrayListUnmanaged(TextCall) = .empty;
     threadlocal var allocator_ref: ?std.mem.Allocator = null;
     threadlocal var screen_width_val: i32 = 800;
@@ -111,13 +119,36 @@ pub const MockBackend = struct {
     threadlocal var font_atlas_unload_calls: u32 = 0;
     threadlocal var in_camera_mode: bool = false;
 
+    /// One `beginMode2D` call, recorded for multi-camera render tests
+    /// (labelle-gfx#226). `target` is the camera's Y-down backend
+    /// target — split-screen tests assert one entry per active camera.
+    pub const CameraPass = struct {
+        target_x: f32,
+        target_y: f32,
+        zoom: f32,
+    };
+
+    /// One `setViewport` call. Empty list means full-window rendering.
+    pub const ViewportCall = struct {
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    };
+
+    threadlocal var camera_passes_list: std.ArrayListUnmanaged(CameraPass) = .empty;
+    threadlocal var viewport_calls_list: std.ArrayListUnmanaged(ViewportCall) = .empty;
+
     pub fn initMock(allocator: std.mem.Allocator) void {
         allocator_ref = allocator;
         draw_calls_list = .empty;
         shape_calls_list = .empty;
         circle_calls_list = .empty;
         line_calls_list = .empty;
+        triangle_calls_list = .empty;
         text_calls_list = .empty;
+        camera_passes_list = .empty;
+        viewport_calls_list = .empty;
         texture_counter = 1;
         font_atlas_counter = 1;
         font_atlas_unload_calls = 0;
@@ -130,13 +161,19 @@ pub const MockBackend = struct {
             shape_calls_list.deinit(alloc);
             circle_calls_list.deinit(alloc);
             line_calls_list.deinit(alloc);
+            triangle_calls_list.deinit(alloc);
             text_calls_list.deinit(alloc);
+            camera_passes_list.deinit(alloc);
+            viewport_calls_list.deinit(alloc);
         }
         draw_calls_list = .empty;
         shape_calls_list = .empty;
         circle_calls_list = .empty;
         line_calls_list = .empty;
+        triangle_calls_list = .empty;
         text_calls_list = .empty;
+        camera_passes_list = .empty;
+        viewport_calls_list = .empty;
         allocator_ref = null;
     }
 
@@ -145,11 +182,26 @@ pub const MockBackend = struct {
         shape_calls_list.clearRetainingCapacity();
         circle_calls_list.clearRetainingCapacity();
         line_calls_list.clearRetainingCapacity();
+        triangle_calls_list.clearRetainingCapacity();
         text_calls_list.clearRetainingCapacity();
+        camera_passes_list.clearRetainingCapacity();
+        viewport_calls_list.clearRetainingCapacity();
         texture_counter = 1;
         font_atlas_counter = 1;
         font_atlas_unload_calls = 0;
         in_camera_mode = false;
+    }
+
+    /// Camera passes recorded since the last reset — one per
+    /// `beginMode2D`. Multi-camera render tests assert the count
+    /// equals the number of active cameras.
+    pub fn getCameraPasses() []const CameraPass {
+        return camera_passes_list.items;
+    }
+
+    /// Viewport calls recorded since the last reset.
+    pub fn getViewportCalls() []const ViewportCall {
+        return viewport_calls_list.items;
     }
 
     pub fn getFontAtlasUnloadCalls() u32 {
@@ -186,6 +238,14 @@ pub const MockBackend = struct {
 
     pub fn getLineCallCount() usize {
         return line_calls_list.items.len;
+    }
+
+    pub fn getTriangleCalls() []const TriangleCall {
+        return triangle_calls_list.items;
+    }
+
+    pub fn getTriangleCallCount() usize {
+        return triangle_calls_list.items.len;
     }
 
     pub fn getTextCalls() []const TextCall {
@@ -239,6 +299,17 @@ pub const MockBackend = struct {
                 .center_x = center_x,
                 .center_y = center_y,
                 .radius = radius,
+                .color = tint,
+            }) catch {};
+        }
+    }
+
+    pub fn drawTriangle(v1: Vector2, v2: Vector2, v3: Vector2, tint: Color) void {
+        if (allocator_ref) |alloc| {
+            triangle_calls_list.append(alloc, .{
+                .v1 = v1,
+                .v2 = v2,
+                .v3 = v3,
                 .color = tint,
             }) catch {};
         }
@@ -322,6 +393,30 @@ pub const MockBackend = struct {
         last_update_len = pixels.len;
     }
 
+    /// GPU-compressed-texture support, exercised by the dispatch test in
+    /// `backend.zig`. Real backends key this on a format magic (e.g. ASTC);
+    /// the mock uses a `"MOCK"` sentinel so it only diverts blobs the tests
+    /// explicitly mark compressed — ordinary decode-path tests are unaffected.
+    pub fn isCompressed(data: []const u8) bool {
+        return data.len >= 4 and std.mem.eql(u8, data[0..4], "MOCK");
+    }
+
+    /// Stub compressed upload: returns a texture with sentinel 4096×4096 dims
+    /// so a test can tell the compressed path was taken (vs the 1×1 decode stub).
+    pub fn uploadCompressed(_: []const u8) !Texture {
+        const id = texture_counter;
+        texture_counter += 1;
+        return Texture{ .id = id, .width = 4096, .height = 4096 };
+    }
+
+    /// Stub header probe: reports the same sentinel 4096×4096 dims for a
+    /// `"MOCK"` blob (matching `uploadCompressed`), null otherwise — so a
+    /// test can confirm the catalog adapter reads dims without decoding.
+    pub fn compressedDims(data: []const u8) ?struct { width: u32, height: u32 } {
+        if (!isCompressed(data)) return null;
+        return .{ .width = 4096, .height = 4096 };
+    }
+
     /// Stub CPU bake: returns a 1×1 alpha atlas with a single glyph
     /// covering codepoint `params.ranges[0].first` (or 0x20 if ranges
     /// is empty). All four slices come from the caller's allocator;
@@ -383,13 +478,38 @@ pub const MockBackend = struct {
         font_atlas_unload_calls += 1;
     }
 
-    pub fn beginMode2D(_: Camera2D) void {
+    pub fn beginMode2D(camera: Camera2D) void {
         in_camera_mode = true;
+        if (allocator_ref) |alloc| {
+            camera_passes_list.append(alloc, .{
+                .target_x = camera.target.x,
+                .target_y = camera.target.y,
+                .zoom = camera.zoom,
+            }) catch {};
+        }
     }
 
     pub fn endMode2D() void {
         in_camera_mode = false;
     }
+
+    /// Optional split-screen viewport hook (see
+    /// `GfxRenderer.applyViewport`). Recorded so multi-camera render
+    /// tests can assert each active camera scopes its draws to its own
+    /// screen viewport.
+    pub fn setViewport(x: i32, y: i32, width: i32, height: i32) void {
+        if (allocator_ref) |alloc| {
+            viewport_calls_list.append(alloc, .{
+                .x = x,
+                .y = y,
+                .width = width,
+                .height = height,
+            }) catch {};
+        }
+    }
+
+    /// Counterpart to `setViewport` — restores full-window rendering.
+    pub fn clearViewport() void {}
 
     pub fn getScreenWidth() i32 {
         return screen_width_val;

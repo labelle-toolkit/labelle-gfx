@@ -13,6 +13,7 @@ const Backend = gfx.Backend;
 const MockBackend = gfx.MockBackend;
 const RetainedEngineWith = gfx.RetainedEngineWith;
 const GfxRenderer = gfx.GfxRenderer;
+const GfxRendererWith = gfx.GfxRendererWith;
 const EntityId = gfx.EntityId;
 const Pivot = gfx.Pivot;
 const DefaultLayers = gfx.DefaultLayers;
@@ -120,6 +121,51 @@ test "Backend: loadTextureFromMemory wrapper still works (no caller break)" {
 }
 
 // ── decodeFont / uploadFontAtlas / unloadFontAtlas (Phase 4, #448) ────────
+
+// ── Shape draw: triangle fill (labelle-toolkit/labelle-gfx#272) ──────────
+
+test "RetainedEngine: filled triangle takes drawTriangle, outline takes drawLine" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    const Position = gfx.Position;
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Filled triangle (the default fill) → one drawTriangle, no lines.
+    engine.createShape(
+        EntityId.from(1),
+        .{ .shape = .{ .triangle = .{
+            .p2 = .{ .x = 10, .y = 0 },
+            .p3 = .{ .x = 0, .y = 10 },
+            .fill = .filled,
+        } } },
+        Position{ .x = 100, .y = 100 },
+    );
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getTriangleCallCount());
+    try testing.expectEqual(@as(usize, 0), MockBackend.getLineCallCount());
+
+    // Outline triangle → three drawLine segments, no drawTriangle.
+    MockBackend.resetMock();
+    engine.removeShape(EntityId.from(1));
+    engine.createShape(
+        EntityId.from(2),
+        .{ .shape = .{ .triangle = .{
+            .p2 = .{ .x = 10, .y = 0 },
+            .p3 = .{ .x = 0, .y = 10 },
+            .fill = .outline,
+        } } },
+        Position{ .x = 100, .y = 100 },
+    );
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 0), MockBackend.getTriangleCallCount());
+    try testing.expectEqual(@as(usize, 3), MockBackend.getLineCallCount());
+}
 
 test "Backend: font bake → upload → unload round trip" {
     const B = Backend(MockBackend);
@@ -410,6 +456,280 @@ test "Custom layers work with RetainedEngine" {
     try testing.expectEqual(2, engine.spriteCount());
 }
 
+// ── GfxRenderer Y-axis offset composition (regression: gfx#274 part 2) ──
+//
+// A Shape sub-offset (`line.end`, `triangle` p2/p3) is authored in *logical*
+// space. The renderer flips the entity `position` into screen space
+// (`screen_height - y`); before gfx#274 part 2 the offset was added to the
+// *already-flipped* position, so the endpoint landed mirrored in Y. The fix
+// composes `position + offset` in logical space and flips the final point
+// once — so the recorded endpoint matches `flip(position + offset)` with **no**
+// manual `end.y` negation by the caller.
+
+test "GfxRenderer: line endpoint is composed in logical space then flipped once (no Y mirror)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    const screen_h: f32 = 600;
+    renderer.setScreenHeight(screen_h);
+
+    const pos = core.Position{ .x = 100, .y = 200 };
+    const end = core.Position{ .x = 30, .y = 40 }; // logical offset, authored as-is
+
+    const entity = ecs.createEntity();
+    ecs.addComponent(entity, pos);
+    ecs.addComponent(entity, Renderer.Shape{
+        .shape = .{ .line = .{ .end = end } },
+        .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    });
+
+    renderer.trackEntity(entity, .shape);
+    renderer.sync(MockEcs, &ecs);
+    renderer.render();
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getLineCallCount());
+    const line = MockBackend.getLineCalls()[0];
+
+    // Start = flip(position).
+    try testing.expectEqual(pos.x, line.start_x);
+    try testing.expectEqual(screen_h - pos.y, line.start_y);
+
+    // End = flip(position + offset), NOT flip(position) + offset.
+    // flip(position + offset).y = screen_h - (pos.y + end.y) = 600 - 240 = 360,
+    // i.e. start_y - end.y (360), never the mirrored start_y + end.y (440).
+    try testing.expectEqual(pos.x + end.x, line.end_x);
+    try testing.expectEqual(screen_h - (pos.y + end.y), line.end_y);
+    try testing.expectEqual(line.start_y - end.y, line.end_y);
+}
+
+test "GfxRenderer: filled triangle vertices compose in logical space then flip once" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    const screen_h: f32 = 600;
+    renderer.setScreenHeight(screen_h);
+
+    const pos = core.Position{ .x = 100, .y = 200 };
+    const p2 = core.Position{ .x = 50, .y = 0 };
+    const p3 = core.Position{ .x = 0, .y = 60 };
+
+    const entity = ecs.createEntity();
+    ecs.addComponent(entity, pos);
+    ecs.addComponent(entity, Renderer.Shape{
+        .shape = .{ .triangle = .{ .p2 = p2, .p3 = p3, .fill = .filled } },
+        .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    });
+
+    renderer.trackEntity(entity, .shape);
+    renderer.sync(MockEcs, &ecs);
+    renderer.render();
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getTriangleCallCount());
+    const tri = MockBackend.getTriangleCalls()[0];
+
+    // v1 = flip(position).
+    try testing.expectEqual(pos.x, tri.v1.x);
+    try testing.expectEqual(screen_h - pos.y, tri.v1.y);
+    // v2 = flip(position + p2): p2.y == 0 so only the flipped base moves in x.
+    try testing.expectEqual(pos.x + p2.x, tri.v2.x);
+    try testing.expectEqual(screen_h - (pos.y + p2.y), tri.v2.y);
+    // v3 = flip(position + p3): logical +60 in y must move UP on screen
+    // (smaller screen y), i.e. v1.y - 60, never the mirrored v1.y + 60.
+    try testing.expectEqual(pos.x + p3.x, tri.v3.x);
+    try testing.expectEqual(screen_h - (pos.y + p3.y), tri.v3.y);
+    try testing.expectEqual(tri.v1.y - p3.y, tri.v3.y);
+}
+
+// ── Y-axis convention (gfx#276) ────────────────────────────
+//
+// The renderer's vertical flip is comptime-parameterized by the project's
+// `.y_axis`, routed through labelle-core's canonical `toScreenY`. The
+// code-level default is `.up` (today's flip) — `GfxRenderer` is the three-arg
+// `.up` alias of `GfxRendererWith`, so existing games (whose generated config
+// does not yet specify a y-axis) reproduce today's behavior exactly until the
+// engine threads `.down` explicitly.
+
+test "gfx#276: default-constructed GfxRenderer defaults to .up (reproduces today's flip)" {
+    // The struct-level default MUST be `.up`. If this regresses to `.down`,
+    // every existing game renders upside-down on the gfx bump.
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    try testing.expectEqual(core.YAxis.up, Renderer.yAxis);
+}
+
+test "gfx#276: .up renderer flips a circle position exactly as today (screen_h - y)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32); // default .up
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    const screen_h: f32 = 600;
+    renderer.setScreenHeight(screen_h);
+
+    const pos = core.Position{ .x = 100, .y = 200 };
+    const entity = ecs.createEntity();
+    ecs.addComponent(entity, pos);
+    ecs.addComponent(entity, Renderer.Shape{
+        .shape = .{ .circle = .{ .radius = 10 } },
+        .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    });
+
+    renderer.trackEntity(entity, .shape);
+    renderer.sync(MockEcs, &ecs);
+    renderer.render();
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCircleCallCount());
+    const circle = MockBackend.getCircleCalls()[0];
+    try testing.expectEqual(pos.x, circle.center_x);
+    // .up flips: screen_y = screen_h - y = 600 - 200 = 400.
+    try testing.expectEqual(screen_h - pos.y, circle.center_y);
+}
+
+test "gfx#276: .down renderer does NOT flip a circle position (identity)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRendererWith(MockBackend, DefaultLayers, u32, .down);
+    try testing.expectEqual(core.YAxis.down, Renderer.yAxis);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    const pos = core.Position{ .x = 100, .y = 200 };
+    const entity = ecs.createEntity();
+    ecs.addComponent(entity, pos);
+    ecs.addComponent(entity, Renderer.Shape{
+        .shape = .{ .circle = .{ .radius = 10 } },
+        .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    });
+
+    renderer.trackEntity(entity, .shape);
+    renderer.sync(MockEcs, &ecs);
+    renderer.render();
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCircleCallCount());
+    const circle = MockBackend.getCircleCalls()[0];
+    try testing.expectEqual(pos.x, circle.center_x);
+    // .down is identity: screen_y = y = 200, NOT flipped.
+    try testing.expectEqual(pos.y, circle.center_y);
+}
+
+test "gfx#276: .down renderer leaves a line offset un-negated (no mirror)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRendererWith(MockBackend, DefaultLayers, u32, .down);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    const pos = core.Position{ .x = 100, .y = 200 };
+    const end = core.Position{ .x = 30, .y = 40 };
+    const entity = ecs.createEntity();
+    ecs.addComponent(entity, pos);
+    ecs.addComponent(entity, Renderer.Shape{
+        .shape = .{ .line = .{ .end = end } },
+        .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    });
+
+    renderer.trackEntity(entity, .shape);
+    renderer.sync(MockEcs, &ecs);
+    renderer.render();
+
+    const line = MockBackend.getLineCalls()[0];
+    // Under .down both position and offset are identity (no flip).
+    try testing.expectEqual(pos.y, line.start_y);
+    // Endpoint = position + offset with NO negation: 200 + 40 = 240.
+    try testing.expectEqual(pos.y + end.y, line.end_y);
+}
+
+// Q2 (load-bearing): the camera transform and the renderer flip route through
+// the *same* core `toScreenY`, so a camera layer and a screen-space layer can
+// never disagree about which way is +Y. Two properties pin this down:
+//
+//   1. `screenToWorld(worldToScreen(y)) == y` under each axis (the camera's
+//      flip is a clean involution, exactly like the renderer's).
+//   2. Switching axis from `.up` to `.down` changes the camera's vertical
+//      mapping by *exactly* the core flip delta — the same delta the renderer
+//      would apply — proving both consume the one transform.
+
+test "gfx#276 Q2: camera screen<->world round-trips under .up" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    MockBackend.setScreenSize(800, 600);
+
+    const Cam = gfx.CameraWith(MockBackend, .up);
+    var cam = Cam.init();
+
+    const logical_y: f32 = 200;
+    const sc = cam.worldToScreen(0, logical_y);
+    const back = cam.screenToWorld(sc.x, sc.y);
+    try testing.expectEqual(logical_y, back.y);
+}
+
+test "gfx#276 Q2: camera screen<->world round-trips under .down" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    MockBackend.setScreenSize(800, 600);
+
+    const Cam = gfx.CameraWith(MockBackend, .down);
+    var cam = Cam.init();
+
+    const logical_y: f32 = 200;
+    const sc = cam.worldToScreen(0, logical_y);
+    const back = cam.screenToWorld(sc.x, sc.y);
+    try testing.expectEqual(logical_y, back.y);
+}
+
+test "gfx#276 Q2: .up camera worldToScreen reproduces today's exact value" {
+    // The `.up` path must be byte-identical to pre-#276 behavior: both the
+    // camera target and the world point are flipped with `screen_h - y`
+    // (= `core.toScreenY(.up,...)`), so the camera path FP relies on is
+    // unchanged. With an identity (x=0,y=0,zoom=1) camera on an 800x600 canvas:
+    //   target.y = 600-0 = 600, offset = (400,300)
+    //   world (0,200) flips to (0, 400)
+    //   backend: y = (400 - 600)*1 + 300 = 100
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    MockBackend.setScreenSize(800, 600);
+
+    const Cam = gfx.CameraWith(MockBackend, .up);
+    var cam = Cam.init();
+    const sc = cam.worldToScreen(0, 200);
+    try testing.expectEqual(@as(f32, 100), sc.y);
+}
+
 // ── GfxRenderer ────────────────────────────────────────────
 
 test "GfxRenderer satisfies RenderInterface" {
@@ -516,6 +836,163 @@ test "GfxRenderer: screenToDesign callable on a const renderer reference" {
     const out = renderer_const.screenToDesign(7.0, 8.0);
     try testing.expectEqual(@as(f32, 7.0), out.x);
     try testing.expectEqual(@as(f32, 8.0), out.y);
+}
+
+// ── GfxRenderer multi-camera (regression: labelle-gfx#226) ──
+
+test "GfxRenderer: getCamera targets the selected camera in split-screen" {
+    // Before #226 getCamera always returned the primary camera, so
+    // every high-level setter routed through it ignored the game's
+    // camera selection. selectCamera(1) must redirect getCamera to
+    // camera 1.
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    renderer.getCameraManager().setupSplitScreen(.vertical_split);
+
+    // Default selection is camera 0 (the primary).
+    try testing.expectEqual(
+        renderer.getCameraManager().getPrimaryCamera(),
+        renderer.getCamera(),
+    );
+
+    // Selecting camera 1 redirects every setter routed through getCamera.
+    renderer.selectCamera(1);
+    renderer.getCamera().setPosition(640, 360);
+    renderer.getCamera().setZoom(2.0);
+
+    const mgr = renderer.getCameraManager();
+    try testing.expectEqual(@as(f32, 640), mgr.getCamera(1).x);
+    try testing.expectEqual(@as(f32, 360), mgr.getCamera(1).y);
+    try testing.expectEqual(@as(f32, 2.0), mgr.getCamera(1).zoom);
+    // Primary camera (0) is untouched — the setter no longer leaks.
+    try testing.expectEqual(@as(f32, 0), mgr.getCamera(0).x);
+    try testing.expectEqual(@as(f32, 1.0), mgr.getCamera(0).zoom);
+}
+
+test "GfxRenderer: getCamera falls back to primary when selection is inactive" {
+    // Single-camera mode: only camera 0 is active. Selecting an
+    // inactive camera must not silently drop setters onto an
+    // off-screen camera — getCamera falls back to the primary.
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    renderer.selectCamera(2); // camera 2 is not active in single mode
+    try testing.expectEqual(
+        renderer.getCameraManager().getPrimaryCamera(),
+        renderer.getCamera(),
+    );
+}
+
+test "GfxRenderer: render draws through every active camera" {
+    // The core #226 bug: render() only ever entered the primary
+    // camera, so split-screen cameras 1-3 were never rendered. With
+    // a single world layer, each active camera produces exactly one
+    // beginMode2D pass.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    // Single-camera baseline.
+    renderer.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+
+    // Vertical split — two active cameras, two passes.
+    MockBackend.resetMock();
+    renderer.getCameraManager().setupSplitScreen(.vertical_split);
+    renderer.render();
+    try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
+
+    // Quadrant — four active cameras, four passes.
+    MockBackend.resetMock();
+    renderer.getCameraManager().setupSplitScreen(.quadrant);
+    renderer.render();
+    try testing.expectEqual(@as(usize, 4), MockBackend.getCameraPasses().len);
+}
+
+test "GfxRenderer: each split-screen camera renders with its own transform" {
+    // Per-camera follow/pan must actually reach rendering: position
+    // camera 0 and camera 1 differently, then assert both targets
+    // show up among the recorded camera passes.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    renderer.getCameraManager().setupSplitScreen(.vertical_split);
+
+    renderer.selectCamera(0);
+    renderer.getCamera().setPosition(100, 0);
+    renderer.selectCamera(1);
+    renderer.getCamera().setPosition(700, 0);
+
+    renderer.render();
+
+    const passes = MockBackend.getCameraPasses();
+    try testing.expectEqual(@as(usize, 2), passes.len);
+    // Camera.toBackend leaves `target.x` as the world x (only y is
+    // flipped), so the two passes carry x=100 and x=700.
+    var saw_100 = false;
+    var saw_700 = false;
+    for (passes) |p| {
+        if (p.target_x == 100) saw_100 = true;
+        if (p.target_x == 700) saw_700 = true;
+    }
+    try testing.expect(saw_100);
+    try testing.expect(saw_700);
+}
+
+test "GfxRenderer: render scopes each camera to its screen viewport" {
+    // MockBackend defines the optional setViewport hook, so split-
+    // screen rendering must scope each camera's draws to its own
+    // viewport rect.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    renderer.getCameraManager().setupSplitScreen(.vertical_split);
+    renderer.render();
+
+    // MockBackend is 800x600 → left half {0,0,400,600}, right half
+    // {400,0,400,600}.
+    const vps = MockBackend.getViewportCalls();
+    try testing.expectEqual(@as(usize, 2), vps.len);
+    try testing.expectEqual(@as(i32, 0), vps[0].x);
+    try testing.expectEqual(@as(i32, 400), vps[0].width);
+    try testing.expectEqual(@as(i32, 400), vps[1].x);
+    try testing.expectEqual(@as(i32, 400), vps[1].width);
+}
+
+test "GfxRenderer: renderGizmoDraws draws into every active camera" {
+    // Gizmo overlays were also primary-camera-only before #226.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    renderer.getCameraManager().setupSplitScreen(.vertical_split);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    // One beginMode2D pass per active camera (two for vertical split).
+    try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
+    // The world-space line is drawn once per camera.
+    try testing.expectEqual(@as(usize, 2), MockBackend.getLineCallCount());
 }
 
 // ── Components ─────────────────────────────────────────────
@@ -767,17 +1244,388 @@ test "TileMap loadFromMemory parses basic TMX" {
     try testing.expectEqual(@as(f32, 32), entities.objects[0].x);
 }
 
-// ── Window Utilities ───────────────────────────────────────
+// ── Spatial viewport culling (#208) ────────────────────────
+//
+// The retained engine indexes every world-space entity in a uniform
+// spatial grid. `setCullViewport` switches `render` onto the grid fast
+// path: only entities overlapping the viewport are drawn. These tests
+// pin the new path's draw set against the original linear behaviour.
 
-test "Fullscreen: toggle state" {
-    var fs = gfx.Fullscreen{};
-    try testing.expect(!fs.is_fullscreen);
-    fs.toggle();
-    try testing.expect(fs.is_fullscreen);
-    fs.toggle();
-    try testing.expect(!fs.is_fullscreen);
-    fs.set(true);
-    try testing.expect(fs.is_fullscreen);
+const CullEngine = RetainedEngineWith(MockBackend, DefaultLayers);
+
+// Linear reference: which visible sprites have their (default 64x64)
+// AABB overlapping `vp`, computed without the spatial grid. Used to
+// assert the spatial fast path draws exactly the same set.
+fn linearVisibleSpriteCount(
+    engine: *CullEngine,
+    vp: gfx.retained_engine_mod.CullRect,
+) usize {
+    var count: usize = 0;
+    var it = engine.sprites.iterator();
+    while (it.next()) |e| {
+        const s = e.value_ptr.visual;
+        if (!s.visible) continue;
+        const p = e.value_ptr.position;
+        const r = gfx.retained_engine_mod.CullRect{
+            .x = p.x - 32, .y = p.y - 32, .w = 64, .h = 64,
+        };
+        if (r.overlaps(vp)) count += 1;
+    }
+    return count;
+}
+
+test "culling: only entities inside the viewport are drawn" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Two sprites near the origin, one far away.
+    engine.createSprite(EntityId.from(1), .{ .sprite_name = "near1" }, .{ .x = 100, .y = 100 });
+    engine.createSprite(EntityId.from(2), .{ .sprite_name = "near2" }, .{ .x = 200, .y = 150 });
+    engine.createSprite(EntityId.from(3), .{ .sprite_name = "far" }, .{ .x = 9000, .y = 9000 });
+
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 400, .h = 400 });
+    engine.render();
+
+    // Only the two near sprites should produce draw calls.
+    try testing.expectEqual(@as(usize, 2), MockBackend.getDrawCallCount());
+}
+
+test "culling: disabled viewport renders every entity (no behaviour change)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{ .sprite_name = "a" }, .{ .x = 100, .y = 100 });
+    engine.createSprite(EntityId.from(2), .{ .sprite_name = "b" }, .{ .x = 9000, .y = 9000 });
+
+    // No cull viewport set -> linear path -> both drawn.
+    engine.render();
+    try testing.expectEqual(@as(usize, 2), MockBackend.getDrawCallCount());
+}
+
+test "culling: moved entity is re-indexed and culled at its new position" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{ .sprite_name = "mover" }, .{ .x = 100, .y = 100 });
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 400, .h = 400 });
+
+    engine.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+
+    // Move it far outside the viewport.
+    engine.updatePosition(EntityId.from(1), .{ .x = 9000, .y = 9000 });
+    MockBackend.resetMock();
+    engine.render();
+    try testing.expectEqual(@as(usize, 0), MockBackend.getDrawCallCount());
+
+    // Move it back inside.
+    engine.updatePosition(EntityId.from(1), .{ .x = 150, .y = 150 });
+    MockBackend.resetMock();
+    engine.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
+test "culling: removed entity drops out of the spatial grid" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{ .sprite_name = "a" }, .{ .x = 100, .y = 100 });
+    engine.createSprite(EntityId.from(2), .{ .sprite_name = "b" }, .{ .x = 150, .y = 150 });
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 400, .h = 400 });
+
+    engine.removeSprite(EntityId.from(1));
+    engine.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
+test "culling: screen-space layers are never culled" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // `ui` is a screen-space layer — pinned, always visible even with a
+    // far-away position and a tight cull viewport.
+    engine.createSprite(EntityId.from(1), .{ .sprite_name = "hud", .layer = .ui }, .{ .x = 9000, .y = 9000 });
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 100, .h = 100 });
+
+    engine.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
+test "culling: spatial grid result matches linear scan (large randomized world)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // 5000x5000 world, 4000 sprites — the issue's benchmark scenario.
+    var prng = std.Random.DefaultPrng.init(0x208208208);
+    const rng = prng.random();
+    const N: u32 = 4000;
+    var i: u32 = 0;
+    while (i < N) : (i += 1) {
+        const x = rng.float(f32) * 5000.0;
+        const y = rng.float(f32) * 5000.0;
+        engine.createSprite(EntityId.from(i + 1), .{ .sprite_name = "s" }, .{ .x = x, .y = y });
+    }
+
+    // Probe several viewports; the spatial path must draw exactly the
+    // same set as a brute-force linear scan.
+    const viewports = [_]gfx.retained_engine_mod.CullRect{
+        .{ .x = 0, .y = 0, .w = 1920, .h = 1080 },
+        .{ .x = 2000, .y = 2000, .w = 1920, .h = 1080 },
+        .{ .x = 4500, .y = 4500, .w = 1920, .h = 1080 }, // partly off-world
+        .{ .x = -500, .y = -500, .w = 600, .h = 600 }, // corner
+    };
+
+    for (viewports) |vp| {
+        const expected = linearVisibleSpriteCount(&engine, vp);
+
+        MockBackend.resetMock();
+        engine.setCullViewport(vp);
+        engine.render();
+        try testing.expectEqual(expected, MockBackend.getDrawCallCount());
+
+        // Sanity: the grid query must genuinely narrow the field —
+        // otherwise the "acceleration" is just the linear scan.
+        try testing.expect(expected < N);
+    }
+}
+
+test "culling: benchmark — spatial path slashes per-frame culling work" {
+    // Issue #208 benchmark scenario: 10,000 sprites in a 5000x5000
+    // world, a ~1080p viewport covering roughly 1% of them.
+    //
+    // Zig 0.16 dropped `std.time.Timer`, and wall-clock asserts are
+    // flaky in CI anyway, so this measures the *deterministic* quantity
+    // the optimisation actually changes: the number of entities the
+    // renderer's cull loop has to consider per frame.
+    //
+    //   Linear path:  considers all 10,000 entities every frame.
+    //   Spatial path: considers only the grid-query candidates — the
+    //                 cells the viewport touches — a small constant.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    var prng = std.Random.DefaultPrng.init(0xBEEF208);
+    const rng = prng.random();
+    const N: u32 = 10_000;
+    var i: u32 = 0;
+    while (i < N) : (i += 1) {
+        const x = rng.float(f32) * 5000.0;
+        const y = rng.float(f32) * 5000.0;
+        engine.createSprite(EntityId.from(i + 1), .{ .sprite_name = "s" }, .{ .x = x, .y = y });
+    }
+
+    const viewport = gfx.retained_engine_mod.CullRect{ .x = 2000, .y = 2000, .w = 1920, .h = 1080 };
+
+    // Linear path: every entity is a cull candidate.
+    const linear_candidates: usize = N;
+    engine.clearCullViewport();
+    engine.render();
+    const linear_draws = MockBackend.getDrawCallCount();
+
+    // Spatial path: the grid query narrows candidates to the viewport.
+    var query = try engine.grid.query(viewport, testing.allocator);
+    const spatial_candidates = query.items.len;
+    query.deinit(testing.allocator);
+
+    MockBackend.resetMock();
+    engine.setCullViewport(viewport);
+    engine.render();
+    const spatial_draws = MockBackend.getDrawCallCount();
+
+    const speedup = @as(f64, @floatFromInt(linear_candidates)) /
+        @as(f64, @floatFromInt(@max(spatial_candidates, 1)));
+    std.debug.print(
+        "\n[#208 culling bench] {d} sprites, 1080p viewport:" ++
+            " cull candidates linear={d} spatial={d} ({d:.1}x fewer);" ++
+            " draws linear={d} spatial={d}\n",
+        .{ N, linear_candidates, spatial_candidates, speedup, linear_draws, spatial_draws },
+    );
+
+    // Spatial culling must draw the same kind of result but examine an
+    // order of magnitude fewer candidates, and emit fewer draw calls.
+    try testing.expect(spatial_candidates > 0);
+    try testing.expect(spatial_draws > 0);
+    try testing.expect(spatial_draws < linear_draws);
+    // The viewport covers a small slice of the world; the grid query
+    // (cells the viewport touches) must cut the candidate count several
+    // fold. Measured ~6.5x on this scenario — assert a conservative 4x.
+    try testing.expect(spatial_candidates * 4 < linear_candidates);
+}
+
+test "culling: entity with both a world and a screen visual keeps its world draw" {
+    // Regression for the mixed-layer bug: a single entity id may carry
+    // a world-space sprite *and* a screen-space text. A previous
+    // `reindexEntity` marked the whole id non-cullable whenever any of
+    // its visuals was screen-space, which kept the id out of the grid
+    // entirely — so its world-space sprite silently vanished under
+    // culling. Both visuals must draw.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const id = EntityId.from(1);
+    // World-space sprite inside the viewport.
+    engine.createSprite(id, .{ .sprite_name = "world", .layer = .world }, .{ .x = 100, .y = 100 });
+    // Screen-space text on the *same* id (DefaultLayers.ui is screen-space).
+    engine.createText(id, .{ .text = "hud", .layer = .ui }, .{ .x = 100, .y = 100 });
+
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 400, .h = 400 });
+    engine.render();
+
+    // The world sprite must still produce a draw call...
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+    // ...and the screen-space text is pinned, so it draws too.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getTextCallCount());
+}
+
+test "culling: world visual on a mixed-layer entity is culled when off-screen" {
+    // Counterpart to the test above: the world-space sprite must still
+    // be culled normally when it leaves the viewport, even though the
+    // entity also owns a (pinned) screen-space text.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const id = EntityId.from(1);
+    engine.createSprite(id, .{ .sprite_name = "world", .layer = .world }, .{ .x = 9000, .y = 9000 });
+    engine.createText(id, .{ .text = "hud", .layer = .ui }, .{ .x = 9000, .y = 9000 });
+
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 400, .h = 400 });
+    engine.render();
+
+    // Sprite is off-screen -> no texture draw.
+    try testing.expectEqual(@as(usize, 0), MockBackend.getDrawCallCount());
+    // Screen-space text is never culled.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getTextCallCount());
+}
+
+test "culling: registering a catalog texture reindexes its sprites" {
+    // Regression for stale texture-dimension bounds: a sprite created
+    // before its texture is registered sizes its cull AABB from a 64x64
+    // fallback. Once the real (much larger) texture is registered, the
+    // sprite's footprint grows — `registerCatalogTexture` must reindex
+    // affected sprites so the grid box reflects the true size, or the
+    // sprite is wrongly culled when only its larger extent overlaps.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const handle: u32 = 4242;
+    const tex_id = gfx.TextureId.from(handle);
+
+    // Sprite at (500,500) with no source_rect: its cull box derives
+    // from the texture dimensions. The texture is not registered yet,
+    // so it falls back to 64x64 -> AABB (468,468)..(532,532).
+    engine.createSprite(
+        EntityId.from(1),
+        .{ .sprite_name = "big", .texture = tex_id, .layer = .world },
+        .{ .x = 500, .y = 500 },
+    );
+
+    // Viewport touches (500,500) only via the *large* texture extent:
+    // a 64x64 box around the sprite would NOT reach x<=400, but a
+    // 600x600 texture centred there spans (200,200)..(800,800).
+    const vp = gfx.retained_engine_mod.CullRect{ .x = 0, .y = 0, .w = 300, .h = 300 };
+    engine.setCullViewport(vp);
+
+    // With the stale 64x64 fallback box the sprite is culled.
+    engine.render();
+    try testing.expectEqual(@as(usize, 0), MockBackend.getDrawCallCount());
+
+    // Register the real 600x600 texture — this must reindex the sprite.
+    engine.registerCatalogTexture(handle, .{ .id = handle, .width = 600, .height = 600 });
+
+    MockBackend.resetMock();
+    engine.render();
+    // Now the 600x600 footprint overlaps the viewport -> drawn.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
+test "culling: loadTexture reindexes sprites sized from texture dimensions" {
+    // `loadTexture` (MockBackend yields a 256x256 texture) must also
+    // reindex sprites that were created referencing the id beforehand.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // MockBackend.loadTexture hands out ids from an incrementing
+    // counter starting at 1 — the first load returns id 1.
+    const tex_id = gfx.TextureId.from(1);
+    engine.createSprite(
+        EntityId.from(1),
+        .{ .sprite_name = "s", .texture = tex_id, .layer = .world },
+        .{ .x = 200, .y = 200 },
+    );
+
+    // Viewport reachable only via the 256x256 extent (centre pivot ->
+    // box (72,72)..(328,328)), not the 64x64 fallback (168..232).
+    engine.setCullViewport(.{ .x = 0, .y = 0, .w = 120, .h = 120 });
+    engine.render();
+    try testing.expectEqual(@as(usize, 0), MockBackend.getDrawCallCount());
+
+    const loaded = try engine.loadTexture("dummy.png");
+    try testing.expectEqual(tex_id.toInt(), loaded.toInt());
+
+    MockBackend.resetMock();
+    engine.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
+test "culling: non-centred sprite pivot is not prematurely culled" {
+    // Regression for the origin-mismatch bug: the cull AABB used to be
+    // centred on `position` regardless of the sprite's pivot, but the
+    // renderer anchors a `top_left`-pivot sprite with its top-left
+    // corner at `position`. A viewport just past the position (in the
+    // +x/+y direction) overlaps the real quad but missed the old
+    // centred box.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // top_left pivot: the 64x64 sprite spans (300,300)..(364,364).
+    engine.createSprite(
+        EntityId.from(1),
+        .{ .sprite_name = "tl", .layer = .world, .pivot = .top_left },
+        .{ .x = 300, .y = 300 },
+    );
+
+    // Viewport (340,340,40,40) overlaps the real quad's lower-right
+    // region. A box centred on (300,300) would be (268,268)..(332,332)
+    // and would NOT overlap -> the sprite would be wrongly culled.
+    engine.setCullViewport(.{ .x = 340, .y = 340, .w = 40, .h = 40 });
+    engine.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
 }
 
 // ── Dynamic textures (in-engine video display half, FP#549) ──────────────
