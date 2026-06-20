@@ -111,6 +111,18 @@ pub fn GfxRenderer(comptime BackendImpl: type, comptime LayerEnum: type, comptim
             self.inner.registerCatalogTexture(handle, backend_tex);
         }
 
+        /// Create a blank, per-frame-updatable texture (in-engine video display
+        /// half, #549). `error.Unsupported` on backends without the capability.
+        pub fn createDynamicTexture(self: *Self, width: u32, height: u32) !types_mod.TextureId {
+            return self.inner.createDynamicTexture(width, height);
+        }
+
+        /// Re-upload a full RGBA8 frame to a dynamic texture. No-ops if the
+        /// backend lacks support or the id is unknown.
+        pub fn updateTexture(self: *Self, id: types_mod.TextureId, pixels: []const u8) void {
+            self.inner.updateTexture(id, pixels);
+        }
+
         /// Convert a physical-pixel screen coordinate (sokol_app touch /
         /// mouse event coords) to a design-pixel coordinate inside the
         /// pillarboxed/letterboxed canvas.

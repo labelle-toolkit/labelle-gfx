@@ -304,6 +304,24 @@ pub const MockBackend = struct {
 
     pub fn unloadTexture(_: Texture) void {}
 
+    // -- Dynamic textures (optional capability, mirrors the bgfx backend) --
+    // Lets labelle-gfx tests exercise the `@hasDecl`-gated dynamic-texture
+    // dispatch (FP#549). `last_update_*` record the most recent updateTexture
+    // call so a test can assert the renderer forwarded it.
+    pub var last_update_id: u32 = 0;
+    pub var last_update_len: usize = 0;
+
+    pub fn createDynamicTexture(width: u32, height: u32) !Texture {
+        const id = texture_counter;
+        texture_counter += 1;
+        return Texture{ .id = id, .width = @intCast(width), .height = @intCast(height) };
+    }
+
+    pub fn updateTexture(tex: Texture, pixels: []const u8) void {
+        last_update_id = tex.id;
+        last_update_len = pixels.len;
+    }
+
     /// Stub CPU bake: returns a 1×1 alpha atlas with a single glyph
     /// covering codepoint `params.ranges[0].first` (or 0x20 if ranges
     /// is empty). All four slices come from the caller's allocator;
