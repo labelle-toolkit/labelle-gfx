@@ -1627,3 +1627,33 @@ test "culling: non-centred sprite pivot is not prematurely culled" {
     engine.render();
     try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
 }
+
+// ── Dynamic textures (in-engine video display half, FP#549) ──────────────
+
+test "RetainedEngine: createDynamicTexture registers a sized texture" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const id = try engine.createDynamicTexture(256, 192);
+    const info = engine.getTextureInfo(id).?;
+    try testing.expectEqual(@as(f32, 256), info.width);
+    try testing.expectEqual(@as(f32, 192), info.height);
+}
+
+test "RetainedEngine: updateTexture forwards a frame to the backend" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    MockBackend.last_update_id = 0;
+    MockBackend.last_update_len = 0;
+
+    const id = try engine.createDynamicTexture(4, 4);
+    var frame: [4 * 4 * 4]u8 = undefined; // 4x4 RGBA8
+    engine.updateTexture(id, &frame);
+
+    // The renderer resolved the id and handed the backend the frame bytes.
+    try testing.expectEqual(@as(usize, 4 * 4 * 4), MockBackend.last_update_len);
+    try testing.expect(MockBackend.last_update_id != 0);
+}

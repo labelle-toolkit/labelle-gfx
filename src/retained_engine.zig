@@ -445,6 +445,43 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             return self.textures.get(id.toInt());
         }
 
+        // -- Dynamic textures (runtime-updated pixels) --
+        //
+        // Optional backend capability — the "display half" of in-engine video
+        // (Flying-Platform/flying-platform-labelle#549). A backend opts in by
+        // exposing `createDynamicTexture`/`updateTexture` (bgfx does); backends
+        // that don't (raylib/sokol today) still compile, since the call sites
+        // are `comptime @hasDecl`-gated and the unsupported branch never
+        // references the missing decl.
+
+        /// Create a blank, updatable RGBA8 texture for per-frame re-upload
+        /// (video frames, runtime-generated pixels). Returns `error.Unsupported`
+        /// on backends without dynamic-texture support.
+        pub fn createDynamicTexture(self: *Self, width: u32, height: u32) !TextureId {
+            if (comptime @hasDecl(BackendImpl, "createDynamicTexture")) {
+                const tex = try BackendImpl.createDynamicTexture(width, height);
+                const id = TextureId.from(tex.id);
+                self.textures.put(id.toInt(), .{
+                    .backend_texture = tex,
+                    .width = @floatFromInt(tex.width),
+                    .height = @floatFromInt(tex.height),
+                }) catch {};
+                return id;
+            } else {
+                return error.Unsupported;
+            }
+        }
+
+        /// Re-upload a full RGBA8 frame (width*height*4 bytes, top-left origin)
+        /// to a dynamic texture created by `createDynamicTexture`. No-ops if the
+        /// backend lacks support or the id is unknown.
+        pub fn updateTexture(self: *Self, id: TextureId, pixels: []const u8) void {
+            if (comptime @hasDecl(BackendImpl, "updateTexture")) {
+                const info = self.textures.get(id.toInt()) orelse return;
+                BackendImpl.updateTexture(info.backend_texture, pixels);
+            }
+        }
+
         // -- Sprite operations --
 
         pub fn createSprite(self: *Self, entity_id: EntityId, visual: SpriteVisual, pos: Position) void {
