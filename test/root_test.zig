@@ -177,9 +177,10 @@ test "RetainedEngine: shapes on a layer draw in z_index order (lower first)" {
     var engine = Engine.init(testing.allocator, .{});
     defer engine.deinit();
 
-    // Two overlapping filled rectangles on the same layer. The one created
-    // first has the HIGHER z_index (draws in front), so iteration order alone
-    // would draw it before the lower one — the sort must reverse that.
+    // Two overlapping filled rectangles on the same layer with different
+    // z_index values. Hashmap iteration order is arbitrary (not insertion
+    // order), so without sorting the draw order is undefined; the sort must
+    // produce a deterministic low-z-first order regardless.
     const red = gfx.Color{ .r = 255, .g = 0, .b = 0, .a = 255 };
     const blue = gfx.Color{ .r = 0, .g = 0, .b = 255, .a = 255 };
 

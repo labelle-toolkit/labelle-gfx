@@ -729,6 +729,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // Collect visible shapes for this layer, then sort by z_index
             var sort_buf: [4096]SortEntry = undefined;
             var sort_count: usize = 0;
+            var overflowed = false;
 
             if (candidates) |ids| {
                 const vp = self.cull_viewport.?;
@@ -739,7 +740,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                     if (sort_count < sort_buf.len) {
                         sort_buf[sort_count] = .{ .key = id, .z_index = entry.visual.z_index };
                         sort_count += 1;
-                    }
+                    } else overflowed = true;
                 }
             } else {
                 var shape_iter = self.shapes.iterator();
@@ -749,8 +750,31 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                     if (sort_count < sort_buf.len) {
                         sort_buf[sort_count] = .{ .key = shape_entry.key_ptr.*, .z_index = shape.z_index };
                         sort_count += 1;
+                    } else overflowed = true;
+                }
+            }
+
+            // Overflow (>4096 visible shapes on one layer): fall back to drawing
+            // every matching shape unsorted rather than dropping the surplus —
+            // z-order is lost in this rare case, but nothing disappears.
+            if (overflowed) {
+                if (candidates) |ids| {
+                    const vp = self.cull_viewport.?;
+                    for (ids) |id| {
+                        const entry = self.shapes.getPtr(id) orelse continue;
+                        if (entry.visual.layer != layer or !entry.visual.visible) continue;
+                        if (!shapeBounds(entry).overlaps(vp)) continue;
+                        drawShapeEntry(entry);
+                    }
+                } else {
+                    var it = self.shapes.iterator();
+                    while (it.next()) |se| {
+                        const shape = &se.value_ptr.visual;
+                        if (shape.layer != layer or !shape.visible) continue;
+                        drawShapeEntry(se.value_ptr);
                     }
                 }
+                return;
             }
 
             // Sort by z_index (lower draws first = behind), with entity id as
