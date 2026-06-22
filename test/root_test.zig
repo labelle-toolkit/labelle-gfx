@@ -167,6 +167,102 @@ test "RetainedEngine: filled triangle takes drawTriangle, outline takes drawLine
     try testing.expectEqual(@as(usize, 3), MockBackend.getLineCallCount());
 }
 
+test "RetainedEngine: filled polygon takes drawPolygon (not drawCircle), outline takes drawLine" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    const Position = gfx.Position;
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Filled hexagon (the default fill) → one drawPolygon with 6 rim
+    // verts, and crucially NOT a drawCircle (the old fake behaviour).
+    engine.createShape(
+        EntityId.from(1),
+        .{ .shape = .{ .polygon = .{
+            .sides = 6,
+            .radius = 20,
+            .fill = .filled,
+        } } },
+        Position{ .x = 100, .y = 100 },
+    );
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getPolygonCallCount());
+    try testing.expectEqual(@as(usize, 0), MockBackend.getCircleCallCount());
+    try testing.expectEqual(@as(usize, 6), MockBackend.getPolygonCalls()[0].vertex_count);
+
+    // Outline pentagon → five drawLine segments, no drawPolygon.
+    MockBackend.resetMock();
+    engine.removeShape(EntityId.from(1));
+    engine.createShape(
+        EntityId.from(2),
+        .{ .shape = .{ .polygon = .{
+            .sides = 5,
+            .radius = 20,
+            .fill = .outline,
+        } } },
+        Position{ .x = 100, .y = 100 },
+    );
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 0), MockBackend.getPolygonCallCount());
+    try testing.expectEqual(@as(usize, 5), MockBackend.getLineCallCount());
+}
+
+test "RetainedEngine: filled arc fans through drawPolygon, outline strokes drawLine" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    const Position = gfx.Position;
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Filled arc: 8 segments → centre + 9 rim points = 10-vertex fan via
+    // one drawPolygon, and crucially NOT a drawCircle.
+    engine.createShape(
+        EntityId.from(1),
+        .{ .shape = .{ .arc = .{
+            .radius = 20,
+            .start_angle = 0,
+            .sweep_angle = 3.14159265,
+            .segments = 8,
+            .fill = .filled,
+        } } },
+        Position{ .x = 100, .y = 100 },
+    );
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getPolygonCallCount());
+    try testing.expectEqual(@as(usize, 0), MockBackend.getCircleCallCount());
+    // centre + (segments + 1) rim points.
+    try testing.expectEqual(@as(usize, 10), MockBackend.getPolygonCalls()[0].vertex_count);
+
+    // Outline arc: rim segments (= segments) + 2 radial edges = 10 lines,
+    // no drawPolygon.
+    MockBackend.resetMock();
+    engine.removeShape(EntityId.from(1));
+    engine.createShape(
+        EntityId.from(2),
+        .{ .shape = .{ .arc = .{
+            .radius = 20,
+            .start_angle = 0,
+            .sweep_angle = 3.14159265,
+            .segments = 8,
+            .fill = .outline,
+        } } },
+        Position{ .x = 100, .y = 100 },
+    );
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 0), MockBackend.getPolygonCallCount());
+    try testing.expectEqual(@as(usize, 10), MockBackend.getLineCallCount());
+}
+
 test "Backend: font bake → upload → unload round trip" {
     const B = Backend(MockBackend);
     MockBackend.initMock(testing.allocator);

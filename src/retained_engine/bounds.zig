@@ -130,6 +130,19 @@ pub fn CullBounds(comptime Self: type) type {
                     };
                     return rotatedAabb(pos, .{ .x = 0, .y = 0 }, 0, &corners);
                 },
+                .arc => |a| {
+                    // Conservative: the arc never extends past its parent
+                    // circle, so the full-radius box is a safe (if slightly
+                    // loose) cull bound — symmetric like circle/polygon.
+                    const r = a.radius * sx;
+                    const corners = [_]Position{
+                        .{ .x = -r, .y = -r },
+                        .{ .x = r, .y = -r },
+                        .{ .x = r, .y = r },
+                        .{ .x = -r, .y = r },
+                    };
+                    return rotatedAabb(pos, .{ .x = 0, .y = 0 }, 0, &corners);
+                },
                 .rectangle => |r| {
                     // Rectangles render with `pos` as their top-left and
                     // rotate about their centre `pos + (w/2, h/2)`.

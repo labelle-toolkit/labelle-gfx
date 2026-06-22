@@ -98,6 +98,17 @@ pub const MockBackend = struct {
         color: Color,
     };
 
+    /// One `drawPolygon` call. The backend receives a borrowed
+    /// `[]const Vector2` whose lifetime ends with the call, so we record
+    /// the rim vertex count plus the first vertex (the fan anchor) rather
+    /// than copying the slice — enough for tests to assert a filled
+    /// polygon issued `drawPolygon` (not `drawCircle`) with N rim points.
+    pub const PolygonCall = struct {
+        vertex_count: usize,
+        first: Vector2,
+        color: Color,
+    };
+
     pub const TextCall = struct {
         x: f32,
         y: f32,
@@ -110,6 +121,7 @@ pub const MockBackend = struct {
     threadlocal var circle_calls_list: std.ArrayListUnmanaged(CircleCall) = .empty;
     threadlocal var line_calls_list: std.ArrayListUnmanaged(LineCall) = .empty;
     threadlocal var triangle_calls_list: std.ArrayListUnmanaged(TriangleCall) = .empty;
+    threadlocal var polygon_calls_list: std.ArrayListUnmanaged(PolygonCall) = .empty;
     threadlocal var text_calls_list: std.ArrayListUnmanaged(TextCall) = .empty;
     threadlocal var allocator_ref: ?std.mem.Allocator = null;
     threadlocal var screen_width_val: i32 = 800;
@@ -146,6 +158,7 @@ pub const MockBackend = struct {
         circle_calls_list = .empty;
         line_calls_list = .empty;
         triangle_calls_list = .empty;
+        polygon_calls_list = .empty;
         text_calls_list = .empty;
         camera_passes_list = .empty;
         viewport_calls_list = .empty;
@@ -162,6 +175,7 @@ pub const MockBackend = struct {
             circle_calls_list.deinit(alloc);
             line_calls_list.deinit(alloc);
             triangle_calls_list.deinit(alloc);
+            polygon_calls_list.deinit(alloc);
             text_calls_list.deinit(alloc);
             camera_passes_list.deinit(alloc);
             viewport_calls_list.deinit(alloc);
@@ -171,6 +185,7 @@ pub const MockBackend = struct {
         circle_calls_list = .empty;
         line_calls_list = .empty;
         triangle_calls_list = .empty;
+        polygon_calls_list = .empty;
         text_calls_list = .empty;
         camera_passes_list = .empty;
         viewport_calls_list = .empty;
@@ -183,6 +198,7 @@ pub const MockBackend = struct {
         circle_calls_list.clearRetainingCapacity();
         line_calls_list.clearRetainingCapacity();
         triangle_calls_list.clearRetainingCapacity();
+        polygon_calls_list.clearRetainingCapacity();
         text_calls_list.clearRetainingCapacity();
         camera_passes_list.clearRetainingCapacity();
         viewport_calls_list.clearRetainingCapacity();
@@ -248,6 +264,14 @@ pub const MockBackend = struct {
         return triangle_calls_list.items.len;
     }
 
+    pub fn getPolygonCalls() []const PolygonCall {
+        return polygon_calls_list.items;
+    }
+
+    pub fn getPolygonCallCount() usize {
+        return polygon_calls_list.items.len;
+    }
+
     pub fn getTextCalls() []const TextCall {
         return text_calls_list.items;
     }
@@ -310,6 +334,17 @@ pub const MockBackend = struct {
                 .v1 = v1,
                 .v2 = v2,
                 .v3 = v3,
+                .color = tint,
+            }) catch {};
+        }
+    }
+
+    pub fn drawPolygon(points: []const Vector2, tint: Color) void {
+        if (points.len < 3) return;
+        if (allocator_ref) |alloc| {
+            polygon_calls_list.append(alloc, .{
+                .vertex_count = points.len,
+                .first = points[0],
                 .color = tint,
             }) catch {};
         }

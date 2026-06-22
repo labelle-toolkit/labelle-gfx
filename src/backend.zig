@@ -146,6 +146,7 @@ pub fn Backend(comptime Impl: type) type {
         if (!@hasDecl(Impl, "drawRectangleRec")) @compileError("Backend must define 'drawRectangleRec'");
         if (!@hasDecl(Impl, "drawCircle")) @compileError("Backend must define 'drawCircle'");
         if (!@hasDecl(Impl, "drawTriangle")) @compileError("Backend must define 'drawTriangle'");
+        if (!@hasDecl(Impl, "drawPolygon")) @compileError("Backend must define 'drawPolygon'");
         if (!@hasDecl(Impl, "drawLine")) @compileError("Backend must define 'drawLine'");
         if (!@hasDecl(Impl, "drawText")) @compileError("Backend must define 'drawText'");
         if (!@hasDecl(Impl, "loadTexture")) @compileError("Backend must define 'loadTexture'");
@@ -293,6 +294,16 @@ pub fn Backend(comptime Impl: type) type {
         /// `drawLine` path in the retained-engine draw helper instead.
         pub inline fn drawTriangle(v1: Vector2, v2: Vector2, v3: Vector2, tint: Color) void {
             Impl.drawTriangle(v1, v2, v3, tint);
+        }
+
+        /// Filled convex polygon through the absolute rim vertices in
+        /// `points` (already in world/screen space — the caller has
+        /// applied centre + scale). The slice carries the N rim points in
+        /// order; backends triangle-fan from `points[0]`. Same Point/Color
+        /// convention as `drawTriangle`; outlined polygons take the
+        /// `drawLine` path in the retained-engine draw helper instead.
+        pub inline fn drawPolygon(points: []const Vector2, tint: Color) void {
+            Impl.drawPolygon(points, tint);
         }
 
         pub inline fn drawRectangleLinesEx(rec: Rectangle, line_thick: f32, tint: Color) void {
