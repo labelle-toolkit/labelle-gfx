@@ -50,9 +50,10 @@ pub const Shape = union(enum) {
     };
 
     /// Arc / sector (pie wedge): a partial circle centred on the shape
-    /// position. `start_angle` / `sweep_angle` are in radians, measured
-    /// the same way as the polygon rim (0 points along +x, increasing
-    /// counter-clockwise toward +y); `sweep_angle` is the angular extent.
+    /// position. `start_angle` / `sweep_angle` are in radians: angle 0 points
+    /// along +x and increases counter-clockwise toward +y (logical space);
+    /// `sweep_angle` is the angular extent. (Note: the `polygon` rim starts
+    /// apex-up at -pi/2 — a different convention.)
     /// `segments` controls the rim tessellation. `.filled` renders a pie
     /// wedge from the centre; `.outline` strokes the rim arc plus the two
     /// radial edges back to the centre. The renderer decomposes this into

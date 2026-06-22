@@ -296,10 +296,12 @@ pub fn Backend(comptime Impl: type) type {
             Impl.drawTriangle(v1, v2, v3, tint);
         }
 
-        /// Filled convex polygon through the absolute rim vertices in
-        /// `points` (already in world/screen space — the caller has
-        /// applied centre + scale). The slice carries the N rim points in
-        /// order; backends triangle-fan from `points[0]`. Same Point/Color
+        /// Filled polygon through the absolute rim vertices in `points`
+        /// (already in world/screen space — the caller has applied centre +
+        /// scale). Backends triangle-fan from `points[0]`, so any polygon
+        /// star-shaped from `points[0]` renders correctly — convex polygons
+        /// and pie sectors (centre + rim) both qualify; arbitrary concave
+        /// shapes do not. Same Point/Color
         /// convention as `drawTriangle`; outlined polygons take the
         /// `drawLine` path in the retained-engine draw helper instead.
         pub inline fn drawPolygon(points: []const Vector2, tint: Color) void {
