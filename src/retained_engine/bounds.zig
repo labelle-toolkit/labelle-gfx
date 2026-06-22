@@ -107,6 +107,7 @@ pub fn CullBounds(comptime Self: type) type {
             // irrelevant — `@abs` keeps the box stable. Rectangles use
             // signed scale below to match the mirrored rendered quad.
             const sx = @abs(v.scale_x);
+            const sy = @abs(v.scale_y);
             switch (v.shape) {
                 .circle => |c| {
                     // Circles render centred on `pos`; scale_x drives the
@@ -121,7 +122,22 @@ pub fn CullBounds(comptime Self: type) type {
                     return rotatedAabb(pos, .{ .x = 0, .y = 0 }, 0, &corners);
                 },
                 .polygon => |p| {
-                    const r = p.radius * sx;
+                    // polygon/arc scale x by scale_x and y by scale_y, so the
+                    // conservative symmetric box uses the larger of the two.
+                    const r = p.radius * @max(sx, sy);
+                    const corners = [_]Position{
+                        .{ .x = -r, .y = -r },
+                        .{ .x = r, .y = -r },
+                        .{ .x = r, .y = r },
+                        .{ .x = -r, .y = r },
+                    };
+                    return rotatedAabb(pos, .{ .x = 0, .y = 0 }, 0, &corners);
+                },
+                .arc => |a| {
+                    // Conservative: the arc never extends past its parent
+                    // circle, so the full-radius box is a safe (if slightly
+                    // loose) cull bound — symmetric like circle/polygon.
+                    const r = a.radius * @max(sx, sy);
                     const corners = [_]Position{
                         .{ .x = -r, .y = -r },
                         .{ .x = r, .y = -r },

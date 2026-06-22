@@ -6,6 +6,8 @@
 //! sort / cull logic stays in the engine; this module only owns the
 //! "draw one entry" leaves.
 
+const std = @import("std");
+
 /// Returns the draw helpers for a concrete `RetainedEngine` type.
 ///
 /// `Self` must expose `BackendType` (the resolved `Backend(...)`),
@@ -204,8 +206,102 @@ pub fn DrawHelpers(comptime Self: type) type {
                         }
                     },
                     .polygon => |poly| {
-                        // Approximate polygon as circle for now (same center, same radius)
-                        B.drawCircle(spos.x, spos.y, poly.radius * shape.scale_x, c);
+                        // Regular N-gon centred on the shape position. The
+                        // rim vertices are composed in LOGICAL space the
+                        // same way the `.triangle` case builds its absolute
+                        // points: `scale_x` scales the x offset, `scale_y`
+                        // the y offset, so y-axis/flip composition (handed
+                        // to the renderer's screen-space transform) matches
+                        // the other primitives. `sides` is clamped to
+                        // [3, MAX_POLYGON_SIDES] — fewer than 3 isn't a
+                        // polygon, and the cap keeps the fan within the
+                        // bgfx backend's `MAX_POLYGON_VERTS` triangle budget.
+                        const MAX_POLYGON_SIDES = 128;
+                        const sides: usize = @intCast(std.math.clamp(poly.sides, 3, MAX_POLYGON_SIDES));
+                        const rx = poly.radius * shape.scale_x;
+                        const ry = poly.radius * shape.scale_y;
+                        var points: [MAX_POLYGON_SIDES]B.Vector2 = undefined;
+                        const step = 2.0 * std.math.pi / @as(f32, @floatFromInt(sides));
+                        // Start at -pi/2 so the first vertex points "up"
+                        // (matching a triangle authored apex-up); purely
+                        // cosmetic, keeps the orientation intuitive.
+                        const start_angle = -std.math.pi / 2.0;
+                        var i: usize = 0;
+                        while (i < sides) : (i += 1) {
+                            const angle = start_angle + step * @as(f32, @floatFromInt(i));
+                            points[i] = .{
+                                .x = spos.x + rx * @cos(angle),
+                                .y = spos.y + ry * @sin(angle),
+                            };
+                        }
+                        const rim = points[0..sides];
+                        if (poly.fill == .outline) {
+                            // Outline: N edges between consecutive rim points.
+                            var e: usize = 0;
+                            while (e < sides) : (e += 1) {
+                                const a = rim[e];
+                                const b = rim[(e + 1) % sides];
+                                B.drawLine(a.x, a.y, b.x, b.y, poly.thickness, c);
+                            }
+                        } else {
+                            B.drawPolygon(rim, c);
+                        }
+                    },
+                    .arc => |arc| {
+                        // Arc / sector (pie wedge). Decomposed renderer-side
+                        // into a triangle fan: a `centre + N rim` vertex set
+                        // where the rim samples the arc from `start_angle`
+                        // across `sweep_angle`. Scale composes like the
+                        // polygon case (`scale_x` on x, `scale_y` on y).
+                        // `.filled` hands the centre+rim fan to `drawPolygon`
+                        // (the centre is the fan anchor, so the wedge fills
+                        // correctly); `.outline` strokes the rim arc plus the
+                        // two radial edges back to the centre. No dedicated
+                        // backend primitive — gfx-only, every backend with
+                        // `drawPolygon`/`drawLine` renders it.
+                        const MAX_ARC_SEGMENTS = 128;
+                        const segs: usize = @intCast(std.math.clamp(arc.segments, 1, MAX_ARC_SEGMENTS));
+                        const rx = arc.radius * shape.scale_x;
+                        const ry = arc.radius * shape.scale_y;
+                        // rim has segs+1 points; the filled fan also needs the
+                        // centre as point[0], so size for segs+2.
+                        var points: [MAX_ARC_SEGMENTS + 2]B.Vector2 = undefined;
+                        const step = arc.sweep_angle / @as(f32, @floatFromInt(segs));
+                        if (arc.fill == .outline) {
+                            // Stroke: centre → rim[0] → …rim arc… → rim[last] → centre.
+                            const centre = B.Vector2{ .x = spos.x, .y = spos.y };
+                            var prev = centre;
+                            var i: usize = 0;
+                            while (i <= segs) : (i += 1) {
+                                const angle = arc.start_angle + step * @as(f32, @floatFromInt(i));
+                                const p = B.Vector2{
+                                    .x = spos.x + rx * @cos(angle),
+                                    .y = spos.y + ry * @sin(angle),
+                                };
+                                if (i == 0) {
+                                    // Radial edge centre → first rim point.
+                                    B.drawLine(centre.x, centre.y, p.x, p.y, arc.thickness, c);
+                                } else {
+                                    // Rim segment.
+                                    B.drawLine(prev.x, prev.y, p.x, p.y, arc.thickness, c);
+                                }
+                                prev = p;
+                            }
+                            // Closing radial edge last rim point → centre.
+                            B.drawLine(prev.x, prev.y, centre.x, centre.y, arc.thickness, c);
+                        } else {
+                            // Filled wedge: fan anchored at the centre.
+                            points[0] = .{ .x = spos.x, .y = spos.y };
+                            var i: usize = 0;
+                            while (i <= segs) : (i += 1) {
+                                const angle = arc.start_angle + step * @as(f32, @floatFromInt(i));
+                                points[i + 1] = .{
+                                    .x = spos.x + rx * @cos(angle),
+                                    .y = spos.y + ry * @sin(angle),
+                                };
+                            }
+                            B.drawPolygon(points[0 .. segs + 2], c);
+                        }
                     },
                 }
             }
