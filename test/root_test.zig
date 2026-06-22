@@ -167,6 +167,44 @@ test "RetainedEngine: filled triangle takes drawTriangle, outline takes drawLine
     try testing.expectEqual(@as(usize, 3), MockBackend.getLineCallCount());
 }
 
+test "RetainedEngine: shapes on a layer draw in z_index order (lower first)" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    const Position = gfx.Position;
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Two overlapping filled rectangles on the same layer. The one created
+    // first has the HIGHER z_index (draws in front), so iteration order alone
+    // would draw it before the lower one — the sort must reverse that.
+    const red = gfx.Color{ .r = 255, .g = 0, .b = 0, .a = 255 };
+    const blue = gfx.Color{ .r = 0, .g = 0, .b = 255, .a = 255 };
+
+    engine.createShape(
+        EntityId.from(1),
+        .{ .shape = .{ .rectangle = .{ .width = 10, .height = 10, .fill = .filled } }, .color = red, .z_index = 5 },
+        Position{ .x = 100, .y = 100 },
+    );
+    engine.createShape(
+        EntityId.from(2),
+        .{ .shape = .{ .rectangle = .{ .width = 10, .height = 10, .fill = .filled } }, .color = blue, .z_index = -5 },
+        Position{ .x = 100, .y = 100 },
+    );
+    engine.render();
+
+    const shapes = MockBackend.getShapeCalls();
+    try testing.expectEqual(@as(usize, 2), shapes.len);
+    // Lower z_index (blue, -5) must be drawn first (behind), higher (red, 5) last.
+    // ShapeCall records a MockBackend.Color, so compare channels directly.
+    try testing.expectEqual(blue.b, shapes[0].color.b);
+    try testing.expectEqual(@as(u8, 0), shapes[0].color.r);
+    try testing.expectEqual(red.r, shapes[1].color.r);
+    try testing.expectEqual(@as(u8, 0), shapes[1].color.b);
+}
+
 test "Backend: font bake → upload → unload round trip" {
     const B = Backend(MockBackend);
     MockBackend.initMock(testing.allocator);

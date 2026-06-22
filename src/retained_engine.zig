@@ -726,21 +726,49 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         }
 
         fn renderShapesOnLayer(self: *Self, layer: LayerEnum, candidates: ?[]const u32) void {
+            // Collect visible shapes for this layer, then sort by z_index
+            var sort_buf: [4096]SortEntry = undefined;
+            var sort_count: usize = 0;
+
             if (candidates) |ids| {
                 const vp = self.cull_viewport.?;
                 for (ids) |id| {
                     const entry = self.shapes.getPtr(id) orelse continue;
                     if (entry.visual.layer != layer or !entry.visual.visible) continue;
                     if (!shapeBounds(entry).overlaps(vp)) continue;
-                    drawShapeEntry(entry);
+                    if (sort_count < sort_buf.len) {
+                        sort_buf[sort_count] = .{ .key = id, .z_index = entry.visual.z_index };
+                        sort_count += 1;
+                    }
                 }
             } else {
                 var shape_iter = self.shapes.iterator();
                 while (shape_iter.next()) |shape_entry| {
                     const shape = &shape_entry.value_ptr.visual;
                     if (shape.layer != layer or !shape.visible) continue;
-                    drawShapeEntry(shape_entry.value_ptr);
+                    if (sort_count < sort_buf.len) {
+                        sort_buf[sort_count] = .{ .key = shape_entry.key_ptr.*, .z_index = shape.z_index };
+                        sort_count += 1;
+                    }
                 }
+            }
+
+            // Sort by z_index (lower draws first = behind), with entity id as
+            // tiebreaker for deterministic order. See renderSpritesOnLayer for
+            // the rationale: std.mem.sort is unstable and hashmap iteration
+            // order changes as entries are added and removed, so without a
+            // tiebreaker shapes sharing a z_index swap front/back each frame.
+            std.mem.sort(SortEntry, sort_buf[0..sort_count], {}, struct {
+                fn lessThan(_: void, a: SortEntry, b: SortEntry) bool {
+                    if (a.z_index != b.z_index) return a.z_index < b.z_index;
+                    return a.key < b.key;
+                }
+            }.lessThan);
+
+            // Draw in sorted order
+            for (sort_buf[0..sort_count]) |sorted| {
+                const entry = self.shapes.getPtr(sorted.key) orelse continue;
+                drawShapeEntry(entry);
             }
         }
 
