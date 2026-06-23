@@ -16,6 +16,7 @@ pub const Shape = union(enum) {
     triangle: Triangle,
     polygon: Polygon,
     arc: Arc,
+    ring: Ring,
 
     pub const Circle = struct {
         radius: f32,
@@ -65,5 +66,26 @@ pub const Shape = union(enum) {
         segments: i32 = 24,
         fill: FillMode = .filled,
         thickness: f32 = 1.0,
+    };
+
+    /// Ring / annulus: the area between an inner and outer radius, centred
+    /// on the shape position. Like `Arc`, angles are in radians with angle 0
+    /// pointing along +x and increasing counter-clockwise toward +y (logical
+    /// space); `start_angle` / `sweep_angle` carve out a partial ring (the
+    /// default `sweep_angle` of `tau` is a full ring). `segments` controls
+    /// the rim tessellation. `.filled` renders a triangle strip between the
+    /// inner and outer rims; `.outline` strokes the inner and outer rim loops
+    /// (plus the two radial end-caps for a partial sweep). The renderer
+    /// decomposes this into triangles / lines — no dedicated backend
+    /// primitive is required (a backend could later map it to raylib's native
+    /// `DrawRing`, but that is not required here).
+    pub const Ring = struct {
+        inner_radius: f32 = 6,
+        outer_radius: f32 = 10,
+        start_angle: f32 = 0,
+        sweep_angle: f32 = std.math.tau, // full ring by default
+        segments: i32 = 32,
+        fill: FillMode = .filled,
+        thickness: f32 = 1.0, // for the outline variant's stroke width
     };
 };

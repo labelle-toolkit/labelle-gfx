@@ -173,7 +173,32 @@ pub fn DrawHelpers(comptime Self: type) type {
                     },
                     .circle => |circle| {
                         if (circle.fill == .outline) {
-                            B.drawCircleLines(spos.x, spos.y, circle.radius * shape.scale_x, c);
+                            // Outline: stroke a closed line loop of `segs`
+                            // edges around the rim, honoring `thickness` and
+                            // scale — the same way the `.polygon` outline path
+                            // strokes its edges. This replaces the old
+                            // `drawCircleLines` call which, on backends without
+                            // a native line-circle primitive (e.g. bgfx),
+                            // silently fell back to a *filled* `drawCircle` via
+                            // the backend shim — turning every outline circle
+                            // into a solid disc. A 64-edge loop is smooth at
+                            // typical radii; `scale_x` drives the radius to
+                            // match the filled `drawCircle` footprint (and the
+                            // cull bounds in `bounds.zig`).
+                            const CIRCLE_OUTLINE_SEGMENTS = 64;
+                            const r = circle.radius * shape.scale_x;
+                            const step = std.math.tau / @as(f32, @floatFromInt(CIRCLE_OUTLINE_SEGMENTS));
+                            var prev = B.Vector2{ .x = spos.x + r, .y = spos.y };
+                            var i: usize = 1;
+                            while (i <= CIRCLE_OUTLINE_SEGMENTS) : (i += 1) {
+                                const angle = step * @as(f32, @floatFromInt(i));
+                                const p = B.Vector2{
+                                    .x = spos.x + r * @cos(angle),
+                                    .y = spos.y + r * @sin(angle),
+                                };
+                                B.drawLine(prev.x, prev.y, p.x, p.y, circle.thickness, c);
+                                prev = p;
+                            }
                         } else {
                             B.drawCircle(spos.x, spos.y, circle.radius * shape.scale_x, c);
                         }
@@ -301,6 +326,84 @@ pub fn DrawHelpers(comptime Self: type) type {
                                 };
                             }
                             B.drawPolygon(points[0 .. segs + 2], c);
+                        }
+                    },
+                    .ring => |ring| {
+                        // Ring / annulus. Decomposed renderer-side exactly the
+                        // way the `.arc` case is — scale composes with
+                        // `scale_x` on x and `scale_y` on y so y-axis/flip
+                        // composition (handed to the renderer's screen-space
+                        // transform) matches the other primitives. No dedicated
+                        // backend primitive — gfx-only, every backend with
+                        // `drawTriangle`/`drawLine` renders it.
+                        const MAX_RING_SEGMENTS = 128;
+                        const segs: usize = @intCast(std.math.clamp(ring.segments, 1, MAX_RING_SEGMENTS));
+                        const irx = ring.inner_radius * shape.scale_x;
+                        const iry = ring.inner_radius * shape.scale_y;
+                        const orx = ring.outer_radius * shape.scale_x;
+                        const ory = ring.outer_radius * shape.scale_y;
+                        const step = ring.sweep_angle / @as(f32, @floatFromInt(segs));
+                        if (ring.fill == .outline) {
+                            // Stroke the inner rim loop and the outer rim loop.
+                            // For a partial sweep (< tau) the loops are open
+                            // arcs and the two radial end-caps connect them;
+                            // for a full ring (>= tau) the rims are closed and
+                            // no end-caps are drawn.
+                            const full = ring.sweep_angle >= std.math.tau;
+                            var prev_inner: B.Vector2 = undefined;
+                            var prev_outer: B.Vector2 = undefined;
+                            var i: usize = 0;
+                            while (i <= segs) : (i += 1) {
+                                const angle = ring.start_angle + step * @as(f32, @floatFromInt(i));
+                                const cos_a = @cos(angle);
+                                const sin_a = @sin(angle);
+                                const inner = B.Vector2{
+                                    .x = spos.x + irx * cos_a,
+                                    .y = spos.y + iry * sin_a,
+                                };
+                                const outer = B.Vector2{
+                                    .x = spos.x + orx * cos_a,
+                                    .y = spos.y + ory * sin_a,
+                                };
+                                if (i > 0) {
+                                    B.drawLine(prev_inner.x, prev_inner.y, inner.x, inner.y, ring.thickness, c);
+                                    B.drawLine(prev_outer.x, prev_outer.y, outer.x, outer.y, ring.thickness, c);
+                                }
+                                // Radial end-caps for a partial sweep: connect
+                                // inner→outer at the first and last rim steps.
+                                if (!full and (i == 0 or i == segs)) {
+                                    B.drawLine(inner.x, inner.y, outer.x, outer.y, ring.thickness, c);
+                                }
+                                prev_inner = inner;
+                                prev_outer = outer;
+                            }
+                        } else {
+                            // Filled: a triangle strip between the inner and
+                            // outer rims. Each segment spans two triangles
+                            // (inner_i, outer_i, outer_{i+1}) and (inner_i,
+                            // outer_{i+1}, inner_{i+1}) → 2*segs triangles.
+                            var prev_inner: B.Vector2 = undefined;
+                            var prev_outer: B.Vector2 = undefined;
+                            var i: usize = 0;
+                            while (i <= segs) : (i += 1) {
+                                const angle = ring.start_angle + step * @as(f32, @floatFromInt(i));
+                                const cos_a = @cos(angle);
+                                const sin_a = @sin(angle);
+                                const inner = B.Vector2{
+                                    .x = spos.x + irx * cos_a,
+                                    .y = spos.y + iry * sin_a,
+                                };
+                                const outer = B.Vector2{
+                                    .x = spos.x + orx * cos_a,
+                                    .y = spos.y + ory * sin_a,
+                                };
+                                if (i > 0) {
+                                    B.drawTriangle(prev_inner, prev_outer, outer, c);
+                                    B.drawTriangle(prev_inner, outer, inner, c);
+                                }
+                                prev_inner = inner;
+                                prev_outer = outer;
+                            }
                         }
                     },
                 }

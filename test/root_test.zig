@@ -263,6 +263,133 @@ test "RetainedEngine: filled arc fans through drawPolygon, outline strokes drawL
     try testing.expectEqual(@as(usize, 10), MockBackend.getLineCallCount());
 }
 
+test "gfx#285: filled ring issues a triangle strip (2*segments triangles), never a drawCircle" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    const Position = gfx.Position;
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Filled full ring: 8 segments → a triangle strip of 2*8 = 16 triangles
+    // (two per segment between the inner and outer rims), and crucially NOT a
+    // drawCircle (the bgfx filled-disc fallback) or a drawPolygon.
+    engine.createShape(
+        EntityId.from(1),
+        .{ .shape = .{ .ring = .{
+            .inner_radius = 8,
+            .outer_radius = 16,
+            .segments = 8,
+            .fill = .filled,
+        } } },
+        Position{ .x = 100, .y = 100 },
+    );
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 16), MockBackend.getTriangleCallCount());
+    try testing.expectEqual(@as(usize, 0), MockBackend.getCircleCallCount());
+    try testing.expectEqual(@as(usize, 0), MockBackend.getPolygonCallCount());
+}
+
+test "gfx#285: outline ring strokes inner + outer rim loops with drawLine, no fill" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    const Position = gfx.Position;
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Outline full ring (sweep >= tau): 8 segments → 8 inner-rim edges + 8
+    // outer-rim edges = 16 drawLines, no radial end-caps (full ring), and no
+    // triangles / drawCircle.
+    engine.createShape(
+        EntityId.from(1),
+        .{ .shape = .{ .ring = .{
+            .inner_radius = 8,
+            .outer_radius = 16,
+            .segments = 8,
+            .fill = .outline,
+        } } },
+        Position{ .x = 100, .y = 100 },
+    );
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 16), MockBackend.getLineCallCount());
+    try testing.expectEqual(@as(usize, 0), MockBackend.getTriangleCallCount());
+    try testing.expectEqual(@as(usize, 0), MockBackend.getCircleCallCount());
+
+    // Partial sweep (< tau): 8 inner + 8 outer rim edges + 2 radial end-caps
+    // = 18 drawLines.
+    MockBackend.resetMock();
+    engine.removeShape(EntityId.from(1));
+    engine.createShape(
+        EntityId.from(2),
+        .{ .shape = .{ .ring = .{
+            .inner_radius = 8,
+            .outer_radius = 16,
+            .start_angle = 0,
+            .sweep_angle = 3.14159265, // half ring
+            .segments = 8,
+            .fill = .outline,
+        } } },
+        Position{ .x = 100, .y = 100 },
+    );
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 18), MockBackend.getLineCallCount());
+    try testing.expectEqual(@as(usize, 0), MockBackend.getTriangleCallCount());
+}
+
+test "gfx#285: outline circle strokes a line loop, not a filled drawCircle" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    const Position = gfx.Position;
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Outline circle: must stroke a closed line loop (not fall back to a
+    // filled drawCircle via the backend's drawCircleLines shim, which is the
+    // bug this fixes — on bgfx that fallback turned range rings into solid
+    // discs). The loop uses a fixed 64-edge tessellation.
+    engine.createShape(
+        EntityId.from(1),
+        .{ .shape = .{ .circle = .{
+            .radius = 20,
+            .fill = .outline,
+        } } },
+        Position{ .x = 100, .y = 100 },
+    );
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 64), MockBackend.getLineCallCount());
+    // Crucially NOT a filled disc.
+    try testing.expectEqual(@as(usize, 0), MockBackend.getCircleCallCount());
+
+    // Sanity: a *filled* circle still issues exactly one drawCircle and no
+    // lines (no regression to the non-outline path).
+    MockBackend.resetMock();
+    engine.removeShape(EntityId.from(1));
+    engine.createShape(
+        EntityId.from(2),
+        .{ .shape = .{ .circle = .{
+            .radius = 20,
+            .fill = .filled,
+        } } },
+        Position{ .x = 100, .y = 100 },
+    );
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCircleCallCount());
+    try testing.expectEqual(@as(usize, 0), MockBackend.getLineCallCount());
+}
+
 test "RetainedEngine: shapes on a layer draw in z_index order (lower first)" {
     const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
     const Position = gfx.Position;
