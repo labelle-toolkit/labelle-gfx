@@ -349,7 +349,7 @@ pub fn DrawHelpers(comptime Self: type) type {
                             // arcs and the two radial end-caps connect them;
                             // for a full ring (>= tau) the rims are closed and
                             // no end-caps are drawn.
-                            const full = ring.sweep_angle >= std.math.tau;
+                            const full = @abs(ring.sweep_angle) >= std.math.tau;
                             var prev_inner: B.Vector2 = undefined;
                             var prev_outer: B.Vector2 = undefined;
                             var i: usize = 0;

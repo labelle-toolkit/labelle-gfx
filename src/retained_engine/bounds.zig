@@ -151,7 +151,7 @@ pub fn CullBounds(comptime Self: type) type {
                     // radius, so the full outer-radius box is a safe (if
                     // slightly loose, for partial sweeps) cull bound —
                     // symmetric like circle/arc, using the larger axis scale.
-                    const r = ri.outer_radius * @max(sx, sy);
+                    const r = @max(@abs(ri.inner_radius), @abs(ri.outer_radius)) * @max(sx, sy);
                     const corners = [_]Position{
                         .{ .x = -r, .y = -r },
                         .{ .x = r, .y = -r },
