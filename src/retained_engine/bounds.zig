@@ -146,6 +146,20 @@ pub fn CullBounds(comptime Self: type) type {
                     };
                     return rotatedAabb(pos, .{ .x = 0, .y = 0 }, 0, &corners);
                 },
+                .ring => |ri| {
+                    // Conservative: the ring never extends past its outer
+                    // radius, so the full outer-radius box is a safe (if
+                    // slightly loose, for partial sweeps) cull bound —
+                    // symmetric like circle/arc, using the larger axis scale.
+                    const r = ri.outer_radius * @max(sx, sy);
+                    const corners = [_]Position{
+                        .{ .x = -r, .y = -r },
+                        .{ .x = r, .y = -r },
+                        .{ .x = r, .y = r },
+                        .{ .x = -r, .y = r },
+                    };
+                    return rotatedAabb(pos, .{ .x = 0, .y = 0 }, 0, &corners);
+                },
                 .rectangle => |r| {
                     // Rectangles render with `pos` as their top-left and
                     // rotate about their centre `pos + (w/2, h/2)`.
