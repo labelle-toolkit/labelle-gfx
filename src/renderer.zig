@@ -154,6 +154,31 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             self.inner.unloadTexture(id);
         }
 
+        /// Forward the optional textured-mesh primitive to the inner
+        /// `RetainedEngine` (labelle-gfx#290 Stage 5 / #291). `GfxRenderer` is
+        /// the wrapper the engine actually holds, so without this forwarder
+        /// `game.drawMesh` (labelle-engine#660) was a silent no-op through the
+        /// real gfx stack even though `RetainedEngine.drawMesh` existed.
+        ///
+        /// The engine's `game.drawMesh` seam passes a `u32` texture id — the
+        /// value returned by `loadTextureFromMemory().toInt()` — so convert it
+        /// back to the `TextureId` the inner engine keys its texture table on
+        /// before forwarding, exactly as the sprite/texture draw paths do. Only
+        /// present (and non-no-op) when the active backend declares `drawMesh`
+        /// (bgfx today); the inner engine's own `@hasDecl` gate makes this a
+        /// compile-time no-op otherwise. No-ops too if `texture_id` is unknown.
+        pub fn drawMesh(
+            self: *Self,
+            texture_id: u32,
+            positions: []const f32,
+            uvs: []const f32,
+            colors: []const u32,
+            indices: []const u16,
+            blend: backend_mod.BlendMode,
+        ) void {
+            self.inner.drawMesh(types_mod.TextureId.from(texture_id), positions, uvs, colors, indices, blend);
+        }
+
         /// Forward `RetainedEngine.registerCatalogTexture`. Called by
         /// the assembler-emitted `ImageBackendAdapter.upload` so a
         /// catalog-uploaded texture's slot handle resolves to the
