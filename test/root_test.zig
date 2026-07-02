@@ -200,6 +200,43 @@ test "RetainedEngine: drawMesh resolves TextureId and reaches the backend with t
     try testing.expectEqual(@as(usize, 1), MockBackend.getMeshCallCount());
 }
 
+// Regression guard for gfx#291: `RetainedEngine.drawMesh` existed but
+// `GfxRenderer` — the wrapper the engine actually holds — never forwarded it,
+// so `game.drawMesh` was a silent no-op through the real gfx stack. The
+// RetainedEngine test above passes even with that gap because it bypasses the
+// wrapper. This test drives `drawMesh` THROUGH `GfxRenderer` and asserts the
+// call reaches the backend, proving the forwarder is wired (not a no-op).
+test "GfxRenderer: drawMesh forwards through the wrapper to the backend (gfx#291)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    // Load a texture through the wrapper; the engine's `game.drawMesh` seam
+    // hands back a `u32` id (TextureId.toInt()), which the forwarder must
+    // convert back to a TextureId before submitting.
+    const tex_id = try renderer.loadTexture("mesh.png");
+
+    const positions = [_]f32{ 0, 0, 10, 0, 10, 10, 0, 10 };
+    const uvs = [_]f32{ 0, 0, 1, 0, 1, 1, 0, 1 };
+    const colors = [_]u32{ 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
+    const indices = [_]u16{ 0, 1, 2, 0, 2, 3 };
+
+    try testing.expectEqual(@as(usize, 0), MockBackend.getMeshCallCount());
+    renderer.drawMesh(tex_id.toInt(), &positions, &uvs, &colors, &indices, .additive);
+
+    // The forwarder must have reached the backend with the mesh data. If
+    // `GfxRenderer.drawMesh` were missing/a no-op this stays 0 — the bug.
+    const mesh_calls = MockBackend.getMeshCalls();
+    try testing.expectEqual(@as(usize, 1), mesh_calls.len);
+    try testing.expectEqual(tex_id.toInt(), mesh_calls[0].texture_id);
+    try testing.expectEqual(@as(usize, 4), mesh_calls[0].vertex_count);
+    try testing.expectEqual(@as(usize, 6), mesh_calls[0].index_count);
+    try testing.expectEqual(MockBackend.BlendMode.additive, mesh_calls[0].blend);
+}
+
 test "RetainedEngine: filled polygon takes drawPolygon (not drawCircle), outline takes drawLine" {
     const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
     const Position = gfx.Position;
