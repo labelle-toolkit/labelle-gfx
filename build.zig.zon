@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .labelle_core = .{
-            .url = "https://github.com/labelle-toolkit/labelle-core/archive/refs/tags/v1.20.0.tar.gz",
-            .hash = "labelle_core-1.20.0-OauRcDVYBQBHXagjuGRqwikSgkthjUqbh8dEsr0-Z3iT",
+            .url = "https://github.com/labelle-toolkit/labelle-core/archive/refs/tags/v1.24.0.tar.gz",
+            .hash = "labelle_core-1.24.0-OauRcCZoBgDhSM5K7FL8H2Lm-lWiWz5ePDrdu15PaZ4S",
         },
         .spatial_grid = .{
             .path = "spatial_grid",
