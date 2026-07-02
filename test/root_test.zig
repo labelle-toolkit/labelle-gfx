@@ -167,6 +167,39 @@ test "RetainedEngine: filled triangle takes drawTriangle, outline takes drawLine
     try testing.expectEqual(@as(usize, 3), MockBackend.getLineCallCount());
 }
 
+test "RetainedEngine: drawMesh resolves TextureId and reaches the backend with the mesh data" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Load a texture so the TextureId resolves to a real backend texture.
+    const tex_id = try engine.loadTexture("mesh.png");
+
+    // A textured quad: 4 vertices (xy + uv + one packed RGBA8 each), two
+    // triangles (6 indices).
+    const positions = [_]f32{ 0, 0, 10, 0, 10, 10, 0, 10 };
+    const uvs = [_]f32{ 0, 0, 1, 0, 1, 1, 0, 1 };
+    const colors = [_]u32{ 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
+    const indices = [_]u16{ 0, 1, 2, 0, 2, 3 };
+
+    engine.drawMesh(tex_id, &positions, &uvs, &colors, &indices, .additive);
+
+    const mesh_calls = MockBackend.getMeshCalls();
+    try testing.expectEqual(@as(usize, 1), mesh_calls.len);
+    try testing.expectEqual(tex_id.toInt(), mesh_calls[0].texture_id);
+    try testing.expectEqual(@as(usize, 4), mesh_calls[0].vertex_count);
+    try testing.expectEqual(@as(usize, 6), mesh_calls[0].index_count);
+    try testing.expectEqual(MockBackend.BlendMode.additive, mesh_calls[0].blend);
+
+    // An unknown TextureId is a no-op — no extra mesh submission.
+    engine.drawMesh(gfx.TextureId.from(9999), &positions, &uvs, &colors, &indices, .normal);
+    try testing.expectEqual(@as(usize, 1), MockBackend.getMeshCallCount());
+}
+
 test "RetainedEngine: filled polygon takes drawPolygon (not drawCircle), outline takes drawLine" {
     const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
     const Position = gfx.Position;

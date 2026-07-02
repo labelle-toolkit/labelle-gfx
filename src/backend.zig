@@ -20,3 +20,9 @@ pub const CodepointRange = core.backend_contract.CodepointRange;
 pub const Glyph = core.backend_contract.Glyph;
 pub const CodepointEntry = core.backend_contract.CodepointEntry;
 pub const KernPair = core.backend_contract.KernPair;
+
+/// Blend mode for the optional `drawMesh` textured-mesh primitive
+/// (labelle-gfx#290). Re-exported from core so the engine-facing draw API
+/// (`RetainedEngineWith.drawMesh`) and callers can name it without importing
+/// core directly.
+pub const BlendMode = core.backend_contract.BlendMode;

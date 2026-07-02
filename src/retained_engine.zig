@@ -482,6 +482,47 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             }
         }
 
+        // -- Immediate-mode textured mesh --
+
+        /// Submit an indexed, textured triangle mesh for the current frame —
+        /// the engine-facing surface of the backend's optional `drawMesh`
+        /// primitive (Spine skeletal animation, labelle-gfx#290). Unlike the
+        /// retained sprite/shape/text APIs this is immediate-mode: skeletal
+        /// meshes are re-tessellated every frame, so the caller re-issues the
+        /// draw each frame rather than storing an entity. Mirrors the sprite
+        /// draw path — resolves `texture_id` to the loaded backend texture and
+        /// forwards to the backend.
+        ///
+        /// Buffer layout mirrors the backend contract (Spine's `RenderCommand`,
+        /// straight pass-through — no per-vertex repacking):
+        ///   - `positions`: xy pairs in world/screen space (caller-transformed).
+        ///     `len == 2 * numVerts`.
+        ///   - `uvs`: uv pairs, normalised [0,1] into the texture, parallel to
+        ///     `positions`. `len == 2 * numVerts`.
+        ///   - `colors`: per-vertex RGBA8 packed one u32 per vertex (tint
+        ///     multiplied with the sampled texel). `len == numVerts`.
+        ///   - `indices`: triangle list into the vertex arrays (every 3 forms
+        ///     one triangle). `len == 3 * numTris`.
+        ///
+        /// OPTIONAL: forwards only when the backend declares `drawMesh` (bgfx
+        /// today; raylib/sokol/wgpu/sdl omit it). On backends without it this
+        /// compiles to a no-op — safe to call unconditionally. No-ops too if
+        /// `texture_id` is not a loaded texture.
+        pub fn drawMesh(
+            self: *Self,
+            texture_id: TextureId,
+            positions: []const f32,
+            uvs: []const f32,
+            colors: []const u32,
+            indices: []const u16,
+            blend: backend_mod.BlendMode,
+        ) void {
+            if (comptime @hasDecl(BackendImpl, "drawMesh")) {
+                const info = self.textures.get(texture_id.toInt()) orelse return;
+                B.drawMesh(info.backend_texture, positions, uvs, colors, indices, blend);
+            }
+        }
+
         // -- Sprite operations --
 
         pub fn createSprite(self: *Self, entity_id: EntityId, visual: SpriteVisual, pos: Position) void {

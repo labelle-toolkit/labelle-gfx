@@ -22,6 +22,9 @@ pub const CodepointRange = backend_mod.CodepointRange;
 pub const Glyph = backend_mod.Glyph;
 pub const CodepointEntry = backend_mod.CodepointEntry;
 pub const KernPair = backend_mod.KernPair;
+/// Blend mode for the optional `drawMesh` textured-mesh primitive
+/// (labelle-gfx#290, Spine Phase 2), re-exported from core.
+pub const BlendMode = backend_mod.BlendMode;
 pub const MockBackend = mock_backend_mod.MockBackend;
 pub const RetainedEngineWith = retained_engine_mod.RetainedEngineWith;
 pub const GfxRenderer = renderer_mod.GfxRenderer;
