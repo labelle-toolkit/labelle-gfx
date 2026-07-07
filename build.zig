@@ -63,9 +63,28 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // The tilemap sub-package's own spec suite (parser hardening, culling
+    // math, draw pass). Compiled from the in-repo path so the root
+    // `zig build test` — the only step CI runs — exercises it too.
+    const zspec_dep = b.dependency("zspec", .{ .target = target, .optimize = optimize });
+    const tilemap_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tilemap/test/tests.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "tilemap", .module = tilemap_module },
+                .{ .name = "zspec", .module = zspec_dep.module("zspec") },
+            },
+        }),
+        .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
+    });
+
     const run_tests = b.addRunArtifact(tests);
     const run_root_tests = b.addRunArtifact(root_tests);
+    const run_tilemap_tests = b.addRunArtifact(tilemap_tests);
     const test_step = b.step("test", "Run labelle-gfx tests");
     test_step.dependOn(&run_tests.step);
     test_step.dependOn(&run_root_tests.step);
+    test_step.dependOn(&run_tilemap_tests.step);
 }
