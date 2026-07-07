@@ -572,8 +572,9 @@ pub const TileMap = struct {
                 if (getAttr(obj_attrs, "name")) |n| obj.name = try allocator.dupe(u8, n);
                 if (getAttr(obj_attrs, "type")) |t| obj.obj_type = try allocator.dupe(u8, t);
                 if (getAttr(obj_attrs, "class")) |c| {
+                    const new_type = try allocator.dupe(u8, c);
                     if (obj.obj_type.len > 0) allocator.free(obj.obj_type);
-                    obj.obj_type = try allocator.dupe(u8, c);
+                    obj.obj_type = new_type;
                 }
                 if (getAttr(obj_attrs, "x")) |x| obj.x = try std.fmt.parseFloat(f32, x);
                 if (getAttr(obj_attrs, "y")) |y| obj.y = try std.fmt.parseFloat(f32, y);
