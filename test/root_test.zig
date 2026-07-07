@@ -398,14 +398,18 @@ test "gfx#285: outline ring strokes inner + outer rim loops with drawLine, no fi
     engine.removeShape(EntityId.from(1));
     engine.createShape(
         EntityId.from(2),
-        .{ .shape = .{ .ring = .{
-            .inner_radius = 8,
-            .outer_radius = 16,
-            .start_angle = 0,
-            .sweep_angle = 3.14159265, // half ring
-            .segments = 8,
-            .fill = .outline,
-        } } },
+        .{
+            .shape = .{
+                .ring = .{
+                    .inner_radius = 8,
+                    .outer_radius = 16,
+                    .start_angle = 0,
+                    .sweep_angle = 3.14159265, // half ring
+                    .segments = 8,
+                    .fill = .outline,
+                },
+            },
+        },
         Position{ .x = 100, .y = 100 },
     );
     engine.render();
@@ -1576,6 +1580,84 @@ test "TileMap loadFromMemory parses basic TMX" {
     try testing.expectEqual(@as(f32, 32), entities.objects[0].x);
 }
 
+// ── Tilemap draw pass (T2 Phase 1) ─────────────────────────
+
+test "TileMap: rejects base64 data and external tilesets through the gfx re-export" {
+    const base64_tmx =
+        \\<map width="2" height="2" tilewidth="16" tileheight="16">
+        \\ <layer name="l" width="2" height="2">
+        \\  <data encoding="base64">AQAAAAIAAAADAAAABAAAAA==</data>
+        \\ </layer>
+        \\</map>
+    ;
+    try testing.expectError(
+        error.UnsupportedEncoding,
+        gfx.TileMap.loadFromMemory(testing.allocator, base64_tmx),
+    );
+
+    const external_tmx =
+        \\<map width="1" height="1" tilewidth="16" tileheight="16">
+        \\ <tileset firstgid="1" source="external.tsx"/>
+        \\ <layer name="l" width="1" height="1"><data encoding="csv">1</data></layer>
+        \\</map>
+    ;
+    try testing.expectError(
+        error.ExternalTilesetUnsupported,
+        gfx.TileMap.loadFromMemory(testing.allocator, external_tmx),
+    );
+}
+
+// The load-bearing T2 Phase 1 integration: the tilemap draw pass runs on
+// the SAME backend type as the retained engine
+// (`RetainedEngineWith(...).TileMapRenderer` is bound to
+// `RetainedEngineWith(...).BackendType`), with tileset textures supplied
+// through the resolver seam (no filesystem), and issues camera-offset,
+// culled draw calls the engine can order post-sprite.
+test "TileMap: draw pass renders through the retained engine's backend with resolver-supplied textures" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    const TmRenderer = Engine.TileMapRenderer;
+
+    const tmx_content =
+        \\<map width="2" height="1" tilewidth="16" tileheight="16">
+        \\ <tileset firstgid="1" name="ground" tilewidth="16" tileheight="16" tilecount="4" columns="2">
+        \\  <image source="ground.png" width="32" height="32"/>
+        \\ </tileset>
+        \\ <layer name="bg" width="2" height="1">
+        \\  <data encoding="csv">1,2</data>
+        \\ </layer>
+        \\</map>
+    ;
+    var map = try gfx.TileMap.loadFromMemoryWithBasePath(testing.allocator, tmx_content, "");
+    defer map.deinit();
+
+    const CatalogResolver = struct {
+        fn resolve(_: ?*anyopaque, _: usize, _: *const gfx.Tileset) ?MockBackend.Texture {
+            return .{ .id = 42, .width = 32, .height = 32 };
+        }
+    };
+
+    var tm_renderer = try TmRenderer.initWithOptions(testing.allocator, &map, .{
+        .resolver = .{ .resolveFn = CatalogResolver.resolve },
+        .load_unresolved_from_filesystem = false,
+    });
+    defer tm_renderer.deinit();
+
+    // Engine-orchestrated ordering: entity render first, tilemap pass after.
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+    engine.render();
+    const sprite_calls = MockBackend.getDrawCallCount();
+
+    tm_renderer.drawAllLayers(0, 0, .{});
+
+    try testing.expectEqual(sprite_calls + 2, MockBackend.getDrawCallCount());
+    const calls = MockBackend.getDrawCalls();
+    try testing.expectEqual(@as(u32, 42), calls[calls.len - 1].texture_id);
+}
+
 // ── Spatial viewport culling (#208) ────────────────────────
 //
 // The retained engine indexes every world-space entity in a uniform
@@ -1599,7 +1681,10 @@ fn linearVisibleSpriteCount(
         if (!s.visible) continue;
         const p = e.value_ptr.position;
         const r = gfx.retained_engine_mod.CullRect{
-            .x = p.x - 32, .y = p.y - 32, .w = 64, .h = 64,
+            .x = p.x - 32,
+            .y = p.y - 32,
+            .w = 64,
+            .h = 64,
         };
         if (r.overlaps(vp)) count += 1;
     }

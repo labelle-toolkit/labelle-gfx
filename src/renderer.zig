@@ -78,6 +78,12 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
         pub const GfxEngineType = GfxEngine;
         pub const CameraType = CameraT;
         pub const CameraManagerType = CameraManagerT;
+        /// Tilemap draw-pass renderer bound to the same backend as this
+        /// renderer's retained engine (T2 Phase 1). The engine owns the
+        /// instance and drives it POST-SPRITE, after `render()`; tileset
+        /// textures resolve through `TileMapRendererType.TextureResolver`
+        /// so embedded assets share the sprite texture path.
+        pub const TileMapRendererType = GfxEngine.TileMapRenderer;
 
         const TrackedEntity = struct {
             entity_id: EntityId,
@@ -291,7 +297,6 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             }
             return out;
         }
-
 
         pub fn trackEntity(self: *Self, entity: Entity, visual_type: VisualType) void {
             const eid = entityToGfxId(entity);

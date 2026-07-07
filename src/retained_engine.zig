@@ -5,6 +5,7 @@ const types = @import("types.zig");
 const layer_mod = @import("layer.zig");
 const visuals_mod = @import("visuals.zig");
 const spatial_grid = @import("spatial_grid");
+const tilemap_mod = @import("tilemap");
 const bounds_mod = @import("retained_engine/bounds.zig");
 const draw_mod = @import("retained_engine/draw.zig");
 
@@ -16,7 +17,6 @@ pub const CullRect = spatial_grid.Rect;
 /// sprite sizes — entities up to ~256 px land in a single cell, so a
 /// 1080p viewport touches roughly a 9×6 block of cells.
 const DEFAULT_CELL_SIZE: f32 = 256.0;
-
 
 /// Creates a retained-mode rendering engine parameterized by backend and layer enum.
 /// The backend provides the actual draw calls; this engine manages entity state,
@@ -31,6 +31,17 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
 
         pub const BackendType = B;
         pub const Layer = LayerEnum;
+
+        /// Tilemap draw-pass renderer bound to this engine's backend
+        /// (T2 Phase 1). The tilemap pass is immediate-mode and does NOT
+        /// participate in the retained entity/dirty-tracking model: the
+        /// ENGINE orchestrates pass ordering by invoking
+        /// `TileMapRenderer.drawAllLayers(...)` each frame AFTER
+        /// `render()` (post-sprite; Z-interleaving with entities is T3).
+        /// Tileset textures resolve through the caller-supplied
+        /// `TileMapRenderer.TextureResolver` seam so the engine can route
+        /// them through the same texture path sprites use.
+        pub const TileMapRenderer = tilemap_mod.TileMapRendererWith(B);
         pub const SpriteVisual = VTypes.SpriteVisual;
         pub const ShapeVisual = VTypes.ShapeVisual;
         pub const TextVisual = VTypes.TextVisual;
