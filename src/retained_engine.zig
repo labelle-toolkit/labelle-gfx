@@ -545,6 +545,14 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         // wrapper, no core-contract change. `drawRenderTarget` takes primitive
         // dest + rgba (the `drawMesh` convention) and builds the backend's own
         // `Rectangle`/`Color` here.
+        //
+        // COORDINATE SPACE: `drawRenderTarget`'s dest is SCREEN space — top-left
+        // origin, Y-DOWN, in pixels — NOT world/`y_axis` space, and NOT
+        // camera-transformed. Compositing a render target is a screen operation
+        // (a mirror panel / minimap / HUD element drawn at a fixed screen spot),
+        // so no `y_axis` flip or camera transform is applied — matching raylib's
+        // `DrawTextureRec` of a `RenderTexture2D`. The backend's NDC mapping
+        // already treats these as top-left/Y-down.
 
         pub fn createRenderTarget(self: *Self, w: u16, h: u16) u32 {
             _ = self;

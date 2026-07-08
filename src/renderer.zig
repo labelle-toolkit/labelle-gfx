@@ -191,6 +191,12 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
         // are opaque backend-native `u32`; `drawRenderTarget` takes primitive
         // dest + rgba, matching the `drawMesh` seam. `game.*RenderTarget`
         // (labelle-engine) forwards here.
+        //
+        // `drawRenderTarget`'s dest is SCREEN space (top-left, Y-down, pixels) —
+        // NOT `y_axis`/world space and not camera-transformed, so it's forwarded
+        // as-is with no `toScreenY`/camera flip. See the RetainedEngine note: a
+        // render-target composite is a screen op (mirror panel / HUD), like
+        // raylib's `DrawTextureRec`.
 
         pub fn createRenderTarget(self: *Self, w: u16, h: u16) u32 {
             return self.inner.createRenderTarget(w, h);
