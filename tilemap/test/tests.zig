@@ -1068,16 +1068,21 @@ pub const CULL_ORIGIN = struct {
         var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, wide_tmx);
         defer map.deinit();
 
-        // Baseline: today's coupled behavior — cull and dest both anchored
-        // at camera_x = 80, with a 32px (2-tile) view.
-        RecordingBackend.reset(std.testing.allocator);
-        var r1 = try resolvedRenderer(std.testing.allocator, &map);
-        r1.drawAllLayers(80, 0, .{ .view_width = 32, .view_height = 16 });
         var baseline: std.ArrayListUnmanaged(RecordingBackend.Call) = .empty;
         defer baseline.deinit(std.testing.allocator);
-        try baseline.appendSlice(std.testing.allocator, RecordingBackend.calls.items);
-        r1.deinit();
-        RecordingBackend.cleanup();
+
+        // Baseline: today's coupled behavior — cull and dest both anchored
+        // at camera_x = 80, with a 32px (2-tile) view. Block-scoped so r1 +
+        // the recorder are freed (defer) at the block's end — before the
+        // second phase's reset below — even if an op here fails early.
+        {
+            RecordingBackend.reset(std.testing.allocator);
+            defer RecordingBackend.cleanup();
+            var r1 = try resolvedRenderer(std.testing.allocator, &map);
+            defer r1.deinit();
+            r1.drawAllLayers(80, 0, .{ .view_width = 32, .view_height = 16 });
+            try baseline.appendSlice(std.testing.allocator, RecordingBackend.calls.items);
+        }
 
         // Same call with view_start_* explicitly null must be identical.
         RecordingBackend.reset(std.testing.allocator);
