@@ -534,6 +534,60 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             }
         }
 
+        // -- Offscreen render targets (the transport mirror + headless capture,
+        // labelle-bgfx#36) --
+        //
+        // OPTIONAL: forwarded only when the backend declares them (bgfx today;
+        // raylib/sokol/wgpu/sdl omit them), so on other backends these compile to
+        // no-ops / INVALID and callers may use them unconditionally. Unlike
+        // textures, a render-target handle is a backend-native `u32` (no catalog
+        // mapping), so it passes STRAIGHT THROUGH to `BackendImpl` — no `B`
+        // wrapper, no core-contract change. `drawRenderTarget` takes primitive
+        // dest + rgba (the `drawMesh` convention) and builds the backend's own
+        // `Rectangle`/`Color` here.
+        //
+        // COORDINATE SPACE: `drawRenderTarget`'s dest is SCREEN space — top-left
+        // origin, Y-DOWN, in pixels — NOT world/`y_axis` space, and NOT
+        // camera-transformed. Compositing a render target is a screen operation
+        // (a mirror panel / minimap / HUD element drawn at a fixed screen spot),
+        // so no `y_axis` flip or camera transform is applied — matching raylib's
+        // `DrawTextureRec` of a `RenderTexture2D`. The backend's NDC mapping
+        // already treats these as top-left/Y-down.
+
+        pub fn createRenderTarget(self: *Self, w: u16, h: u16) u32 {
+            _ = self;
+            if (comptime @hasDecl(BackendImpl, "createRenderTarget")) {
+                return BackendImpl.createRenderTarget(w, h);
+            }
+            return 0; // INVALID_ID
+        }
+
+        pub fn beginRenderTarget(self: *Self, id: u32) void {
+            _ = self;
+            if (comptime @hasDecl(BackendImpl, "beginRenderTarget")) BackendImpl.beginRenderTarget(id);
+        }
+
+        pub fn endRenderTarget(self: *Self) void {
+            _ = self;
+            if (comptime @hasDecl(BackendImpl, "endRenderTarget")) BackendImpl.endRenderTarget();
+        }
+
+        pub fn drawRenderTarget(self: *Self, id: u32, x: f32, y: f32, width: f32, height: f32, r: u8, g: u8, b: u8, a: u8) void {
+            _ = self;
+            if (comptime @hasDecl(BackendImpl, "drawRenderTarget")) {
+                BackendImpl.drawRenderTarget(
+                    id,
+                    .{ .x = x, .y = y, .width = width, .height = height },
+                    .{ .r = r, .g = g, .b = b, .a = a },
+                );
+            }
+        }
+
+        pub fn destroyRenderTarget(self: *Self, id: u32) void {
+            _ = self;
+            if (comptime @hasDecl(BackendImpl, "destroyRenderTarget")) BackendImpl.destroyRenderTarget(id);
+        }
+
         // -- Sprite operations --
 
         pub fn createSprite(self: *Self, entity_id: EntityId, visual: SpriteVisual, pos: Position) void {

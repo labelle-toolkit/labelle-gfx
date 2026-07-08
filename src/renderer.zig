@@ -185,6 +185,39 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             self.inner.drawMesh(types_mod.TextureId.from(texture_id), positions, uvs, colors, indices, blend);
         }
 
+        // -- Offscreen render targets (transport mirror + headless capture,
+        // labelle-bgfx#36) -- the wrapper the engine actually holds, forwarding
+        // to `RetainedEngine` (which gates on the backend declaring them). Ids
+        // are opaque backend-native `u32`; `drawRenderTarget` takes primitive
+        // dest + rgba, matching the `drawMesh` seam. `game.*RenderTarget`
+        // (labelle-engine) forwards here.
+        //
+        // `drawRenderTarget`'s dest is SCREEN space (top-left, Y-down, pixels) —
+        // NOT `y_axis`/world space and not camera-transformed, so it's forwarded
+        // as-is with no `toScreenY`/camera flip. See the RetainedEngine note: a
+        // render-target composite is a screen op (mirror panel / HUD), like
+        // raylib's `DrawTextureRec`.
+
+        pub fn createRenderTarget(self: *Self, w: u16, h: u16) u32 {
+            return self.inner.createRenderTarget(w, h);
+        }
+
+        pub fn beginRenderTarget(self: *Self, id: u32) void {
+            self.inner.beginRenderTarget(id);
+        }
+
+        pub fn endRenderTarget(self: *Self) void {
+            self.inner.endRenderTarget();
+        }
+
+        pub fn drawRenderTarget(self: *Self, id: u32, x: f32, y: f32, width: f32, height: f32, r: u8, g: u8, b: u8, a: u8) void {
+            self.inner.drawRenderTarget(id, x, y, width, height, r, g, b, a);
+        }
+
+        pub fn destroyRenderTarget(self: *Self, id: u32) void {
+            self.inner.destroyRenderTarget(id);
+        }
+
         /// Forward `RetainedEngine.registerCatalogTexture`. Called by
         /// the assembler-emitted `ImageBackendAdapter.upload` so a
         /// catalog-uploaded texture's slot handle resolves to the
