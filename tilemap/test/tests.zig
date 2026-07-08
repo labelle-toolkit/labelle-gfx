@@ -61,6 +61,36 @@ const flipped_tmx =
     \\</map>
 ;
 
+// Wide single-row map (10 tiles across, all GID 1) for horizontal
+// cull-origin tests — wider than a narrowed view so the culled column
+// range depends on where the cull viewport is anchored.
+const wide_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="10" height="1" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="t" tilewidth="16" tileheight="16" columns="4" tilecount="8">
+    \\  <image source="t.png" width="64" height="32"/>
+    \\ </tileset>
+    \\ <layer name="l" width="10" height="1">
+    \\  <data encoding="csv">1,1,1,1,1,1,1,1,1,1</data>
+    \\ </layer>
+    \\</map>
+;
+
+// Tall single-column map (20 tiles down, all GID 1) taller than the
+// screen — the load-bearing case for a NEGATIVE cull origin, where the
+// top rows must remain drawable.
+const tall_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="1" height="20" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="t" tilewidth="16" tileheight="16" columns="4" tilecount="8">
+    \\  <image source="t.png" width="64" height="32"/>
+    \\ </tileset>
+    \\ <layer name="l" width="1" height="20">
+    \\  <data encoding="csv">1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1</data>
+    \\ </layer>
+    \\</map>
+;
+
 // ── Recording backend (labelle-core render-backend shape) ────────────
 
 /// Test backend following the labelle-core render-backend shape
@@ -663,6 +693,12 @@ pub const DRAW_OPTIONS = struct {
         try std.testing.expect(opts.view_width == null);
         try std.testing.expect(opts.view_height == null);
     }
+
+    test "cull origin defaults to null (tracks camera position)" {
+        const opts = tilemap.DrawOptions{};
+        try std.testing.expect(opts.view_start_x == null);
+        try std.testing.expect(opts.view_start_y == null);
+    }
 };
 
 // ── TileMapRendererWith (draw pass) ──────────────────────────────────
@@ -1013,5 +1049,165 @@ pub const TILEMAP_RENDERER = struct {
         try std.testing.expectEqual(@as(f32, 32), calls[0].dest.height);
         // Tile (1,0) top-left at 32 → centre 48.
         try std.testing.expectEqual(@as(f32, 48), calls[1].dest.x);
+    }
+};
+
+// ── Cull origin decoupled from dest offset (view_start_x/y) ───────────
+
+pub const CULL_ORIGIN = struct {
+    // Tile-centre dest.x for a given column (world-space, camera_x = 0):
+    // column*16 + 8. Used to recover which columns were drawn.
+    fn colOf(dest_x: f32) i32 {
+        return @intFromFloat((dest_x - 8) / 16);
+    }
+    fn rowOf(dest_y: f32) i32 {
+        return @intFromFloat((dest_y - 8) / 16);
+    }
+
+    test "null view_start reproduces the coupled camera cull byte-for-byte" {
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, wide_tmx);
+        defer map.deinit();
+
+        // Baseline: today's coupled behavior — cull and dest both anchored
+        // at camera_x = 80, with a 32px (2-tile) view.
+        RecordingBackend.reset(std.testing.allocator);
+        var r1 = try resolvedRenderer(std.testing.allocator, &map);
+        r1.drawAllLayers(80, 0, .{ .view_width = 32, .view_height = 16 });
+        var baseline: std.ArrayListUnmanaged(RecordingBackend.Call) = .empty;
+        defer baseline.deinit(std.testing.allocator);
+        try baseline.appendSlice(std.testing.allocator, RecordingBackend.calls.items);
+        r1.deinit();
+        RecordingBackend.cleanup();
+
+        // Same call with view_start_* explicitly null must be identical.
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+        var r2 = try resolvedRenderer(std.testing.allocator, &map);
+        defer r2.deinit();
+        r2.drawAllLayers(80, 0, .{
+            .view_width = 32,
+            .view_height = 16,
+            .view_start_x = null,
+            .view_start_y = null,
+        });
+
+        try std.testing.expectEqual(baseline.items.len, RecordingBackend.calls.items.len);
+        try std.testing.expect(baseline.items.len > 0);
+        for (baseline.items, RecordingBackend.calls.items) |a, b| {
+            try std.testing.expectEqual(a.dest.x, b.dest.x);
+            try std.testing.expectEqual(a.dest.y, b.dest.y);
+            try std.testing.expectEqual(a.texture_id, b.texture_id);
+        }
+    }
+
+    test "view_start_x equal to camera_x matches the null default" {
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, wide_tmx);
+        defer map.deinit();
+
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // camera_x = 80, cull explicitly re-stated as 80: cols floor(80/16)=5
+        // .. ceil(112/16)=7 → columns 5 and 6, dest coupled to camera (5*16
+        // - 80 = 0 → centre 8; 6 → centre 24).
+        renderer.drawAllLayers(80, 0, .{
+            .view_width = 32,
+            .view_height = 16,
+            .view_start_x = 80,
+        });
+
+        const calls = RecordingBackend.calls.items;
+        try std.testing.expectEqual(@as(usize, 2), calls.len);
+        try std.testing.expectEqual(@as(f32, 8), calls[0].dest.x);
+        try std.testing.expectEqual(@as(f32, 24), calls[1].dest.x);
+    }
+
+    test "cull tracks view_start_x while dest stays world-space at camera_x=0" {
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, wide_tmx);
+        defer map.deinit();
+
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // Panned-camera-inside-matrix scenario: camera_x = 0 (dest stays
+        // world-space, the matrix would pan it), but the active camera is
+        // looking at world x≈80 with a 32px (2-tile) view. The CULL must
+        // select columns around 80, NOT around 0.
+        renderer.drawAllLayers(0, 0, .{
+            .view_width = 32,
+            .view_height = 16,
+            .view_start_x = 80,
+        });
+
+        const calls = RecordingBackend.calls.items;
+        // Cull: floor(80/16)=5 .. ceil(112/16)=7 → columns 5 and 6.
+        try std.testing.expectEqual(@as(usize, 2), calls.len);
+        try std.testing.expectEqual(@as(i32, 5), colOf(calls[0].dest.x));
+        try std.testing.expectEqual(@as(i32, 6), colOf(calls[1].dest.x));
+        // Dest stays world-space (camera_x = 0): column 5 centre = 5*16+8=88.
+        try std.testing.expectEqual(@as(f32, 88), calls[0].dest.x);
+        try std.testing.expectEqual(@as(f32, 104), calls[1].dest.x);
+    }
+
+    test "negative view_start_y keeps the top rows of a tall map drawable" {
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, tall_tmx);
+        defer map.deinit();
+
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // Tall map (20 rows, 320px) drawn inside a camera matrix: camera_y =
+        // 0 so dest stays world-space, but the active camera's visible world
+        // rect starts ABOVE the map origin (view_start_y = -8) with a 48px
+        // (3-tile) view. The top row (row 0) must be culled IN, not out.
+        renderer.drawAllLayers(0, 0, .{
+            .view_width = 16,
+            .view_height = 48,
+            .view_start_y = -8,
+        });
+
+        const calls = RecordingBackend.calls.items;
+        // Cull rows: floor(-8/16)=-1 clamped to 0 .. ceil(40/16)=3 → rows 0,1,2.
+        try std.testing.expectEqual(@as(usize, 3), calls.len);
+        try std.testing.expectEqual(@as(i32, 0), rowOf(calls[0].dest.y));
+        try std.testing.expectEqual(@as(i32, 1), rowOf(calls[1].dest.y));
+        try std.testing.expectEqual(@as(i32, 2), rowOf(calls[2].dest.y));
+        // Dest stays world-space (camera_y = 0): row 0 centre = 8.
+        try std.testing.expectEqual(@as(f32, 8), calls[0].dest.y);
+    }
+
+    test "coupled camera_y on a tall map culls the top rows (the bug this fixes)" {
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, tall_tmx);
+        defer map.deinit();
+
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // With the OLD coupled path, drawing world-space (dest anchored at 0)
+        // while a camera pans down forces camera_y up too — which drags the
+        // cull down and drops the rows the camera actually sees. Here a
+        // camera looking at rows 8+ (view_start_y = 128) still draws them
+        // world-space, something the coupled call could not express.
+        renderer.drawAllLayers(0, 0, .{
+            .view_width = 16,
+            .view_height = 32,
+            .view_start_y = 128,
+        });
+
+        const calls = RecordingBackend.calls.items;
+        // Cull rows: floor(128/16)=8 .. ceil(160/16)=10 → rows 8, 9.
+        try std.testing.expectEqual(@as(usize, 2), calls.len);
+        try std.testing.expectEqual(@as(i32, 8), rowOf(calls[0].dest.y));
+        try std.testing.expectEqual(@as(i32, 9), rowOf(calls[1].dest.y));
+        // Dest world-space (camera_y = 0): row 8 centre = 8*16+8 = 136.
+        try std.testing.expectEqual(@as(f32, 136), calls[0].dest.y);
     }
 };
