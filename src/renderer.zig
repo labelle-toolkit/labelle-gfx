@@ -552,7 +552,35 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
         /// pass through camera 0; in split-screen mode it iterates all
         /// active cameras (labelle-gfx#226 — previously only the primary
         /// camera was ever rendered, so cameras 1-3 were invisible).
+        ///
+        /// Delegates to `renderWithLayerHook` with a no-op callback, so
+        /// behavior is IDENTICAL to a direct layer loop — the comptime
+        /// callback folds away entirely and this call has zero overhead.
         pub fn render(self: *Self) void {
+            const noop = struct {
+                fn f(_: void, _: LayerEnum, _: *const CameraT) void {}
+            }.f;
+            self.renderWithLayerHook(void, {}, noop);
+        }
+
+        /// Render every active camera, invoking `on_after_layer` after each
+        /// layer's sprite pass. For WORLD-space layers the callback runs while
+        /// still INSIDE that layer's active camera transform (camera.begin
+        /// already applied), so a caller can interleave additional world-space
+        /// draws (e.g. tilemap layers) at that layer's Z, once per active
+        /// camera. For SCREEN-space (`.screen` / `.screen_fill`) layers the
+        /// callback runs OUTSIDE any camera transform — the loop has already
+        /// exited the camera before those layers draw. In both cases the
+        /// backend's fit mode (`setApplyFit`) and split-screen viewport/scissor
+        /// (`applyViewport`) for that layer's pass are still in effect at the
+        /// call point. `ctx` is forwarded unchanged; `on_after_layer` is
+        /// comptime so it folds away entirely when unused.
+        pub fn renderWithLayerHook(
+            self: *Self,
+            comptime Ctx: type,
+            ctx: Ctx,
+            comptime on_after_layer: fn (ctx: Ctx, layer: LayerEnum, cam: *const CameraT) void,
+        ) void {
             // Viewport culling (labelle-gfx#208) populates the engine's
             // global cull rect once per frame, derived from the primary
             // camera, before any camera pass.
@@ -562,7 +590,7 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             var it = self.camera_mgr.activeIterator();
             while (it.next()) |cam| {
                 applyViewport(cam);
-                self.renderThroughCamera(cam);
+                self.renderThroughCamera(Ctx, ctx, on_after_layer, cam);
             }
             clearViewport();
         }
@@ -570,7 +598,13 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
         /// Render all layers once, entering/exiting `cam` for world
         /// layers. Factored out of `render` so each active camera in a
         /// split-screen layout draws the full layer stack.
-        fn renderThroughCamera(self: *Self, cam: *const CameraT) void {
+        fn renderThroughCamera(
+            self: *Self,
+            comptime Ctx: type,
+            ctx: Ctx,
+            comptime on_after_layer: fn (ctx: Ctx, layer: LayerEnum, cam: *const CameraT) void,
+            cam: *const CameraT,
+        ) void {
             var in_camera = false;
             inline for (sorted_layers) |layer| {
                 const space = layer.config().space;
@@ -603,6 +637,12 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                 }
 
                 self.inner.renderLayer(layer);
+
+                // Interleave hook: fires immediately after this layer's
+                // sprite pass and BEFORE any camera exit for the next
+                // iteration, so for a world layer `in_camera == true` and
+                // the callback's draws land inside `cam`'s transform.
+                on_after_layer(ctx, layer, cam);
             }
             if (in_camera) {
                 cam.end();

@@ -2074,3 +2074,188 @@ test "RetainedEngine: updateTexture forwards a frame to the backend" {
     try testing.expectEqual(@as(usize, 4 * 4 * 4), MockBackend.last_update_len);
     try testing.expect(MockBackend.last_update_id != 0);
 }
+
+// ── Per-layer render hook (renderWithLayerHook, gfx#295 / T3) ──────────
+//
+// `renderWithLayerHook` lets a consumer (the engine) interleave additional
+// draws (tilemap layers) between sprite layers, per active camera, WITHOUT
+// gfx knowing about tilemaps. The hook fires once per (active camera × layer)
+// immediately AFTER that layer's sprite pass and BEFORE any camera exit, so
+// for a WORLD-space layer the callback runs while still inside `cam.begin()`.
+// `render()` delegates with a no-op callback, so its behavior is IDENTICAL to
+// a direct layer loop (purely additive).
+
+const HookRenderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+const HookCamera = HookRenderer.CameraType;
+
+const LayerHookRecorder = struct {
+    const Event = struct {
+        layer: DefaultLayers,
+        in_camera: bool,
+        // Line-shape draws recorded at the moment the hook fired. Proves the
+        // hook runs AFTER the layer's own sprite/shape pass.
+        lines_at_call: usize,
+    };
+
+    events: [16]Event = undefined,
+    count: usize = 0,
+
+    fn cb(self: *LayerHookRecorder, layer: DefaultLayers, cam: *const HookCamera) void {
+        _ = cam;
+        self.events[self.count] = .{
+            .layer = layer,
+            .in_camera = MockBackend.isInCameraMode(),
+            .lines_at_call = MockBackend.getLineCallCount(),
+        };
+        self.count += 1;
+        // For the world (camera) layer, prove a draw issued from the callback
+        // lands INSIDE the camera transform: `isInCameraMode()` is still true,
+        // and the draw is recorded (it interleaves at this layer's Z).
+        if (layer == .world) {
+            MockBackend.drawRectangleRec(
+                .{ .x = 1, .y = 2, .width = 3, .height = 4 },
+                MockBackend.white,
+            );
+        }
+    }
+};
+
+test "renderWithLayerHook: fires once per layer, after that layer's sprite pass, in sorted order" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = HookRenderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    // One shape on the (default) world layer — it draws a LineCall during the
+    // world layer's pass, so the world hook event must observe lines == 1.
+    const entity = ecs.createEntity();
+    ecs.addComponent(entity, core.Position{ .x = 100, .y = 200 });
+    ecs.addComponent(entity, HookRenderer.Shape{
+        .shape = .{ .line = .{ .end = .{ .x = 30, .y = 40 } } },
+        .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    });
+    renderer.trackEntity(entity, .shape);
+    renderer.sync(MockEcs, &ecs);
+
+    var rec = LayerHookRecorder{};
+    renderer.renderWithLayerHook(*LayerHookRecorder, &rec, LayerHookRecorder.cb);
+
+    // Single active camera × 3 layers = 3 hook events, in layer-sorted order.
+    try testing.expectEqual(@as(usize, 3), rec.count);
+    try testing.expectEqual(DefaultLayers.background, rec.events[0].layer);
+    try testing.expectEqual(DefaultLayers.world, rec.events[1].layer);
+    try testing.expectEqual(DefaultLayers.ui, rec.events[2].layer);
+
+    // World layer (world-space): hook fires INSIDE the camera transform.
+    // Screen-space layers (background/ui): OUTSIDE any camera.
+    try testing.expect(!rec.events[0].in_camera); // background (screen)
+    try testing.expect(rec.events[1].in_camera); // world (world)
+    try testing.expect(!rec.events[2].in_camera); // ui (screen)
+
+    // The world layer's shape drew its LineCall BEFORE the hook fired.
+    try testing.expectEqual(@as(usize, 0), rec.events[0].lines_at_call); // before world
+    try testing.expectEqual(@as(usize, 1), rec.events[1].lines_at_call); // after world's line
+    try testing.expectEqual(@as(usize, 1), rec.events[2].lines_at_call);
+
+    // The callback's own draw (world layer) was recorded — an interleaved
+    // draw at the world layer's Z, inside the camera transform.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getShapeCallCount());
+}
+
+const HookCounts = struct { draws: usize, shapes: usize, lines: usize, passes: usize, viewports: usize };
+
+fn runHookScene(use_render: bool) HookCounts {
+    const MockEcs = core.MockEcsBackend(u32);
+    // render() delegates to the hook path with this exact no-op.
+    const noop = struct {
+        fn f(_: void, _: DefaultLayers, _: *const HookCamera) void {}
+    }.f;
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = HookRenderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+    renderer.getCameraManager().setupSplitScreen(.vertical_split);
+
+    const e = ecs.createEntity();
+    ecs.addComponent(e, core.Position{ .x = 10, .y = 20 });
+    ecs.addComponent(e, HookRenderer.Shape{
+        .shape = .{ .line = .{ .end = .{ .x = 5, .y = 6 } } },
+        .color = .{ .r = 1, .g = 2, .b = 3, .a = 4 },
+    });
+    renderer.trackEntity(e, .shape);
+    renderer.sync(MockEcs, &ecs);
+
+    if (use_render) {
+        renderer.render();
+    } else {
+        renderer.renderWithLayerHook(void, {}, noop);
+    }
+
+    return .{
+        .draws = MockBackend.getDrawCallCount(),
+        .shapes = MockBackend.getShapeCallCount(),
+        .lines = MockBackend.getLineCallCount(),
+        .passes = MockBackend.getCameraPasses().len,
+        .viewports = MockBackend.getViewportCalls().len,
+    };
+}
+
+test "render(): behavior-identical to renderWithLayerHook with a no-op (purely additive)" {
+    // Drive the same scene twice: once via render(), once via
+    // renderWithLayerHook(void, {}, noop). Every recorded backend effect
+    // (sprite/shape draws, camera passes, viewport calls) must match — render()
+    // literally delegates to the hook path with a no-op, so it adds nothing.
+    const via_render = runHookScene(true);
+    const via_hook = runHookScene(false);
+
+    try testing.expectEqual(via_hook.draws, via_render.draws);
+    try testing.expectEqual(via_hook.shapes, via_render.shapes);
+    try testing.expectEqual(via_hook.lines, via_render.lines);
+    try testing.expectEqual(via_hook.passes, via_render.passes);
+    try testing.expectEqual(via_hook.viewports, via_render.viewports);
+    // No callback fired for either path ⇒ no extra shape draws leaked in.
+    try testing.expectEqual(@as(usize, 0), via_render.shapes);
+}
+
+test "renderWithLayerHook: fires per active camera in split-screen (gfx#709 enabler)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var renderer = HookRenderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    // Two active cameras (vertical split) → the hook must fire once per
+    // (camera × layer). This is what lets the engine interleave tilemap draws
+    // in EACH split-screen view (#709).
+    renderer.getCameraManager().setupSplitScreen(.vertical_split);
+
+    var rec = LayerHookRecorder{};
+    renderer.renderWithLayerHook(*LayerHookRecorder, &rec, LayerHookRecorder.cb);
+
+    // 2 cameras × 3 layers = 6 events.
+    try testing.expectEqual(@as(usize, 6), rec.count);
+    try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
+
+    // The world-layer event repeats once per camera, each inside its camera.
+    var world_events: usize = 0;
+    for (rec.events[0..rec.count]) |ev| {
+        if (ev.layer == .world) {
+            world_events += 1;
+            try testing.expect(ev.in_camera);
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), world_events);
+}
