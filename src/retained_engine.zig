@@ -752,9 +752,21 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 const vp = self.cull_viewport orelse break :blk null;
                 break :blk self.cullCandidates(vp);
             };
+            // Screen-fill layers (backdrops) stretch design→framebuffer with
+            // NO aspect-fit so they cover the pillarbox bars — otherwise a
+            // window wider than the design leaves an uncovered gap
+            // (labelle-bgfx#42). Every other layer keeps the fit. Mirrors the
+            // layer-hook path in renderer.zig; guarded so backends without the
+            // toggle are unaffected (they fall back to a normal fitted layer).
+            if (comptime @hasDecl(BackendImpl, "setApplyFit")) {
+                BackendImpl.setApplyFit(layer.config().space != .screen_fill);
+            }
             self.renderSpritesOnLayer(layer, candidates);
             self.renderShapesOnLayer(layer, candidates);
             self.renderTextsOnLayer(layer, candidates);
+            if (comptime @hasDecl(BackendImpl, "setApplyFit")) {
+                BackendImpl.setApplyFit(true);
+            }
         }
 
         // Render one layer using a candidate id set already computed for
@@ -768,9 +780,21 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 if (self.cull_viewport == null) break :blk null;
                 break :blk frame_candidates;
             };
+            // Screen-fill layers (backdrops) stretch design→framebuffer with
+            // NO aspect-fit so they cover the pillarbox bars — otherwise a
+            // window wider than the design leaves an uncovered gap
+            // (labelle-bgfx#42). Every other layer keeps the fit. Mirrors the
+            // layer-hook path in renderer.zig; guarded so backends without the
+            // toggle are unaffected (they fall back to a normal fitted layer).
+            if (comptime @hasDecl(BackendImpl, "setApplyFit")) {
+                BackendImpl.setApplyFit(layer.config().space != .screen_fill);
+            }
             self.renderSpritesOnLayer(layer, candidates);
             self.renderShapesOnLayer(layer, candidates);
             self.renderTextsOnLayer(layer, candidates);
+            if (comptime @hasDecl(BackendImpl, "setApplyFit")) {
+                BackendImpl.setApplyFit(true);
+            }
         }
 
         const SortEntry = struct {
