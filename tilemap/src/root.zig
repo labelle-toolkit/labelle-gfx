@@ -742,6 +742,16 @@ pub const DrawOptions = struct {
     /// when drawing inside a zoomed camera transform.
     view_width: ?f32 = null,
     view_height: ?f32 = null,
+    /// World coordinate mapping to the left/top edge of the CULL viewport,
+    /// used ONLY by `visibleTileRange`. Defaults (null) to `camera_x`/
+    /// `camera_y` — today's behavior, where dest offset and cull origin
+    /// coincide. Set these (with `camera_x`/`camera_y` = 0) when drawing a
+    /// layer INSIDE a backend camera transform: dest stays world-space so the
+    /// camera MATRIX pans/zooms it, while the cull tracks the ACTIVE camera's
+    /// visible world rect — else a panned camera on a large map culls the
+    /// tiles it actually sees and the layer vanishes for that viewport.
+    view_start_x: ?f32 = null,
+    view_start_y: ?f32 = null,
     tint_r: u8 = 255,
     tint_g: u8 = 255,
     tint_b: u8 = 255,
@@ -896,9 +906,15 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
 
             // Viewport culling: only iterate rows/columns that can be
             // visible — offset-aware, so a map drawn at a world Position
-            // culls correctly.
-            const cols = visibleTileRange(camera_x, view_w, tile_w, off_x, layer.width);
-            const rows = visibleTileRange(camera_y, view_h, tile_h, off_y, layer.height);
+            // culls correctly. The cull origin is decoupled from the dest
+            // camera offset: `view_start_*` (defaulting to `camera_*`) lets
+            // the caller draw dest in world-space (`camera_* = 0`, panned by
+            // a backend camera matrix) while still culling to the active
+            // camera's visible world rect.
+            const cull_x = options.view_start_x orelse camera_x;
+            const cull_y = options.view_start_y orelse camera_y;
+            const cols = visibleTileRange(cull_x, view_w, tile_w, off_x, layer.width);
+            const rows = visibleTileRange(cull_y, view_h, tile_h, off_y, layer.height);
 
             var y: u32 = rows.start;
             while (y < rows.end) : (y += 1) {
