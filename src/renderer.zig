@@ -553,14 +553,27 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
         /// active cameras (labelle-gfx#226 — previously only the primary
         /// camera was ever rendered, so cameras 1-3 were invisible).
         ///
-        /// Delegates to `renderWithLayerHook` with a no-op callback, so
-        /// behavior is IDENTICAL to a direct layer loop — the comptime
-        /// callback folds away entirely and this call has zero overhead.
+        /// Delegates to `renderWithLayerHooks` with two no-op callbacks, so
+        /// behavior is IDENTICAL to a direct layer loop — both comptime
+        /// callbacks fold away entirely and this call has zero overhead.
         pub fn render(self: *Self) void {
-            const noop = struct {
+            const noop_after = struct {
                 fn f(_: void, _: LayerEnum, _: *const CameraT) void {}
             }.f;
-            self.renderWithLayerHook(void, {}, noop);
+            self.renderWithLayerHooks(void, {}, noopBefore(void), noop_after);
+        }
+
+        /// The canonical no-op `on_before_layers` hook for a given `Ctx`.
+        /// Returned via a comptime-memoized helper so that the SAME function
+        /// instance is produced everywhere `noopBefore(Ctx)` is called (Zig
+        /// memoizes comptime calls). That identity is what lets
+        /// `renderThroughCamera` recognise the no-op case and fold the entire
+        /// before-hook block (including `cam.begin`/`cam.end`) away, keeping
+        /// `render` / `renderWithLayerHook` byte-for-byte behavior-identical.
+        fn noopBefore(comptime Ctx: type) fn (ctx: Ctx, cam: *const CameraT) void {
+            return struct {
+                fn f(_: Ctx, _: *const CameraT) void {}
+            }.f;
         }
 
         /// Render every active camera, invoking `on_after_layer` after each
@@ -581,6 +594,29 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             ctx: Ctx,
             comptime on_after_layer: fn (ctx: Ctx, layer: LayerEnum, cam: *const CameraT) void,
         ) void {
+            self.renderWithLayerHooks(Ctx, ctx, noopBefore(Ctx), on_after_layer);
+        }
+
+        /// Like `renderWithLayerHook`, but ALSO invokes `on_before_layers`
+        /// ONCE per active camera — after that camera's viewport/scissor is
+        /// applied (`applyViewport`) and the frame's cull rect is set
+        /// (`applyCullViewport`), and inside the camera's WORLD transform
+        /// (`cam.begin`), BEFORE the first layer's sprite pass — so a caller
+        /// can draw a per-camera, scissored, world-space BACKGROUND under ALL
+        /// sprites (e.g. unbound tilemap layers). In split-screen the hook
+        /// fires once per active camera, each scissored to its own viewport,
+        /// which is what lets a consumer close the per-camera background gap
+        /// (gfx#709). `on_after_layer` fires exactly as in
+        /// `renderWithLayerHook` (after each layer's sprite pass). Both hooks
+        /// are comptime → they fold away entirely when unused, and a no-op
+        /// `on_before_layers` adds ZERO backend calls (see `renderThroughCamera`).
+        pub fn renderWithLayerHooks(
+            self: *Self,
+            comptime Ctx: type,
+            ctx: Ctx,
+            comptime on_before_layers: fn (ctx: Ctx, cam: *const CameraT) void,
+            comptime on_after_layer: fn (ctx: Ctx, layer: LayerEnum, cam: *const CameraT) void,
+        ) void {
             // Viewport culling (labelle-gfx#208) populates the engine's
             // global cull rect once per frame, derived from the primary
             // camera, before any camera pass.
@@ -590,7 +626,7 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             var it = self.camera_mgr.activeIterator();
             while (it.next()) |cam| {
                 applyViewport(cam);
-                self.renderThroughCamera(Ctx, ctx, on_after_layer, cam);
+                self.renderThroughCamera(Ctx, ctx, on_before_layers, on_after_layer, cam);
             }
             clearViewport();
         }
@@ -602,9 +638,36 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             self: *Self,
             comptime Ctx: type,
             ctx: Ctx,
+            comptime on_before_layers: fn (ctx: Ctx, cam: *const CameraT) void,
             comptime on_after_layer: fn (ctx: Ctx, layer: LayerEnum, cam: *const CameraT) void,
             cam: *const CameraT,
         ) void {
+            // Per-camera BEFORE-layers hook (gfx#709 enabler). Draws a
+            // world-space, viewport-scissored BACKGROUND (e.g. unbound tilemap
+            // layers) UNDER all sprite layers. It fires ONCE for THIS camera:
+            // the caller (`renderWithLayerHooks`) has already applied this
+            // camera's split-screen viewport/scissor (`applyViewport`) and the
+            // frame's cull rect (`applyCullViewport`), so the hook's draws are
+            // clipped to this camera's viewport. We enter the camera's WORLD
+            // transform (`cam.begin`) so the draws are world-space, invoke the
+            // hook, then exit (`cam.end`) — leaving the per-layer camera state
+            // machine below to run byte-for-byte as before (it re-enters the
+            // camera lazily at the first world layer). The whole block folds
+            // away when `on_before_layers` is the canonical no-op (i.e.
+            // `render` / `renderWithLayerHook`), so those paths add ZERO extra
+            // backend calls and stay behavior-identical.
+            if (comptime on_before_layers != noopBefore(Ctx)) {
+                // Match the fit mode a WORLD layer uses (`space != .screen_fill`
+                // ⇒ true) so `cam.begin`'s projection matches the world layers
+                // drawn below.
+                if (@hasDecl(BackendImpl, "setApplyFit")) {
+                    BackendImpl.setApplyFit(true);
+                }
+                cam.begin();
+                on_before_layers(ctx, cam);
+                cam.end();
+            }
+
             var in_camera = false;
             inline for (sorted_layers) |layer| {
                 const space = layer.config().space;

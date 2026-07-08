@@ -2259,3 +2259,179 @@ test "renderWithLayerHook: fires per active camera in split-screen (gfx#709 enab
     }
     try testing.expectEqual(@as(usize, 2), world_events);
 }
+
+// ── Per-camera BEFORE-layers hook (renderWithLayerHooks, gfx#709) ──────
+//
+// `renderWithLayerHooks` extends `renderWithLayerHook` with a second comptime
+// callback, `on_before_layers`, that fires ONCE per active camera — after that
+// camera's viewport/scissor is applied and inside its WORLD transform, BEFORE
+// the first layer's sprite pass. That lets a consumer (the engine) draw a
+// per-camera, viewport-scissored, world-space BACKGROUND (e.g. unbound tilemap
+// layers) UNDER all sprites, which is the enabling gfx piece for engine#709.
+
+const BeforeHookRecorder = struct {
+    const Event = struct {
+        in_camera: bool,
+        // Backend draw counts captured AT the moment the before-hook fired,
+        // BEFORE the hook issues its own draw — proves it runs before any
+        // sprite/shape layer pass (nothing has drawn yet for this camera).
+        lines_at_call: usize,
+        shapes_at_call: usize,
+        draws_at_call: usize,
+        // The most recently applied split-screen viewport at call time. Because
+        // `renderWithLayerHooks` calls `applyViewport(cam)` immediately before
+        // entering the per-camera work, this IS this camera's scissor rect —
+        // the split-screen test asserts each before-hook sees its OWN viewport.
+        viewport_x: i32,
+        viewport_count: usize,
+    };
+
+    events: [8]Event = undefined,
+    count: usize = 0,
+
+    fn cb(self: *BeforeHookRecorder, cam: *const HookCamera) void {
+        _ = cam;
+        const vps = MockBackend.getViewportCalls();
+        self.events[self.count] = .{
+            .in_camera = MockBackend.isInCameraMode(),
+            .lines_at_call = MockBackend.getLineCallCount(),
+            .shapes_at_call = MockBackend.getShapeCallCount(),
+            .draws_at_call = MockBackend.getDrawCallCount(),
+            .viewport_x = if (vps.len > 0) vps[vps.len - 1].x else -1,
+            .viewport_count = vps.len,
+        };
+        self.count += 1;
+        // Issue a world-space background draw from inside the hook — proves a
+        // draw lands (is recorded) inside the camera transform + this viewport.
+        MockBackend.drawRectangleRec(
+            .{ .x = 7, .y = 8, .width = 9, .height = 10 },
+            MockBackend.white,
+        );
+    }
+};
+
+fn beforeHookNoopAfter(_: *BeforeHookRecorder, _: DefaultLayers, _: *const HookCamera) void {}
+
+test "renderWithLayerHooks: on_before_layers fires once, before all sprites, inside the camera transform" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = HookRenderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    // A shape on the world layer draws a LineCall during the world layer pass.
+    const e = ecs.createEntity();
+    ecs.addComponent(e, core.Position{ .x = 100, .y = 200 });
+    ecs.addComponent(e, HookRenderer.Shape{
+        .shape = .{ .line = .{ .end = .{ .x = 30, .y = 40 } } },
+        .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    });
+    renderer.trackEntity(e, .shape);
+    renderer.sync(MockEcs, &ecs);
+
+    var rec = BeforeHookRecorder{};
+    renderer.renderWithLayerHooks(*BeforeHookRecorder, &rec, BeforeHookRecorder.cb, beforeHookNoopAfter);
+
+    // ONE active camera → the before-hook fires exactly once.
+    try testing.expectEqual(@as(usize, 1), rec.count);
+    // Inside the camera transform ⇒ the background draws in WORLD space.
+    try testing.expect(rec.events[0].in_camera);
+    // Fired BEFORE any sprite/shape layer pass: no line/texture/shape draws had
+    // been recorded when the hook ran (its own rectangle is issued after this
+    // capture), so the background lands UNDER every sprite layer.
+    try testing.expectEqual(@as(usize, 0), rec.events[0].lines_at_call);
+    try testing.expectEqual(@as(usize, 0), rec.events[0].draws_at_call);
+    try testing.expectEqual(@as(usize, 0), rec.events[0].shapes_at_call);
+    // The world layer's line still drew afterwards — the hook left the layer
+    // stack untouched.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getLineCallCount());
+    // The hook's own background rectangle was recorded (1 shape draw).
+    try testing.expectEqual(@as(usize, 1), MockBackend.getShapeCallCount());
+    // One camera pass for the world layer PLUS one for the before-hook's
+    // explicit cam.begin ⇒ 2 beginMode2D calls (the extra pass only exists
+    // because a REAL before-hook is present; see the fold test below).
+    try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
+}
+
+test "renderWithLayerHooks: split-screen fires per camera, each scissored to its OWN viewport (gfx#709)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    // Known window so the vertical split is deterministic: left [x=0,w=400],
+    // right [x=400,w=400].
+    MockBackend.setScreenSize(800, 600);
+
+    var renderer = HookRenderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    // Two active cameras (vertical split) → the before-hook must fire once per
+    // camera, each while THAT camera's viewport/scissor is the active one.
+    renderer.getCameraManager().setupSplitScreen(.vertical_split);
+
+    var rec = BeforeHookRecorder{};
+    renderer.renderWithLayerHooks(*BeforeHookRecorder, &rec, BeforeHookRecorder.cb, beforeHookNoopAfter);
+
+    // 2 active cameras → the before-hook fires exactly twice.
+    try testing.expectEqual(@as(usize, 2), rec.count);
+    // Both fire inside a camera transform (world-space background).
+    try testing.expect(rec.events[0].in_camera);
+    try testing.expect(rec.events[1].in_camera);
+    // Each before-hook runs AFTER its own camera's viewport/scissor was applied:
+    // camera 0 sees the LEFT viewport (x==0); camera 1 sees the RIGHT viewport
+    // (x==400). So camera 1's background is scissored to viewport 1, NOT
+    // viewport 0 — the load-bearing per-camera-scissor guarantee for #709.
+    try testing.expectEqual(@as(i32, 0), rec.events[0].viewport_x);
+    try testing.expectEqual(@as(i32, 400), rec.events[1].viewport_x);
+    try testing.expect(rec.events[1].viewport_x != rec.events[0].viewport_x);
+    // By the time camera 1's hook fired, both cameras' viewports had been
+    // applied (its own is the most recent).
+    try testing.expectEqual(@as(usize, 1), rec.events[0].viewport_count);
+    try testing.expectEqual(@as(usize, 2), rec.events[1].viewport_count);
+    // Two active cameras ⇒ two split-screen viewport applications total.
+    try testing.expectEqual(@as(usize, 2), MockBackend.getViewportCalls().len);
+    // Each camera's before-hook drew its own background rectangle.
+    try testing.expectEqual(@as(usize, 2), MockBackend.getShapeCallCount());
+}
+
+test "renderWithLayerHooks: a no-op on_before_layers folds away — render() injects NO extra camera pass" {
+    // render() delegates through renderWithLayerHooks with the CANONICAL no-op
+    // before-hook. That no-op must fold entirely — including the before-hook's
+    // cam.begin/cam.end — so render() adds zero backend calls. Proof: a
+    // 2-camera world scene yields exactly ONE camera pass per active camera
+    // (2 total). If the before-hook block did NOT fold for the no-op, each
+    // camera would gain an extra begin ⇒ 4 passes.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = HookRenderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+    renderer.getCameraManager().setupSplitScreen(.vertical_split);
+
+    // A world-layer shape so each camera actually enters its world transform.
+    const e = ecs.createEntity();
+    ecs.addComponent(e, core.Position{ .x = 10, .y = 20 });
+    ecs.addComponent(e, HookRenderer.Shape{
+        .shape = .{ .line = .{ .end = .{ .x = 5, .y = 6 } } },
+        .color = .{ .r = 1, .g = 2, .b = 3, .a = 4 },
+    });
+    renderer.trackEntity(e, .shape);
+    renderer.sync(MockEcs, &ecs);
+
+    renderer.render();
+
+    // Exactly one world-layer camera pass per active camera — the folded no-op
+    // before-hook added none.
+    try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
+    // And no stray background shape leaked in from a no-op hook.
+    try testing.expectEqual(@as(usize, 0), MockBackend.getShapeCallCount());
+}
