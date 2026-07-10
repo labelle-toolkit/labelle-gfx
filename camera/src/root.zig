@@ -513,13 +513,18 @@ pub fn CameraManagerWith(comptime BackendImpl: type, comptime y_axis: YAxis) typ
         }
 
         /// Deactivate the secondary camera slots (1–3) AND clear their tags,
-        /// leaving slot 0 untouched. The engine's reset-then-seed primitive:
-        /// call before re-seeding a scene's camera bindings so stale secondary
-        /// cameras never linger active or carry a previous scene's tag.
+        /// returning slot 0 to a clean full-window primary. The engine's
+        /// reset-then-seed primitive: call before re-seeding a scene's camera
+        /// bindings so stale secondary cameras never linger active or carry a
+        /// previous scene's tag.
         ///
-        /// Slot 0 is deliberately skipped (loop starts at 1): the
-        /// default-camera invariant keeps slot 0 active and "main"-tagged
-        /// across resets, so the primary "main" binding survives a scene swap.
+        /// Slot 0's identity is preserved (stays ACTIVE and "main"-tagged — the
+        /// default-camera invariant), but its split-screen `screen_viewport` is
+        /// cleared to `null` (full-window) and `current_layout` reset to
+        /// `.single`. Without this, a scene that swaps split-screen → single
+        /// would keep clipping slot 0 to the OLD split rect, because the
+        /// fallback / "main" binding path now applies slot 0's viewport
+        /// (`applyViewport(cam0)`) for world layers (gfx#303).
         pub fn resetSecondary(self: *Self) void {
             var i: u3 = 1;
             while (i < MAX_CAMERAS) : (i += 1) {
@@ -527,6 +532,11 @@ pub fn CameraManagerWith(comptime BackendImpl: type, comptime y_axis: YAxis) typ
                 self.setActive(idx, false);
                 self.cameras[idx].clearTag();
             }
+            // Slot 0 keeps its active bit + "main" tag, but drops any stale
+            // split-screen viewport so it renders full-window again. Keep
+            // `current_layout` consistent with that (`.single`).
+            self.cameras[0].screen_viewport = null;
+            self.current_layout = .single;
         }
 
         pub fn activeCount(self: *const Self) u3 {

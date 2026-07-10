@@ -2610,6 +2610,29 @@ test "CameraManager: default-camera invariant — slot 0 is active and 'main' fr
     try testing.expect(mgr2.getCamera(0).hasTag("main"));
 }
 
+test "CameraManager: resetSecondary returns slot 0 to full-window (clears stale split viewport), keeping it active + 'main'" {
+    // gfx#303 (codex P2): the "main"/world binding path now applies slot 0's
+    // viewport (applyViewport(cam0)). A scene swap split-screen → single must
+    // NOT keep clipping slot 0 to the OLD split rect — resetSecondary drops
+    // slot 0's screen_viewport (full-window) while preserving its active bit
+    // and "main" tag.
+    const Mgr = gfx.CameraManager(MockBackend);
+    var mgr = Mgr.init();
+
+    mgr.setupSplitScreen(.vertical_split);
+    // Slot 0 now carries the left-half viewport.
+    try testing.expect(mgr.getCamera(0).screen_viewport != null);
+
+    mgr.resetSecondary();
+
+    // Slot 0 is back to full-window (no viewport) but still the "main" primary.
+    try testing.expect(mgr.getCamera(0).screen_viewport == null);
+    try testing.expect(mgr.isActive(0));
+    try testing.expect(mgr.getCamera(0).hasTag("main"));
+    // Secondary slots are down and untagged.
+    try testing.expect(!mgr.isActive(1));
+}
+
 test "CameraBinding: middle layer bound to a secondary camera keeps global z-order (sky-under-world)" {
     // Three world layers; the middle one binds to a DIFFERENT (secondary)
     // camera than its neighbours. Because the loop is layer-outer, global z
