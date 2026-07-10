@@ -1174,6 +1174,59 @@ test "GfxRenderer: screenToDesign callable on a const renderer reference" {
     try testing.expectEqual(@as(f32, 8.0), out.y);
 }
 
+// ── GOLDEN REGRESSION: single-active-camera draw sequence (gfx#724 PR 1) ──
+//
+// The camera-layer-binding inversion (labelle-engine#723/#724 PR 1) flips the
+// renderer from camera-outer to layer-outer. The load-bearing invariant: with a
+// SINGLE active camera the emitted draw-call sequence and camera-pass count must
+// stay byte-for-byte identical to the pre-inversion output. This golden pins the
+// baseline BEFORE the rewrite and must remain green after it.
+test "GOLDEN gfx#724: single active camera draw sequence (layer order + one camera pass)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    // One sprite per layer at a distinct x so draw order is observable:
+    // background (screen, order -10), world (world, 0), ui (screen, 10).
+    const bg = ecs.createEntity();
+    ecs.addComponent(bg, core.Position{ .x = 11, .y = 0 });
+    ecs.addComponent(bg, Renderer.Sprite{ .sprite_name = "bg", .layer = .background });
+
+    const wld = ecs.createEntity();
+    ecs.addComponent(wld, core.Position{ .x = 22, .y = 0 });
+    ecs.addComponent(wld, Renderer.Sprite{ .sprite_name = "wld", .layer = .world });
+
+    const ui = ecs.createEntity();
+    ecs.addComponent(ui, core.Position{ .x = 33, .y = 0 });
+    ecs.addComponent(ui, Renderer.Sprite{ .sprite_name = "ui", .layer = .ui });
+
+    renderer.trackEntity(bg, .sprite);
+    renderer.trackEntity(wld, .sprite);
+    renderer.trackEntity(ui, .sprite);
+    renderer.sync(MockEcs, &ecs);
+    renderer.render();
+
+    // Exactly one camera pass: the single active camera enters once for the
+    // one world layer; the two screen layers draw pinned (no camera).
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+
+    // Draw calls appear in sorted layer order: background, world, ui.
+    const calls = MockBackend.getDrawCalls();
+    try testing.expectEqual(@as(usize, 3), calls.len);
+    try testing.expectEqual(@as(f32, 11), calls[0].dest.x);
+    try testing.expectEqual(@as(f32, 22), calls[1].dest.x);
+    try testing.expectEqual(@as(f32, 33), calls[2].dest.x);
+}
+
 // ── GfxRenderer multi-camera (regression: labelle-gfx#226) ──
 
 test "GfxRenderer: getCamera targets the selected camera in split-screen" {
@@ -1224,9 +1277,11 @@ test "GfxRenderer: getCamera falls back to primary when selection is inactive" {
 
 test "GfxRenderer: render draws through every active camera" {
     // The core #226 bug: render() only ever entered the primary
-    // camera, so split-screen cameras 1-3 were never rendered. With
-    // a single world layer, each active camera produces exactly one
-    // beginMode2D pass.
+    // camera, so split-screen cameras 1-3 were never rendered. Under the
+    // camera-layer-binding model (gfx#724) the world layer renders through
+    // every active camera carrying the layer's tag — so each active camera
+    // tagged "main" produces exactly one beginMode2D pass for the one world
+    // layer.
     MockBackend.initMock(testing.allocator);
     defer MockBackend.deinitMock();
 
@@ -1234,19 +1289,25 @@ test "GfxRenderer: render draws through every active camera" {
     var renderer = Renderer.init(testing.allocator);
     defer renderer.deinit();
 
-    // Single-camera baseline.
+    // Single-camera baseline (slot 0 untagged → world falls back to slot 0).
     renderer.render();
     try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
 
-    // Vertical split — two active cameras, two passes.
+    // Vertical split — two active cameras tagged "main", two passes.
     MockBackend.resetMock();
     renderer.getCameraManager().setupSplitScreen(.vertical_split);
+    renderer.getCameraManager().setTag(0, "main");
+    renderer.getCameraManager().setTag(1, "main");
     renderer.render();
     try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
 
-    // Quadrant — four active cameras, four passes.
+    // Quadrant — four active cameras tagged "main", four passes.
     MockBackend.resetMock();
     renderer.getCameraManager().setupSplitScreen(.quadrant);
+    renderer.getCameraManager().setTag(0, "main");
+    renderer.getCameraManager().setTag(1, "main");
+    renderer.getCameraManager().setTag(2, "main");
+    renderer.getCameraManager().setTag(3, "main");
     renderer.render();
     try testing.expectEqual(@as(usize, 4), MockBackend.getCameraPasses().len);
 }
@@ -1263,6 +1324,8 @@ test "GfxRenderer: each split-screen camera renders with its own transform" {
     defer renderer.deinit();
 
     renderer.getCameraManager().setupSplitScreen(.vertical_split);
+    renderer.getCameraManager().setTag(0, "main");
+    renderer.getCameraManager().setTag(1, "main");
 
     renderer.selectCamera(0);
     renderer.getCamera().setPosition(100, 0);
@@ -1297,10 +1360,13 @@ test "GfxRenderer: render scopes each camera to its screen viewport" {
     defer renderer.deinit();
 
     renderer.getCameraManager().setupSplitScreen(.vertical_split);
+    renderer.getCameraManager().setTag(0, "main");
+    renderer.getCameraManager().setTag(1, "main");
     renderer.render();
 
     // MockBackend is 800x600 → left half {0,0,400,600}, right half
-    // {400,0,400,600}.
+    // {400,0,400,600}. The one world layer draws through cam0 then cam1,
+    // each applying its own viewport before begin.
     const vps = MockBackend.getViewportCalls();
     try testing.expectEqual(@as(usize, 2), vps.len);
     try testing.expectEqual(@as(i32, 0), vps[0].x);
@@ -2237,19 +2303,25 @@ test "renderWithLayerHook: fires per active camera in split-screen (gfx#709 enab
     defer renderer.deinit();
     renderer.setScreenHeight(600);
 
-    // Two active cameras (vertical split) → the hook must fire once per
-    // (camera × layer). This is what lets the engine interleave tilemap draws
-    // in EACH split-screen view (#709).
+    // Two active cameras (vertical split) tagged "main" → a bound layer (the
+    // world layer) fires the hook once per matching camera. This is what lets
+    // the engine interleave tilemap draws in EACH split-screen view (#709).
+    // Under the camera-binding model (gfx#724) the two SCREEN layers are pinned
+    // (unbound) and draw once each — camera-bound layers, not screen HUDs,
+    // multiply across the split.
     renderer.getCameraManager().setupSplitScreen(.vertical_split);
+    renderer.getCameraManager().setTag(0, "main");
+    renderer.getCameraManager().setTag(1, "main");
 
     var rec = LayerHookRecorder{};
     renderer.renderWithLayerHook(*LayerHookRecorder, &rec, LayerHookRecorder.cb);
 
-    // 2 cameras × 3 layers = 6 events.
-    try testing.expectEqual(@as(usize, 6), rec.count);
+    // world (bound, ×2 cameras) + background (pinned, ×1) + ui (pinned, ×1) = 4.
+    try testing.expectEqual(@as(usize, 4), rec.count);
     try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
 
-    // The world-layer event repeats once per camera, each inside its camera.
+    // The world-layer event repeats once per matching camera, each inside its
+    // camera transform.
     var world_events: usize = 0;
     for (rec.events[0..rec.count]) |ev| {
         if (ev.layer == .world) {
@@ -2392,8 +2464,12 @@ test "renderWithLayerHooks: split-screen fires per camera, each scissored to its
     // applied (its own is the most recent).
     try testing.expectEqual(@as(usize, 1), rec.events[0].viewport_count);
     try testing.expectEqual(@as(usize, 2), rec.events[1].viewport_count);
-    // Two active cameras ⇒ two split-screen viewport applications total.
-    try testing.expectEqual(@as(usize, 2), MockBackend.getViewportCalls().len);
+    // Viewport applications: the before-hook prelude applies one per active
+    // camera (cam0 left, cam1 right = 2). The DefaultLayers world layer binds to
+    // "main", which resolves ONLY through slot-0 (cam1 is untagged here), so it
+    // applies cam0's viewport once more (gfx#303: a "main" world view stays
+    // inside cam0's viewport) ⇒ 3 total. The two screen layers clear (unrecorded).
+    try testing.expectEqual(@as(usize, 3), MockBackend.getViewportCalls().len);
     // Each camera's before-hook drew its own background rectangle.
     try testing.expectEqual(@as(usize, 2), MockBackend.getShapeCallCount());
 }
@@ -2416,6 +2492,10 @@ test "renderWithLayerHooks: a no-op on_before_layers folds away — render() inj
     defer renderer.deinit();
     renderer.setScreenHeight(600);
     renderer.getCameraManager().setupSplitScreen(.vertical_split);
+    // Both cameras tagged "main" so the one world layer binds to (and draws
+    // through) each — one begin per active camera.
+    renderer.getCameraManager().setTag(0, "main");
+    renderer.getCameraManager().setTag(1, "main");
 
     // A world-layer shape so each camera actually enters its world transform.
     const e = ecs.createEntity();
@@ -2434,4 +2514,480 @@ test "renderWithLayerHooks: a no-op on_before_layers folds away — render() inj
     try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
     // And no stray background shape leaked in from a no-op hook.
     try testing.expectEqual(@as(usize, 0), MockBackend.getShapeCallCount());
+}
+
+// ── Camera-bound layers (labelle-engine#723/#724 PR 1) ─────────────────
+//
+// Layers name a camera TAG (`LayerConfig.camera`); the renderer draws each
+// layer through every active camera carrying that tag, in global sorted (z)
+// order. World layers bind to the implicit "main" tag; screen layers pin unless
+// they carry an explicit tag (parallax). These tests pin the tag storage /
+// manager API and the renderer's layer-outer resolution.
+
+test "CameraWith: setTag / hasTag / clearTag use inline storage (no heap slice)" {
+    const Cam = gfx.CameraWith(MockBackend, .up);
+    var cam = Cam.init();
+    try testing.expect(!cam.hasTag("main"));
+
+    cam.setTag("main");
+    try testing.expect(cam.hasTag("main"));
+    // Not a prefix/suffix match — exact compare.
+    try testing.expect(!cam.hasTag("mai"));
+    try testing.expect(!cam.hasTag("mainx"));
+
+    // Re-tagging replaces (does not append).
+    cam.setTag("minimap");
+    try testing.expect(cam.hasTag("minimap"));
+    try testing.expect(!cam.hasTag("main"));
+
+    cam.clearTag();
+    try testing.expect(!cam.hasTag("minimap"));
+
+    // Max-length tag (15 bytes) fits.
+    cam.setTag("fifteen_chars!!");
+    try testing.expect(cam.hasTag("fifteen_chars!!"));
+}
+
+test "CameraManager: findByTag returns the lowest active slot; resetSecondary clears tags + active bits" {
+    const Mgr = gfx.CameraManager(MockBackend);
+    var mgr = Mgr.init();
+
+    mgr.setActive(1, true);
+    mgr.setActive(2, true);
+    mgr.setActive(3, true);
+    // Use a NON-"main" tag for the lowest-slot check — slot 0 is pre-tagged
+    // "main" by the default-camera invariant, so "main" always resolves to it.
+    // Two secondary cameras carry "hud"; findByTag returns the LOWEST active.
+    mgr.setTag(2, "hud");
+    mgr.setTag(1, "hud");
+    mgr.setTag(3, "minimap");
+
+    try testing.expectEqual(mgr.getCamera(1), mgr.findByTag("hud").?);
+    try testing.expectEqual(mgr.getCamera(3), mgr.findByTag("minimap").?);
+    try testing.expect(mgr.findByTag("nope") == null);
+    // The invariant: slot 0 is the "main" camera.
+    try testing.expectEqual(mgr.getCamera(0), mgr.findByTag("main").?);
+
+    // An inactive camera carrying the tag is skipped.
+    mgr.setActive(1, false);
+    try testing.expectEqual(mgr.getCamera(2), mgr.findByTag("hud").?);
+
+    // resetSecondary: slot 0 untouched; slots 1-3 deactivated AND untagged.
+    mgr.setActive(1, true);
+    mgr.resetSecondary();
+    try testing.expect(mgr.isActive(0));
+    try testing.expect(mgr.getCamera(0).hasTag("main")); // slot 0 preserved
+    try testing.expect(!mgr.isActive(1));
+    try testing.expect(!mgr.isActive(2));
+    try testing.expect(!mgr.isActive(3));
+    try testing.expect(!mgr.getCamera(1).hasTag("hud"));
+    try testing.expect(!mgr.getCamera(3).hasTag("minimap"));
+    // Slot 0 still resolves "main" after the reset.
+    try testing.expectEqual(mgr.getCamera(0), mgr.findByTag("main").?);
+}
+
+test "CameraManager: default-camera invariant — slot 0 is active and 'main' from construction and across resets" {
+    const Mgr = gfx.CameraManager(MockBackend);
+
+    // Freshly constructed: slot 0 active + tagged "main".
+    var mgr = Mgr.init();
+    try testing.expect(mgr.isActive(0));
+    try testing.expect(mgr.getCamera(0).hasTag("main"));
+    try testing.expectEqual(mgr.getCamera(0), mgr.findByTag("main").?);
+
+    // resetSecondary preserves slot 0's tag + active bit.
+    mgr.setActive(1, true);
+    mgr.setTag(1, "main"); // a stale secondary "main"
+    mgr.resetSecondary();
+    try testing.expect(mgr.isActive(0));
+    try testing.expect(mgr.getCamera(0).hasTag("main"));
+    try testing.expect(!mgr.isActive(1));
+    try testing.expect(!mgr.getCamera(1).hasTag("main"));
+
+    // initCentered upholds the invariant too.
+    var mgr2 = Mgr.initCentered();
+    try testing.expect(mgr2.isActive(0));
+    try testing.expect(mgr2.getCamera(0).hasTag("main"));
+}
+
+test "CameraManager: resetSecondary returns slot 0 to full-window (clears stale split viewport), keeping it active + 'main'" {
+    // gfx#303 (codex P2): the "main"/world binding path now applies slot 0's
+    // viewport (applyViewport(cam0)). A scene swap split-screen → single must
+    // NOT keep clipping slot 0 to the OLD split rect — resetSecondary drops
+    // slot 0's screen_viewport (full-window) while preserving its active bit
+    // and "main" tag.
+    const Mgr = gfx.CameraManager(MockBackend);
+    var mgr = Mgr.init();
+
+    mgr.setupSplitScreen(.vertical_split);
+    // Slot 0 now carries the left-half viewport.
+    try testing.expect(mgr.getCamera(0).screen_viewport != null);
+
+    mgr.resetSecondary();
+
+    // Slot 0 is back to full-window (no viewport) but still the "main" primary.
+    try testing.expect(mgr.getCamera(0).screen_viewport == null);
+    try testing.expect(mgr.isActive(0));
+    try testing.expect(mgr.getCamera(0).hasTag("main"));
+    // Secondary slots are down and untagged.
+    try testing.expect(!mgr.isActive(1));
+}
+
+test "CameraBinding: middle layer bound to a secondary camera keeps global z-order (sky-under-world)" {
+    // Three world layers; the middle one binds to a DIFFERENT (secondary)
+    // camera than its neighbours. Because the loop is layer-outer, global z
+    // order is preserved regardless of which camera each layer draws through —
+    // the secondary-camera layer still sorts between its neighbours.
+    const ZLayers = enum {
+        sky, // world, order -10, camera "main"  (cam 0)
+        mid, // world, order   0, camera "back"  (cam 1)
+        ground, // world, order  10, camera "main"  (cam 0)
+
+        pub fn config(self: @This()) LayerConfig {
+            return switch (self) {
+                .sky => .{ .space = .world, .order = -10, .camera = "main" },
+                .mid => .{ .space = .world, .order = 0, .camera = "back" },
+                .ground => .{ .space = .world, .order = 10, .camera = "main" },
+            };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, ZLayers, u32);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    const mgr = renderer.getCameraManager();
+    mgr.setActive(1, true);
+    mgr.setTag(0, "main");
+    mgr.setTag(1, "back");
+
+    const sky = ecs.createEntity();
+    ecs.addComponent(sky, core.Position{ .x = 1, .y = 0 });
+    ecs.addComponent(sky, Renderer.Sprite{ .sprite_name = "sky", .layer = .sky });
+    const mid = ecs.createEntity();
+    ecs.addComponent(mid, core.Position{ .x = 2, .y = 0 });
+    ecs.addComponent(mid, Renderer.Sprite{ .sprite_name = "mid", .layer = .mid });
+    const ground = ecs.createEntity();
+    ecs.addComponent(ground, core.Position{ .x = 3, .y = 0 });
+    ecs.addComponent(ground, Renderer.Sprite{ .sprite_name = "ground", .layer = .ground });
+
+    renderer.trackEntity(sky, .sprite);
+    renderer.trackEntity(mid, .sprite);
+    renderer.trackEntity(ground, .sprite);
+    renderer.sync(MockEcs, &ecs);
+    renderer.render();
+
+    // Global z-order preserved: sky (1), mid (2), ground (3) — even though mid
+    // draws through a different camera.
+    const calls = MockBackend.getDrawCalls();
+    try testing.expectEqual(@as(usize, 3), calls.len);
+    try testing.expectEqual(@as(f32, 1), calls[0].dest.x);
+    try testing.expectEqual(@as(f32, 2), calls[1].dest.x);
+    try testing.expectEqual(@as(f32, 3), calls[2].dest.x);
+    // One camera pass per layer (sky→cam0, mid→cam1, ground→cam0).
+    try testing.expectEqual(@as(usize, 3), MockBackend.getCameraPasses().len);
+}
+
+test "CameraBinding: a bound .screen layer receives the camera transform (parallax)" {
+    // A screen layer with an explicit camera tag OVERRIDES pinning: it draws
+    // through the tagged camera (parallax). Its sibling pinned screen layer
+    // (no tag) draws with NO camera transform.
+    const ParaLayers = enum {
+        pinned, // screen, no tag → pinned (no camera)
+        para, // screen, camera "main" → parallax (camera transform)
+
+        pub fn config(self: @This()) LayerConfig {
+            return switch (self) {
+                .pinned => .{ .space = .screen, .order = -10 },
+                .para => .{ .space = .screen, .order = 0, .camera = "main" },
+            };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, ParaLayers, u32);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+    renderer.getCameraManager().setTag(0, "main");
+
+    const p0 = ecs.createEntity();
+    ecs.addComponent(p0, core.Position{ .x = 10, .y = 0 });
+    ecs.addComponent(p0, Renderer.Sprite{ .sprite_name = "pin", .layer = .pinned });
+    const p1 = ecs.createEntity();
+    ecs.addComponent(p1, core.Position{ .x = 20, .y = 0 });
+    ecs.addComponent(p1, Renderer.Sprite{ .sprite_name = "par", .layer = .para });
+    renderer.trackEntity(p0, .sprite);
+    renderer.trackEntity(p1, .sprite);
+    renderer.sync(MockEcs, &ecs);
+
+    const Rec = struct {
+        pinned_in_cam: bool = true,
+        para_in_cam: bool = false,
+        fn cb(self: *@This(), layer: ParaLayers, cam: *const Renderer.CameraType) void {
+            _ = cam;
+            switch (layer) {
+                .pinned => self.pinned_in_cam = MockBackend.isInCameraMode(),
+                .para => self.para_in_cam = MockBackend.isInCameraMode(),
+            }
+        }
+    };
+    var rec = Rec{};
+    renderer.renderWithLayerHook(*Rec, &rec, Rec.cb);
+
+    // The bound screen layer draws INSIDE the camera transform; the pinned one
+    // does not. Exactly one camera pass — the parallax layer's.
+    try testing.expect(rec.para_in_cam);
+    try testing.expect(!rec.pinned_in_cam);
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(usize, 2), MockBackend.getDrawCalls().len);
+}
+
+test "CameraBinding: a .screen layer tagged 'main' follows slot 0 with ZERO authored cameras (default-camera invariant)" {
+    // codex gfx#303 (A): a screen layer explicitly tagged "main" in a scene
+    // with NO authored Camera entity must resolve THROUGH slot 0 (camera-bound
+    // — it moves with the main view), NOT hit the fallback and pin. The
+    // default-camera invariant (slot 0 pre-tagged "main") is what guarantees
+    // this WITHOUT any setTag call here. A NON-"main" tagged screen layer whose
+    // camera is missing still pins (verified by the parallax/warn tests).
+    const SkyLayers = enum {
+        main_screen, // screen, camera "main" → binds to slot 0 (the invariant)
+
+        pub fn config(_: @This()) LayerConfig {
+            return .{ .space = .screen, .order = 0, .camera = "main" };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, SkyLayers, u32);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+    // No setTag / no authored cameras — rely purely on the invariant.
+
+    const e = ecs.createEntity();
+    ecs.addComponent(e, core.Position{ .x = 9, .y = 0 });
+    ecs.addComponent(e, Renderer.Sprite{ .sprite_name = "sky", .layer = .main_screen });
+    renderer.trackEntity(e, .sprite);
+    renderer.sync(MockEcs, &ecs);
+
+    const Rec = struct {
+        in_cam: bool = false,
+        fires: usize = 0,
+        fn cb(self: *@This(), layer: SkyLayers, cam: *const Renderer.CameraType) void {
+            _ = layer;
+            _ = cam;
+            self.in_cam = MockBackend.isInCameraMode();
+            self.fires += 1;
+        }
+    };
+    var rec = Rec{};
+    renderer.renderWithLayerHook(*Rec, &rec, Rec.cb);
+
+    // Camera-bound (NOT pinned): drew inside slot 0's transform → one camera
+    // pass, and the layer never latched the unresolved-tag fallback warning.
+    try testing.expectEqual(@as(usize, 1), rec.fires);
+    try testing.expect(rec.in_cam);
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+    try testing.expect(!renderer.cameraBindingWarned(.main_screen));
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCalls().len);
+}
+
+test "CameraBinding: on_after_layer receives the BOUND camera, inside its transform" {
+    // The interleave hook must receive the camera the layer is bound to (not
+    // slot 0). Bind a world layer to "hero" carried ONLY by camera 1, which is
+    // parked at a distinctive x — the hook must observe that camera.
+    const HeroLayers = enum {
+        hero_world, // world, camera "hero"
+
+        pub fn config(_: @This()) LayerConfig {
+            return .{ .space = .world, .order = 0, .camera = "hero" };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, HeroLayers, u32);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    const mgr = renderer.getCameraManager();
+    mgr.setActive(1, true); // camera 0 (untagged) + camera 1 ("hero") active
+    mgr.setTag(1, "hero");
+    mgr.getCamera(1).setPosition(555, 0);
+
+    const e = ecs.createEntity();
+    ecs.addComponent(e, core.Position{ .x = 7, .y = 0 });
+    ecs.addComponent(e, Renderer.Sprite{ .sprite_name = "h", .layer = .hero_world });
+    renderer.trackEntity(e, .sprite);
+    renderer.sync(MockEcs, &ecs);
+
+    const Rec = struct {
+        cam_x: f32 = -1,
+        in_cam: bool = false,
+        fires: usize = 0,
+        fn cb(self: *@This(), layer: HeroLayers, cam: *const Renderer.CameraType) void {
+            _ = layer;
+            self.cam_x = cam.x;
+            self.in_cam = MockBackend.isInCameraMode();
+            self.fires += 1;
+        }
+    };
+    var rec = Rec{};
+    renderer.renderWithLayerHook(*Rec, &rec, Rec.cb);
+
+    // Fired once (only camera 1 carries "hero"), receiving camera 1 (x==555),
+    // inside its transform.
+    try testing.expectEqual(@as(usize, 1), rec.fires);
+    try testing.expectEqual(@as(f32, 555), rec.cam_x);
+    try testing.expect(rec.in_cam);
+}
+
+test "CameraBinding: an unresolved explicit tag falls back (slot 0) and warns exactly once" {
+    // A layer bound to a tag NO active camera carries is a config mistake: the
+    // renderer renders it unbound (slot 0) so nothing vanishes, and warns ONCE
+    // per layer for the renderer's lifetime (deduped by the flag array).
+    const WarnLayers = enum {
+        bg, // screen, pinned (no warn)
+        bound, // world, camera "ghost" (unresolved → warn once)
+        fg, // screen, pinned (no warn)
+
+        pub fn config(self: @This()) LayerConfig {
+            return switch (self) {
+                .bg => .{ .space = .screen, .order = -10 },
+                .bound => .{ .space = .world, .order = 0, .camera = "ghost" },
+                .fg => .{ .space = .screen, .order = 10 },
+            };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, WarnLayers, u32);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+    // No camera carries "ghost" — camera 0 stays untagged/active.
+
+    const e = ecs.createEntity();
+    ecs.addComponent(e, core.Position{ .x = 42, .y = 0 });
+    ecs.addComponent(e, Renderer.Sprite{ .sprite_name = "b", .layer = .bound });
+    renderer.trackEntity(e, .sprite);
+    renderer.sync(MockEcs, &ecs);
+
+    // Not yet warned before the first render.
+    try testing.expect(!renderer.cameraBindingWarned(.bound));
+
+    renderer.render();
+    // First frame: the unresolved-tag fallback warning fired and latched the
+    // per-layer dedup flag (the warning prints once to stderr — expected).
+    try testing.expect(renderer.cameraBindingWarned(.bound));
+
+    renderer.render(); // second frame: flag already set ⇒ the warn gate is closed
+    // Flag stays latched (one-shot) — the warning cannot fire a second time.
+    try testing.expect(renderer.cameraBindingWarned(.bound));
+    // Pinned screen layers never warn.
+    try testing.expect(!renderer.cameraBindingWarned(.bg));
+    try testing.expect(!renderer.cameraBindingWarned(.fg));
+
+    // The bound layer still rendered via the slot-0 fallback: its sprite drew,
+    // inside a (default) camera transform.
+    const calls = MockBackend.getDrawCalls();
+    try testing.expect(calls.len >= 1);
+    try testing.expectEqual(@as(f32, 42), calls[calls.len - 1].dest.x);
+    // Fallback world layer entered slot 0 once per frame → 2 passes over 2 frames.
+    try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
+}
+
+test "CameraBinding: a .world fallback layer stays inside cam0's viewport, not full-window (gfx#303)" {
+    // gfx#303 (gemini HIGH): the unbound/unresolved .world fallback used to
+    // clear the viewport UNCONDITIONALLY, so under a split-screen cam0 that
+    // owns a screen_viewport the world fallback layer escaped to full-window.
+    // It must instead be constrained to cam0's viewport (applyViewport(cam0)).
+    const WLayers = enum {
+        // World layer bound to an EXPLICIT unresolved tag → slot-0 fallback.
+        // (An implicit-"main" world layer now resolves through slot 0 via the
+        // binding path per the default-camera invariant, so it never reaches
+        // the fallback — the explicit missing tag is how a world layer still
+        // does.)
+        w,
+
+        pub fn config(_: @This()) LayerConfig {
+            return .{ .space = .world, .order = 0, .camera = "ghost" };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, WLayers, u32);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    // cam0 (slot 0) owns a split-screen viewport (left half); no camera carries
+    // "ghost", so the world layer takes the slot-0 fallback path.
+    renderer.getCameraManager().getCamera(0).screen_viewport =
+        .{ .x = 0, .y = 0, .width = 400, .height = 600 };
+
+    const e = ecs.createEntity();
+    ecs.addComponent(e, core.Position{ .x = 5, .y = 0 });
+    ecs.addComponent(e, Renderer.Sprite{ .sprite_name = "w", .layer = .w });
+    renderer.trackEntity(e, .sprite);
+    renderer.sync(MockEcs, &ecs);
+    renderer.render();
+
+    // The world fallback applied cam0's viewport (setViewport recorded) instead
+    // of clearing to full-window (clearViewport records nothing). Pre-fix this
+    // list is empty — the escape-to-full-window bug.
+    const vps = MockBackend.getViewportCalls();
+    try testing.expectEqual(@as(usize, 1), vps.len);
+    try testing.expectEqual(@as(i32, 0), vps[0].x);
+    try testing.expectEqual(@as(i32, 400), vps[0].width);
+    try testing.expectEqual(@as(i32, 600), vps[0].height);
+
+    // Still drew, inside a (slot-0) camera transform.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCalls().len);
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
 }

@@ -21,6 +21,20 @@ pub const LayerConfig = struct {
     space: LayerSpace = .world,
     order: i8 = 0,
     visible: bool = true,
+    /// The camera-tag this layer is transformed by (camera-bound layers,
+    /// labelle-engine#723/#724). A comptime string naming a camera tag (see
+    /// `CameraManager.setTag`). The renderer draws this layer through every
+    /// active camera carrying that tag.
+    ///
+    /// `null` (the default) means "use the implicit binding":
+    ///   - `.world` layers bind to the implicit `"main"` tag.
+    ///   - `.screen` / `.screen_fill` layers stay pinned (no camera
+    ///     transform), aspect-fit as their `space` describes.
+    ///
+    /// A NON-null tag on a screen-space layer OVERRIDES pinning — the layer
+    /// then receives that camera's transform (parallax); `space` keeps only
+    /// its fit meaning (`.screen` = aspect-fit, `.screen_fill` = fill).
+    camera: ?[]const u8 = null,
 };
 
 /// Default layer set for simple games
