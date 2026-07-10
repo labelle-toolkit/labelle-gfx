@@ -2464,8 +2464,12 @@ test "renderWithLayerHooks: split-screen fires per camera, each scissored to its
     // applied (its own is the most recent).
     try testing.expectEqual(@as(usize, 1), rec.events[0].viewport_count);
     try testing.expectEqual(@as(usize, 2), rec.events[1].viewport_count);
-    // Two active cameras ⇒ two split-screen viewport applications total.
-    try testing.expectEqual(@as(usize, 2), MockBackend.getViewportCalls().len);
+    // Viewport applications: the before-hook prelude applies one per active
+    // camera (cam0 left, cam1 right = 2). The DefaultLayers world layer is
+    // untagged here → it takes the slot-0 fallback, which now applies cam0's
+    // OWN viewport (gfx#303: a world fallback must not escape to full-window)
+    // ⇒ one more, 3 total. The two screen layers clear (unrecorded).
+    try testing.expectEqual(@as(usize, 3), MockBackend.getViewportCalls().len);
     // Each camera's before-hook drew its own background rectangle.
     try testing.expectEqual(@as(usize, 2), MockBackend.getShapeCallCount());
 }
@@ -2822,4 +2826,56 @@ test "CameraBinding: an unresolved explicit tag falls back (slot 0) and warns ex
     try testing.expectEqual(@as(f32, 42), calls[calls.len - 1].dest.x);
     // Fallback world layer entered slot 0 once per frame → 2 passes over 2 frames.
     try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
+}
+
+test "CameraBinding: a .world fallback layer stays inside cam0's viewport, not full-window (gfx#303)" {
+    // gfx#303 (gemini HIGH): the unbound/unresolved .world fallback used to
+    // clear the viewport UNCONDITIONALLY, so under a split-screen cam0 that
+    // owns a screen_viewport the world fallback layer escaped to full-window.
+    // It must instead be constrained to cam0's viewport (applyViewport(cam0)).
+    const WLayers = enum {
+        w, // world, implicit "main" — unresolved (cam0 untagged) → fallback
+
+        pub fn config(_: @This()) LayerConfig {
+            return .{ .space = .world, .order = 0 };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, WLayers, u32);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    // cam0 owns a split-screen viewport (left half); no camera carries "main",
+    // so the world layer takes the slot-0 fallback path.
+    renderer.getCameraManager().getCamera(0).screen_viewport =
+        .{ .x = 0, .y = 0, .width = 400, .height = 600 };
+
+    const e = ecs.createEntity();
+    ecs.addComponent(e, core.Position{ .x = 5, .y = 0 });
+    ecs.addComponent(e, Renderer.Sprite{ .sprite_name = "w", .layer = .w });
+    renderer.trackEntity(e, .sprite);
+    renderer.sync(MockEcs, &ecs);
+    renderer.render();
+
+    // The world fallback applied cam0's viewport (setViewport recorded) instead
+    // of clearing to full-window (clearViewport records nothing). Pre-fix this
+    // list is empty — the escape-to-full-window bug.
+    const vps = MockBackend.getViewportCalls();
+    try testing.expectEqual(@as(usize, 1), vps.len);
+    try testing.expectEqual(@as(i32, 0), vps[0].x);
+    try testing.expectEqual(@as(i32, 400), vps[0].width);
+    try testing.expectEqual(@as(i32, 600), vps[0].height);
+
+    // Still drew, inside a (slot-0) camera transform.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCalls().len);
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
 }

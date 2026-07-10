@@ -753,18 +753,29 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                 // back to slot 0). An UNRESOLVED EXPLICIT tag is a config
                 // mistake — render unbound (slot 0) and warn ONCE per layer.
                 if (!rendered) {
-                    clearViewport();
-                    if (@hasDecl(BackendImpl, "setApplyFit")) {
-                        BackendImpl.setApplyFit(space != .screen_fill);
-                    }
                     const cam0 = self.camera_mgr.getCamera(0);
                     if (space == .world) {
+                        // Respect cam0's OWN viewport (gfx#303): a world
+                        // fallback layer must stay constrained to slot 0's
+                        // split-screen viewport, not escape to full-window.
+                        // `applyViewport` clears when cam0 has no viewport, so
+                        // the single-camera path is byte-identical to a bare
+                        // `clearViewport()` (the GOLDEN is unaffected).
+                        applyViewport(cam0);
+                        if (@hasDecl(BackendImpl, "setApplyFit")) {
+                            BackendImpl.setApplyFit(space != .screen_fill);
+                        }
                         cam0.begin();
                         self.inner.renderLayer(layer);
                         on_after_layer(ctx, layer, cam0);
                         cam0.end();
                     } else {
-                        // Pinned screen layer — no camera transform.
+                        // Pinned screen layer — full-window, no camera transform
+                        // (the RFC's documented pinned baseline).
+                        clearViewport();
+                        if (@hasDecl(BackendImpl, "setApplyFit")) {
+                            BackendImpl.setApplyFit(space != .screen_fill);
+                        }
                         self.inner.renderLayer(layer);
                         on_after_layer(ctx, layer, cam0);
                     }
