@@ -141,6 +141,35 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             self.screen_height = height;
         }
 
+        /// React to a midgame framebuffer resolution change (labelle-gfx#249).
+        ///
+        /// The gfx-side entry point the engine's `framebuffer_resized` handler
+        /// calls after a backend `onResize` (Android orientation flip,
+        /// multi-window resize, foldable unfold). Given the new physical
+        /// framebuffer dimensions it:
+        ///
+        ///  1. Updates `screen_height` so the Y-up ↔ Y-down flip (`toScreenY`)
+        ///     references the *new* height — otherwise every world entity would
+        ///     flip against the stale height and render shifted after a resize.
+        ///  2. Fans out to the camera manager (`onFramebufferResize`) to re-fit
+        ///     split-screen viewports and recenter any `auto_recenter` cameras
+        ///     onto the re-fitted design canvas.
+        ///
+        /// Design-canvas re-fitting itself (the optional "design follows
+        /// physical aspect" mode + touch-coord remap) lives behind the
+        /// backend's `setDesignSize`; the engine handler calls that before this
+        /// when the project opts in. See labelle-gfx#249.
+        pub fn onFramebufferResize(self: *Self, new_width: f32, new_height: f32) void {
+            // `new_width` is accepted so the signature matches the engine's
+            // `framebuffer_resized { new_w, new_h, ... }` event, but the
+            // renderer only caches height (for the Y-flip). The camera manager
+            // reads the new width straight from the backend's `getScreenWidth`
+            // when it re-fits split-screen viewports, so it isn't needed here.
+            _ = new_width;
+            self.screen_height = new_height;
+            self.camera_mgr.onFramebufferResize();
+        }
+
         /// Enable/disable spatial-grid viewport culling for world-space
         /// layers. When enabled, `render` only issues draw calls for
         /// entities whose bounding box overlaps the primary camera's

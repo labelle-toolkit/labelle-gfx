@@ -180,6 +180,125 @@ const PillarboxBackend = struct {
     pub fn endMode2D() void {}
 };
 
+// Resizable test backend for midgame resolution changes (labelle-gfx#249).
+// Screen and design dimensions are mutable statics so a test can simulate an
+// Android orientation flip / window resize between calls. Defines
+// `getDesignWidth/Height` so `centerOnDesign` takes its non-fallback path and
+// tracks the *current* design canvas.
+const ResizableBackend = struct {
+    pub const Camera2D = struct {
+        offset: Vector2 = .{},
+        target: Vector2 = .{},
+        rotation: f32 = 0,
+        zoom: f32 = 1,
+    };
+    pub const Vector2 = struct { x: f32 = 0, y: f32 = 0 };
+
+    var screen_w: i32 = 800;
+    var screen_h: i32 = 600;
+    var design_w: i32 = 800;
+    var design_h: i32 = 600;
+
+    pub fn reset() void {
+        screen_w = 800;
+        screen_h = 600;
+        design_w = 800;
+        design_h = 600;
+    }
+
+    /// Simulate a framebuffer resolution change (orientation flip / resize).
+    /// `design_follows_physical` mirrors the "design follows physical aspect"
+    /// mode the engine handler would drive via `setDesignSize`.
+    pub fn resize(w: i32, h: i32, design_follows_physical: bool) void {
+        screen_w = w;
+        screen_h = h;
+        if (design_follows_physical) {
+            design_w = w;
+            design_h = h;
+        }
+    }
+
+    pub fn getScreenWidth() i32 {
+        return screen_w;
+    }
+    pub fn getScreenHeight() i32 {
+        return screen_h;
+    }
+    pub fn getDesignWidth() i32 {
+        return design_w;
+    }
+    pub fn getDesignHeight() i32 {
+        return design_h;
+    }
+    pub fn screenToWorld(pos: Vector2, _: Camera2D) Vector2 {
+        return pos;
+    }
+    pub fn worldToScreen(pos: Vector2, _: Camera2D) Vector2 {
+        return pos;
+    }
+    pub fn beginMode2D(_: Camera2D) void {}
+    pub fn endMode2D() void {}
+};
+
+pub const ResizeTests = struct {
+    test "onFramebufferResize recomputes centerOnDesign for auto_recenter camera" {
+        ResizableBackend.reset();
+        const Cam = camera.Camera(ResizableBackend);
+        var cam = Cam.init();
+        cam.setAutoRecenter(true);
+        cam.centerOnDesign();
+        // 800x600 design → centered at (400, 300).
+        try std.testing.expectEqual(@as(f32, 400), cam.x);
+        try std.testing.expectEqual(@as(f32, 300), cam.y);
+
+        // Orientation flip to portrait with design-follows-physical: the
+        // design canvas becomes 600x800.
+        ResizableBackend.resize(600, 800, true);
+        cam.onFramebufferResize();
+        // Recomputed center = (300, 400): the transform actually changed.
+        try std.testing.expectEqual(@as(f32, 300), cam.x);
+        try std.testing.expectEqual(@as(f32, 400), cam.y);
+    }
+
+    test "onFramebufferResize leaves a manually positioned camera untouched" {
+        ResizableBackend.reset();
+        const Cam = camera.Camera(ResizableBackend);
+        var cam = Cam.init();
+        // auto_recenter defaults off; the game placed this camera by hand.
+        cam.setPosition(123, 456);
+        ResizableBackend.resize(600, 800, true);
+        cam.onFramebufferResize();
+        try std.testing.expectEqual(@as(f32, 123), cam.x);
+        try std.testing.expectEqual(@as(f32, 456), cam.y);
+    }
+
+    test "manager onFramebufferResize recenters opted-in cameras and re-fits split viewports" {
+        ResizableBackend.reset();
+        const Mgr = camera.CameraManager(ResizableBackend);
+        var mgr = Mgr.init();
+        mgr.getCamera(0).setAutoRecenter(true);
+        mgr.getCamera(0).centerOnDesign();
+        try std.testing.expectEqual(@as(f32, 400), mgr.getCamera(0).x);
+
+        // Landscape vertical split: slot 0 covers the left half (width 400).
+        mgr.setupSplitScreen(.vertical_split);
+        mgr.getCamera(1).setAutoRecenter(true);
+        try std.testing.expectEqual(@as(i32, 400), mgr.getCamera(0).screen_viewport.?.width);
+
+        // Flip to portrait 600x800 (design follows physical).
+        ResizableBackend.resize(600, 800, true);
+        mgr.onFramebufferResize();
+
+        // Split viewports re-fit to the new width (left half is now 300).
+        try std.testing.expectEqual(@as(i32, 300), mgr.getCamera(0).screen_viewport.?.width);
+        // Both opted-in cameras recentered onto the re-fitted 600x800 design.
+        try std.testing.expectEqual(@as(f32, 300), mgr.getCamera(0).x);
+        try std.testing.expectEqual(@as(f32, 400), mgr.getCamera(0).y);
+        try std.testing.expectEqual(@as(f32, 300), mgr.getCamera(1).x);
+        try std.testing.expectEqual(@as(f32, 400), mgr.getCamera(1).y);
+    }
+};
+
 pub const CameraTests = struct {
     test "init creates camera at origin" {
         const Cam = camera.Camera(MockBackend);
