@@ -741,6 +741,13 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             inline for (sorted) |layer| {
                 self.renderLayerWithCandidates(layer, frame_candidates);
             }
+            // Restore the fitted default once, after the whole pass. Each
+            // layer sets its own fit mode on entry, so layer-to-layer
+            // transitions need no reset — but the frame must not end in
+            // fill mode when the last layer was `screen_fill`.
+            if (comptime @hasDecl(BackendImpl, "setApplyFit")) {
+                BackendImpl.setApplyFit(true);
+            }
         }
 
         pub fn renderLayer(self: *Self, layer: LayerEnum) void {
@@ -764,9 +771,13 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             self.renderSpritesOnLayer(layer, candidates);
             self.renderShapesOnLayer(layer, candidates);
             self.renderTextsOnLayer(layer, candidates);
-            if (comptime @hasDecl(BackendImpl, "setApplyFit")) {
-                BackendImpl.setApplyFit(true);
-            }
+            // NO trailing reset here: the caller owns the end-of-pass restore.
+            // Resetting inside the layer would flip the fit back BEFORE the
+            // layer-hook path's `on_after_layer` runs (renderer.zig documents
+            // the layer's fit mode as still active for interleaved draws on
+            // `screen_fill` layers, e.g. tilemaps). The hook path restores at
+            // the end of `renderThroughCamera`; the no-hook `render()` below
+            // restores after its layer loop.
         }
 
         // Render one layer using a candidate id set already computed for
@@ -792,9 +803,13 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             self.renderSpritesOnLayer(layer, candidates);
             self.renderShapesOnLayer(layer, candidates);
             self.renderTextsOnLayer(layer, candidates);
-            if (comptime @hasDecl(BackendImpl, "setApplyFit")) {
-                BackendImpl.setApplyFit(true);
-            }
+            // NO trailing reset here: the caller owns the end-of-pass restore.
+            // Resetting inside the layer would flip the fit back BEFORE the
+            // layer-hook path's `on_after_layer` runs (renderer.zig documents
+            // the layer's fit mode as still active for interleaved draws on
+            // `screen_fill` layers, e.g. tilemaps). The hook path restores at
+            // the end of `renderThroughCamera`; the no-hook `render()` below
+            // restores after its layer loop.
         }
 
         const SortEntry = struct {
