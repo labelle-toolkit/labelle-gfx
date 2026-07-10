@@ -118,6 +118,11 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
         /// viewport. Guards against popping at the screen edge for
         /// entities whose drawn extent exceeds the indexed AABB.
         cull_margin: f32 = 64,
+        /// One flag per sorted layer: whether the "explicit camera tag
+        /// resolved to no active camera" warning has already fired for that
+        /// layer. Dedupes the fallback warning to ONCE per layer for the
+        /// renderer's lifetime (camera-bound layers, labelle-engine#723/#724).
+        layer_warned: [sorted_layers.len]bool = [_]bool{false} ** sorted_layers.len,
 
         pub fn init(allocator: std.mem.Allocator) Self {
             return .{
@@ -581,10 +586,24 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             }
         }
 
-        /// Render every active camera. In single-camera mode this is one
-        /// pass through camera 0; in split-screen mode it iterates all
-        /// active cameras (labelle-gfx#226 — previously only the primary
-        /// camera was ever rendered, so cameras 1-3 were invisible).
+        /// Introspection: whether the "explicit camera tag resolved to no
+        /// active camera" fallback warning has already fired for `layer`. The
+        /// warning is deduped to ONCE per layer for this renderer's lifetime
+        /// (camera-bound layers, labelle-engine#723/#724); this exposes that
+        /// one-shot flag so tests/tools can confirm the dedup without scraping
+        /// the log.
+        pub fn cameraBindingWarned(self: *const Self, layer: LayerEnum) bool {
+            inline for (sorted_layers, 0..) |l, i| {
+                if (l == layer) return self.layer_warned[i];
+            }
+            return false;
+        }
+
+        /// Render all layers in global z-order, drawing each through the
+        /// camera(s) it is bound to (camera-bound layers,
+        /// labelle-engine#723/#724). World layers bind to the implicit "main"
+        /// camera; screen layers pin unless explicitly tagged. With a single
+        /// active camera this reproduces the pre-binding output exactly.
         ///
         /// Delegates to `renderWithLayerHooks` with two no-op callbacks, so
         /// behavior is IDENTICAL to a direct layer loop — both comptime
@@ -600,8 +619,8 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
         /// Returned via a comptime-memoized helper so that the SAME function
         /// instance is produced everywhere `noopBefore(Ctx)` is called (Zig
         /// memoizes comptime calls). That identity is what lets
-        /// `renderThroughCamera` recognise the no-op case and fold the entire
-        /// before-hook block (including `cam.begin`/`cam.end`) away, keeping
+        /// `renderWithLayerHooks` recognise the no-op case and fold the entire
+        /// per-camera prelude (including `cam.begin`/`cam.end`) away, keeping
         /// `render` / `renderWithLayerHook` byte-for-byte behavior-identical.
         fn noopBefore(comptime Ctx: type) fn (ctx: Ctx, cam: *const CameraT) void {
             return struct {
@@ -609,18 +628,20 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             }.f;
         }
 
-        /// Render every active camera, invoking `on_after_layer` after each
-        /// layer's sprite pass. For WORLD-space layers the callback runs while
-        /// still INSIDE that layer's active camera transform (camera.begin
-        /// already applied), so a caller can interleave additional world-space
-        /// draws (e.g. tilemap layers) at that layer's Z, once per active
-        /// camera. For SCREEN-space (`.screen` / `.screen_fill`) layers the
-        /// callback runs OUTSIDE any camera transform — the loop has already
-        /// exited the camera before those layers draw. In both cases the
-        /// backend's fit mode (`setApplyFit`) and split-screen viewport/scissor
-        /// (`applyViewport`) for that layer's pass are still in effect at the
-        /// call point. `ctx` is forwarded unchanged; `on_after_layer` is
-        /// comptime so it folds away entirely when unused.
+        /// Render every layer in global z-order, invoking `on_after_layer`
+        /// after each layer's sprite pass, ONCE per camera the layer is drawn
+        /// through (camera-bound layers, labelle-engine#723/#724). A layer
+        /// bound to a camera tag (world layers imply `"main"`; screen layers
+        /// pin unless they carry an explicit tag) fires the callback while
+        /// INSIDE that BOUND camera's transform (`cam.begin` applied) — so a
+        /// caller can interleave additional world-space draws (e.g. tilemap
+        /// layers) at that layer's Z, under the right camera, once per matching
+        /// camera. A pinned/unbound layer fires the callback OUTSIDE any camera
+        /// transform (slot-0 camera passed for signature stability). In all
+        /// cases the backend's fit mode (`setApplyFit`) and split-screen
+        /// viewport/scissor (`applyViewport`) for that layer's pass are still in
+        /// effect at the call point. `ctx` is forwarded unchanged;
+        /// `on_after_layer` is comptime so it folds away entirely when unused.
         pub fn renderWithLayerHook(
             self: *Self,
             comptime Ctx: type,
@@ -642,7 +663,8 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
         /// (gfx#709). `on_after_layer` fires exactly as in
         /// `renderWithLayerHook` (after each layer's sprite pass). Both hooks
         /// are comptime → they fold away entirely when unused, and a no-op
-        /// `on_before_layers` adds ZERO backend calls (see `renderThroughCamera`).
+        /// `on_before_layers` adds ZERO backend calls (the per-camera prelude
+        /// is gated on a non-no-op hook).
         pub fn renderWithLayerHooks(
             self: *Self,
             comptime Ctx: type,
@@ -651,101 +673,117 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             comptime on_after_layer: fn (ctx: Ctx, layer: LayerEnum, cam: *const CameraT) void,
         ) void {
             // Viewport culling (labelle-gfx#208) populates the engine's
-            // global cull rect once per frame, derived from the primary
-            // camera, before any camera pass.
+            // global cull rect once per frame, derived from the union of all
+            // active cameras, before any layer pass.
             if (self.viewport_culling) {
                 self.applyCullViewport();
             }
-            var it = self.camera_mgr.activeIterator();
-            while (it.next()) |cam| {
-                applyViewport(cam);
-                self.renderThroughCamera(Ctx, ctx, on_before_layers, on_after_layer, cam);
-            }
-            clearViewport();
-        }
 
-        /// Render all layers once, entering/exiting `cam` for world
-        /// layers. Factored out of `render` so each active camera in a
-        /// split-screen layout draws the full layer stack.
-        fn renderThroughCamera(
-            self: *Self,
-            comptime Ctx: type,
-            ctx: Ctx,
-            comptime on_before_layers: fn (ctx: Ctx, cam: *const CameraT) void,
-            comptime on_after_layer: fn (ctx: Ctx, layer: LayerEnum, cam: *const CameraT) void,
-            cam: *const CameraT,
-        ) void {
-            // Per-camera BEFORE-layers hook (gfx#709 enabler). Draws a
-            // world-space, viewport-scissored BACKGROUND (e.g. unbound tilemap
-            // layers) UNDER all sprite layers. It fires ONCE for THIS camera:
-            // the caller (`renderWithLayerHooks`) has already applied this
-            // camera's split-screen viewport/scissor (`applyViewport`) and the
-            // frame's cull rect (`applyCullViewport`), so the hook's draws are
-            // clipped to this camera's viewport. We enter the camera's WORLD
-            // transform (`cam.begin`) so the draws are world-space, invoke the
-            // hook, then exit (`cam.end`) — leaving the per-layer camera state
-            // machine below to run byte-for-byte as before (it re-enters the
-            // camera lazily at the first world layer). The whole block folds
-            // away when `on_before_layers` is the canonical no-op (i.e.
-            // `render` / `renderWithLayerHook`), so those paths add ZERO extra
-            // backend calls and stay behavior-identical.
+            // ── Per-camera prelude (gfx#709 enabler) ──────────────────────
+            // The BEFORE-layers hook draws a world-space, viewport-scissored
+            // BACKGROUND (e.g. unbound tilemap layers) UNDER all sprite layers,
+            // ONCE per active camera. It is hoisted OUT of the layer-outer loop
+            // so it keeps firing per active camera exactly as it did when the
+            // loop was camera-outer (the tilemapBackgroundHook contract, #709):
+            // each camera's viewport/scissor (`applyViewport`) is applied, the
+            // camera's WORLD transform entered (`cam.begin`), the hook invoked,
+            // then the transform exited. The whole block folds away when
+            // `on_before_layers` is the canonical no-op (`render` /
+            // `renderWithLayerHook`), so those paths add ZERO backend calls and
+            // stay behavior-identical.
             if (comptime on_before_layers != noopBefore(Ctx)) {
-                // Match the fit mode a WORLD layer uses (`space != .screen_fill`
-                // ⇒ true) so `cam.begin`'s projection matches the world layers
-                // drawn below.
-                if (@hasDecl(BackendImpl, "setApplyFit")) {
-                    BackendImpl.setApplyFit(true);
-                }
-                cam.begin();
-                on_before_layers(ctx, cam);
-                cam.end();
-            }
-
-            var in_camera = false;
-            inline for (sorted_layers) |layer| {
-                const space = layer.config().space;
-                const is_world = space == .world;
-
-                // Exit the camera FIRST if we're moving from a world
-                // layer to a non-world layer.
-                if (!is_world and in_camera) {
-                    cam.end();
-                    in_camera = false;
-                }
-
-                // Then update the backend's fit mode for the upcoming
-                // layer. This must happen between camera.end() and
-                // camera.begin() — a backend's beginMode2D may build its
-                // projection / viewport using the current fit state, so
-                // entering camera mode while still in fill mode from a
-                // previous `screen_fill` layer would set up the wrong
-                // matrix for the world layer. The hook is optional;
-                // backends without it ignore `.screen_fill` and treat it
-                // like `.screen`.
-                if (@hasDecl(BackendImpl, "setApplyFit")) {
-                    BackendImpl.setApplyFit(space != .screen_fill);
-                }
-
-                // Now (re-)enter the camera if needed for this layer.
-                if (is_world and !in_camera) {
+                var pit = self.camera_mgr.activeIterator();
+                while (pit.next()) |cam| {
+                    applyViewport(cam);
+                    // Match the fit mode a WORLD layer uses so the hook's
+                    // projection matches the world layers drawn below.
+                    if (@hasDecl(BackendImpl, "setApplyFit")) {
+                        BackendImpl.setApplyFit(true);
+                    }
                     cam.begin();
-                    in_camera = true;
+                    on_before_layers(ctx, cam);
+                    cam.end();
+                }
+            }
+
+            // ── Layer-outer, camera-inner loop ────────────────────────────
+            // For each layer in global sorted (z) order, resolve its camera
+            // binding and draw it through every active camera carrying that
+            // tag. Global layer order is preserved because the OUTER loop is
+            // the layer loop — a layer bound to a secondary camera still draws
+            // at its own z between the layers above and below it.
+            inline for (sorted_layers, 0..) |layer, layer_idx| {
+                const cfg = comptime layer.config();
+                const space = cfg.space;
+                const explicit_tag: ?[]const u8 = comptime cfg.camera;
+                // Resolved binding: explicit tag wins; else `.world` implies
+                // the implicit "main" camera; else (screen) is pinned (null).
+                const binding: ?[]const u8 = comptime explicit_tag orelse
+                    (if (space == .world) "main" else null);
+
+                var rendered = false;
+                if (binding) |tag| {
+                    var it = self.camera_mgr.activeIterator();
+                    while (it.next()) |cam| {
+                        if (!cam.hasTag(tag)) continue;
+                        applyViewport(cam);
+                        // Fit mode must be set BEFORE `cam.begin` — a backend's
+                        // beginMode2D can build its projection from the current
+                        // fit state. A bound `.screen` layer still gets the
+                        // camera transform (parallax) but keeps fit ON; only
+                        // `.screen_fill` turns fit OFF.
+                        if (@hasDecl(BackendImpl, "setApplyFit")) {
+                            BackendImpl.setApplyFit(space != .screen_fill);
+                        }
+                        cam.begin();
+                        self.inner.renderLayer(layer);
+                        // Interleave hook receives the BOUND camera, inside its
+                        // transform + fit, so a caller (tilemap interleaving)
+                        // draws at this layer's z under the right camera.
+                        on_after_layer(ctx, layer, cam);
+                        cam.end();
+                        rendered = true;
+                    }
                 }
 
-                self.inner.renderLayer(layer);
+                // ── Fallback (unbound, or bound to a tag no active camera
+                // carries) ──────────────────────────────────────────────────
+                // A `null` binding is the intentional pinned/default path
+                // (screen layers pin; world layers with no "main" camera fall
+                // back to slot 0). An UNRESOLVED EXPLICIT tag is a config
+                // mistake — render unbound (slot 0) and warn ONCE per layer.
+                if (!rendered) {
+                    clearViewport();
+                    if (@hasDecl(BackendImpl, "setApplyFit")) {
+                        BackendImpl.setApplyFit(space != .screen_fill);
+                    }
+                    const cam0 = self.camera_mgr.getCamera(0);
+                    if (space == .world) {
+                        cam0.begin();
+                        self.inner.renderLayer(layer);
+                        on_after_layer(ctx, layer, cam0);
+                        cam0.end();
+                    } else {
+                        // Pinned screen layer — no camera transform.
+                        self.inner.renderLayer(layer);
+                        on_after_layer(ctx, layer, cam0);
+                    }
+                    if (comptime explicit_tag != null) {
+                        if (!self.layer_warned[layer_idx]) {
+                            self.layer_warned[layer_idx] = true;
+                            std.log.scoped(.labelle_gfx).warn(
+                                "layer '{s}' bound to camera tag '{s}' but no active camera carries it — rendering unbound (slot 0)",
+                                .{ @tagName(layer), explicit_tag.? },
+                            );
+                        }
+                    }
+                }
+            }
 
-                // Interleave hook: fires immediately after this layer's
-                // sprite pass and BEFORE any camera exit for the next
-                // iteration, so for a world layer `in_camera == true` and
-                // the callback's draws land inside `cam`'s transform.
-                on_after_layer(ctx, layer, cam);
-            }
-            if (in_camera) {
-                cam.end();
-            }
             if (@hasDecl(BackendImpl, "setApplyFit")) {
                 BackendImpl.setApplyFit(true);
             }
+            clearViewport();
         }
 
         /// Render ephemeral gizmo draws (debug lines, rects, circles, arrows).

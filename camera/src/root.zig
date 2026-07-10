@@ -104,8 +104,36 @@ pub fn CameraWith(comptime BackendImpl: type, comptime y_axis: YAxis) type {
         bounds: Bounds = .{},
         screen_viewport: ?ScreenViewport = null,
 
+        /// Camera-tag storage (camera-bound layers, labelle-engine#723/#724).
+        /// A layer names a camera tag; the renderer draws it through every
+        /// active camera whose tag matches. Stored INLINE (fixed buffer, never
+        /// a heap slice) so a camera stays trivially copyable. Empty
+        /// (`tag_len == 0`) means untagged.
+        tag_buf: [16:0]u8 = [_:0]u8{0} ** 16,
+        tag_len: u8 = 0,
+
         pub fn init() Self {
             return .{};
+        }
+
+        /// Set this camera's tag (camera-bound layers). Asserts the tag fits
+        /// the inline buffer (≤ 15 bytes, leaving room for a null terminator).
+        pub fn setTag(self: *Self, s: []const u8) void {
+            std.debug.assert(s.len <= 15);
+            @memcpy(self.tag_buf[0..s.len], s);
+            self.tag_buf[s.len] = 0;
+            self.tag_len = @intCast(s.len);
+        }
+
+        /// Clear this camera's tag (untag it).
+        pub fn clearTag(self: *Self) void {
+            self.tag_len = 0;
+            self.tag_buf[0] = 0;
+        }
+
+        /// Whether this camera carries the given tag.
+        pub fn hasTag(self: *const Self, s: []const u8) bool {
+            return std.mem.eql(u8, self.tag_buf[0..self.tag_len], s);
         }
 
         pub fn initCentered() Self {
@@ -449,6 +477,40 @@ pub fn CameraManagerWith(comptime BackendImpl: type, comptime y_axis: YAxis) typ
                 self.active_mask |= (@as(u4, 1) << index);
             } else {
                 self.active_mask &= ~(@as(u4, 1) << index);
+            }
+        }
+
+        /// Tag the camera in `index` (camera-bound layers,
+        /// labelle-engine#723/#724). A world/screen layer whose
+        /// `LayerConfig.camera` equals this tag renders through this camera.
+        pub fn setTag(self: *Self, index: u2, s: []const u8) void {
+            self.cameras[index].setTag(s);
+        }
+
+        /// The lowest active camera slot carrying `s`, or `null` if none.
+        /// Deterministic (scans slots 0→3 and returns the first match) so the
+        /// engine's tag→camera resolution never depends on iteration luck.
+        pub fn findByTag(self: *Self, s: []const u8) ?*CameraT {
+            var i: u3 = 0;
+            while (i < MAX_CAMERAS) : (i += 1) {
+                const idx: u2 = @intCast(i);
+                if (self.isActive(idx) and self.cameras[idx].hasTag(s)) {
+                    return &self.cameras[idx];
+                }
+            }
+            return null;
+        }
+
+        /// Deactivate the secondary camera slots (1–3) AND clear their tags,
+        /// leaving slot 0 untouched. The engine's reset-then-seed primitive:
+        /// call before re-seeding a scene's camera bindings so stale secondary
+        /// cameras never linger active or carry a previous scene's tag.
+        pub fn resetSecondary(self: *Self) void {
+            var i: u3 = 1;
+            while (i < MAX_CAMERAS) : (i += 1) {
+                const idx: u2 = @intCast(i);
+                self.setActive(idx, false);
+                self.cameras[idx].clearTag();
             }
         }
 
