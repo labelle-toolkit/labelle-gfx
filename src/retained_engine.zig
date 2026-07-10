@@ -741,20 +741,60 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             inline for (sorted) |layer| {
                 self.renderLayerWithCandidates(layer, frame_candidates);
             }
+            // Restore the fitted default once, after the whole pass. Each
+            // layer sets its own fit mode on entry, so layer-to-layer
+            // transitions need no reset — but the frame must not end in
+            // fill mode when the last layer was `screen_fill`.
+            if (comptime @hasDecl(BackendImpl, "setApplyFit")) {
+                BackendImpl.setApplyFit(true);
+            }
         }
 
-        pub fn renderLayer(self: *Self, layer: LayerEnum) void {
-            // Standalone single-layer entry point: compute the candidate
-            // set for this layer on its own (the `render` fast path
-            // shares one query across all layers instead).
+        /// Render one layer as part of a larger pass. Sets the layer's fit
+        /// mode on entry and leaves it ACTIVE on return — the pass owner
+        /// restores the fitted default at the end. The layer-hook path
+        /// depends on this: `on_after_layer` runs with the layer's fit mode
+        /// still live (tilemap interleaves on `screen_fill` layers), and
+        /// `renderThroughCamera` restores after the pass.
+        pub fn renderLayerInPass(self: *Self, layer: LayerEnum) void {
+            // Compute the candidate set for this layer on its own (the
+            // `render` fast path shares one query across all layers instead).
             const candidates: ?[]const u32 = blk: {
                 if (!isWorldLayer(layer)) break :blk null;
                 const vp = self.cull_viewport orelse break :blk null;
                 break :blk self.cullCandidates(vp);
             };
+            // Screen-fill layers (backdrops) stretch design→framebuffer with
+            // NO aspect-fit so they cover the pillarbox bars — otherwise a
+            // window wider than the design leaves an uncovered gap
+            // (labelle-bgfx#42). Every other layer keeps the fit. Mirrors the
+            // layer-hook path in renderer.zig; guarded so backends without the
+            // toggle are unaffected (they fall back to a normal fitted layer).
+            if (comptime @hasDecl(BackendImpl, "setApplyFit")) {
+                BackendImpl.setApplyFit(layer.config().space != .screen_fill);
+            }
             self.renderSpritesOnLayer(layer, candidates);
             self.renderShapesOnLayer(layer, candidates);
             self.renderTextsOnLayer(layer, candidates);
+            // NO trailing reset here: the caller owns the end-of-pass restore.
+            // Resetting inside the layer would flip the fit back BEFORE the
+            // layer-hook path's `on_after_layer` runs (renderer.zig documents
+            // the layer's fit mode as still active for interleaved draws on
+            // `screen_fill` layers, e.g. tilemaps). The hook path restores at
+            // the end of `renderThroughCamera`; the no-hook `render()` below
+            // restores after its layer loop; standalone callers get the
+            // restoring `renderLayer` wrapper below.
+        }
+
+        /// Standalone single-layer entry point: like `renderLayerInPass`,
+        /// but restores the fitted default before returning, so a direct
+        /// consumer rendering a lone `screen_fill` layer is never left in
+        /// fill mode for its subsequent draws.
+        pub fn renderLayer(self: *Self, layer: LayerEnum) void {
+            self.renderLayerInPass(layer);
+            if (comptime @hasDecl(BackendImpl, "setApplyFit")) {
+                BackendImpl.setApplyFit(true);
+            }
         }
 
         // Render one layer using a candidate id set already computed for
@@ -768,9 +808,25 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 if (self.cull_viewport == null) break :blk null;
                 break :blk frame_candidates;
             };
+            // Screen-fill layers (backdrops) stretch design→framebuffer with
+            // NO aspect-fit so they cover the pillarbox bars — otherwise a
+            // window wider than the design leaves an uncovered gap
+            // (labelle-bgfx#42). Every other layer keeps the fit. Mirrors the
+            // layer-hook path in renderer.zig; guarded so backends without the
+            // toggle are unaffected (they fall back to a normal fitted layer).
+            if (comptime @hasDecl(BackendImpl, "setApplyFit")) {
+                BackendImpl.setApplyFit(layer.config().space != .screen_fill);
+            }
             self.renderSpritesOnLayer(layer, candidates);
             self.renderShapesOnLayer(layer, candidates);
             self.renderTextsOnLayer(layer, candidates);
+            // NO trailing reset here: the caller owns the end-of-pass restore.
+            // Resetting inside the layer would flip the fit back BEFORE the
+            // layer-hook path's `on_after_layer` runs (renderer.zig documents
+            // the layer's fit mode as still active for interleaved draws on
+            // `screen_fill` layers, e.g. tilemaps). The hook path restores at
+            // the end of `renderThroughCamera`; the no-hook `render()` below
+            // restores after its layer loop.
         }
 
         const SortEntry = struct {
