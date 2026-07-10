@@ -732,7 +732,10 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                     in_camera = true;
                 }
 
-                self.inner.renderLayer(layer);
+                // In-pass variant: leaves the layer's fit mode active so
+                // the interleave hook below still draws in it; this pass
+                // restores the fitted default at its end.
+                self.inner.renderLayerInPass(layer);
 
                 // Interleave hook: fires immediately after this layer's
                 // sprite pass and BEFORE any camera exit for the next

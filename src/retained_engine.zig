@@ -750,10 +750,15 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             }
         }
 
-        pub fn renderLayer(self: *Self, layer: LayerEnum) void {
-            // Standalone single-layer entry point: compute the candidate
-            // set for this layer on its own (the `render` fast path
-            // shares one query across all layers instead).
+        /// Render one layer as part of a larger pass. Sets the layer's fit
+        /// mode on entry and leaves it ACTIVE on return — the pass owner
+        /// restores the fitted default at the end. The layer-hook path
+        /// depends on this: `on_after_layer` runs with the layer's fit mode
+        /// still live (tilemap interleaves on `screen_fill` layers), and
+        /// `renderThroughCamera` restores after the pass.
+        pub fn renderLayerInPass(self: *Self, layer: LayerEnum) void {
+            // Compute the candidate set for this layer on its own (the
+            // `render` fast path shares one query across all layers instead).
             const candidates: ?[]const u32 = blk: {
                 if (!isWorldLayer(layer)) break :blk null;
                 const vp = self.cull_viewport orelse break :blk null;
@@ -777,7 +782,19 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // the layer's fit mode as still active for interleaved draws on
             // `screen_fill` layers, e.g. tilemaps). The hook path restores at
             // the end of `renderThroughCamera`; the no-hook `render()` below
-            // restores after its layer loop.
+            // restores after its layer loop; standalone callers get the
+            // restoring `renderLayer` wrapper below.
+        }
+
+        /// Standalone single-layer entry point: like `renderLayerInPass`,
+        /// but restores the fitted default before returning, so a direct
+        /// consumer rendering a lone `screen_fill` layer is never left in
+        /// fill mode for its subsequent draws.
+        pub fn renderLayer(self: *Self, layer: LayerEnum) void {
+            self.renderLayerInPass(layer);
+            if (comptime @hasDecl(BackendImpl, "setApplyFit")) {
+                BackendImpl.setApplyFit(true);
+            }
         }
 
         // Render one layer using a candidate id set already computed for
