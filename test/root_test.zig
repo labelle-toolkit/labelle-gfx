@@ -1174,6 +1174,59 @@ test "GfxRenderer: screenToDesign callable on a const renderer reference" {
     try testing.expectEqual(@as(f32, 8.0), out.y);
 }
 
+// ── GOLDEN REGRESSION: single-active-camera draw sequence (gfx#724 PR 1) ──
+//
+// The camera-layer-binding inversion (labelle-engine#723/#724 PR 1) flips the
+// renderer from camera-outer to layer-outer. The load-bearing invariant: with a
+// SINGLE active camera the emitted draw-call sequence and camera-pass count must
+// stay byte-for-byte identical to the pre-inversion output. This golden pins the
+// baseline BEFORE the rewrite and must remain green after it.
+test "GOLDEN gfx#724: single active camera draw sequence (layer order + one camera pass)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    // One sprite per layer at a distinct x so draw order is observable:
+    // background (screen, order -10), world (world, 0), ui (screen, 10).
+    const bg = ecs.createEntity();
+    ecs.addComponent(bg, core.Position{ .x = 11, .y = 0 });
+    ecs.addComponent(bg, Renderer.Sprite{ .sprite_name = "bg", .layer = .background });
+
+    const wld = ecs.createEntity();
+    ecs.addComponent(wld, core.Position{ .x = 22, .y = 0 });
+    ecs.addComponent(wld, Renderer.Sprite{ .sprite_name = "wld", .layer = .world });
+
+    const ui = ecs.createEntity();
+    ecs.addComponent(ui, core.Position{ .x = 33, .y = 0 });
+    ecs.addComponent(ui, Renderer.Sprite{ .sprite_name = "ui", .layer = .ui });
+
+    renderer.trackEntity(bg, .sprite);
+    renderer.trackEntity(wld, .sprite);
+    renderer.trackEntity(ui, .sprite);
+    renderer.sync(MockEcs, &ecs);
+    renderer.render();
+
+    // Exactly one camera pass: the single active camera enters once for the
+    // one world layer; the two screen layers draw pinned (no camera).
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+
+    // Draw calls appear in sorted layer order: background, world, ui.
+    const calls = MockBackend.getDrawCalls();
+    try testing.expectEqual(@as(usize, 3), calls.len);
+    try testing.expectEqual(@as(f32, 11), calls[0].dest.x);
+    try testing.expectEqual(@as(f32, 22), calls[1].dest.x);
+    try testing.expectEqual(@as(f32, 33), calls[2].dest.x);
+}
+
 // ── GfxRenderer multi-camera (regression: labelle-gfx#226) ──
 
 test "GfxRenderer: getCamera targets the selected camera in split-screen" {
