@@ -427,20 +427,15 @@ flash a flat tint-swap can't express.
 `effects.Flash` is a **type** in gfx; `MaterialEffect.flash` is an **enum tag** in
 `core.backend_contract`. They never clash at the language level.
 
-**Resolution (recommended): rename the CPU component + document the relationship.**
+**Resolution (DECIDED — rename the CPU component + document the relationship).**
 
 - Rename `effects.Flash` → **`effects.TintPulse`** (it *is* a timed tint pulse). Renames are
   free pre-release (no save-migrator needed — toolkit convention). `Fade`/`TemporalFade` are
-  fine as-is.
+  fine as-is. The rename lands in **P1** and updates the (few) in-tree callers.
 - Reserve the word "flash" for the GPU material effect.
 - Cross-reference both ways in doc comments: `effects.TintPulse` → "for a shader-based flash
   with soft edges / partial mix, use `MaterialEffect.flash`"; `MaterialEffect.flash` → "for a
   zero-cost, every-backend tint swap, use `effects.TintPulse`."
-
-**Fallback if the rename churn isn't wanted:** keep `effects.Flash`, rely on the
-type-vs-tag non-collision, and disambiguate purely in docs + a `## Effects vs materials`
-section of the gfx CLAUDE.md. This is a taste call touching game code — flagged as an open
-question (§8).
 
 ---
 
@@ -450,25 +445,41 @@ From [#305][305]: *flash + palette-swap materials on sprites and a bloom+CRT pos
 on **bgfx AND sokol** with identical visual results (screenshot-diff); **raylib degrades
 gracefully**; batching cost documented.*
 
-**The harness constraint (memory: sokol-only headless screenshots).** Only **sokol** can
-headless-screenshot with no GUI session (`gfx.Screenshot.writeBmp` / assembler ≥0.53.0);
-**bgfx and raylib need a window**. So the parity plan is asymmetric:
+**The headless-screenshot capability (verified against `labelle-bgfx/src/window.zig`).** Both
+lead candidates can capture a screenshot headless — the earlier "sokol only" framing was too
+absolute:
 
-- **sokol = the golden reference**, captured **headless in CI**. The flash + palette_swap +
-  bloom + CRT scene renders to a fixed frame and dumps a BMP; the golden is committed;
-  `zig build` diffs against it. This is the always-green gate.
-- **bgfx parity** is validated in a **windowed** job — a self-hosted runner with a display (or
-  a manual pre-merge gate), capturing via `rl.takeScreenshot`-equivalent / the bgfx window
-  path, diffed against the sokol golden with a tolerance (bloom/CRT are not bit-exact across
-  GPUs — use a perceptual/SSIM threshold, not exact pixel equality).
+- **bgfx** runs `--headless` by creating an **invisible GLFW window** (`glfw.windowHint(.visible,
+  false)`, `window.zig:303–310`) and reads the backbuffer back for `--screenshot`
+  (`bgfx.requestScreenShot`, `window.zig:726`). It is not *surfaceless* — bgfx needs a real
+  native surface to init its swapchain — but it gives the "no window pops up" CI behaviour and
+  keeps the render+readback path intact. Practical caveat: it needs a windowing
+  system/compositor present, which is **always the case on macOS** and needs **xvfb (or an EGL
+  surface)** on a headless Linux runner.
+- **sokol** is the *truly surfaceless* one (no native window at all), so it captures with no
+  display server whatsoever.
+
+Because **bgfx leads P1/P2 (decided)** and bgfx *can* headless-screenshot, the always-green
+golden exists **from P1**, not deferred:
+
+- **P1/P2 (bgfx, the lead):** the flash + palette_swap + bloom + CRT scenes render for a fixed
+  number of ticks under `--headless`, dump a BMP via `--screenshot`, the golden is committed,
+  and CI diffs against it. bgfx is also where the curated shaders are *authored* (reusing the
+  YUV toolchain / `programs.zig`), so leading with it costs nothing on the verification side.
+  The one CI-infra task is ensuring the bgfx screenshot job has a surface (native on the macOS
+  runner; xvfb on Linux).
+- **P3 (sokol, the parity backend):** sokol re-implements the set and captures **surfaceless**;
+  bgfx↔sokol parity is a perceptual/**SSIM** diff of the two goldens (bloom/CRT are not bit-exact
+  across GPUs — never exact pixel equality).
 - **raylib "degrades gracefully"** needs **no screenshot**: assert at comptime/init that
   `materialCapabilities(RaylibImpl)` and `postFxCapabilities(RaylibImpl)` report what raylib
   actually implements, then a windowed smoke run confirms the scene renders (sprites visible,
   no crash) with the effects dropped/passes skipped. Degradation is a *capability* assertion,
   not a pixel assertion.
 
-Acceptance is therefore: (1) sokol golden green in CI; (2) bgfx SSIM-parity in the windowed
-job; (3) raylib capability + smoke; (4) batching cost documented (§1.4).
+Acceptance is therefore: (1) P1/P2 bgfx **headless** golden green in CI + batching cost
+documented (§1.4); (2) P3 sokol surfaceless golden; (3) P3 bgfx↔sokol SSIM-parity; (4) raylib
+capability + smoke.
 
 ---
 
@@ -492,21 +503,24 @@ particles; it lands the seam engine#750's v2 builds on. Sequencing: material/pos
   the optional `drawTextureProMaterial` wrapper + `materialSupported` gate +
   `materialCapabilities`. (No version bump.)
 - gfx: `SpriteVisual.material` field + `drawSpriteEntry` branch + warn-once table.
-- **One backend** implements `flash` + `palette_swap` (see open Q on which backend leads).
-- sokol golden headless screenshot for the material scene; batching cost measured + documented.
-- Resolve the `Flash` rename (§5).
+- **bgfx leads** (decided): implements `flash` + `palette_swap`, authored on the YUV-path
+  toolchain (`programs.zig`).
+- **bgfx headless golden** (`--headless --screenshot`) for the material scene in CI; batching
+  cost measured + documented.
+- Rename `effects.Flash` → `effects.TintPulse` (§5, decided).
 
 **P2 — post-fx stack.**
 - Promote render targets to the formal optional `render_target` sub-surface.
 - `core.backend_contract`: `PostPassKind` / `PostPassUniforms` / `PostPass` + optional
   `applyPostPass` + `postPassSupported` + `postFxCapabilities`.
 - gfx: the ping-pong stack driver + runtime API (`setPostFx`/`pushPostPass`/`clearPostFx`).
-- assembler: `project.labelle` `.post_fx` declaration → generated initial stack.
-- Same backend as P1 implements `bloom` + `vignette` + `color_grade` + `crt`.
+- assembler: `project.labelle` `.post_fx` declaration → generated initial stack (**decided:
+  static declaration + runtime API, both — not runtime-only**).
+- bgfx (the P1 lead) implements `bloom` + `vignette` + `color_grade` + `crt`.
 
-**P3 — second backend + parity + full material set.**
-- The other of {bgfx, sokol} implements the material set + post passes.
-- Screenshot-diff **parity harness** bgfx ↔ sokol (sokol golden, bgfx windowed SSIM).
+**P3 — sokol (parity backend) + full material set.**
+- **sokol** implements the material set + post passes; captures **surfaceless** golden.
+- Screenshot-diff **parity harness** bgfx ↔ sokol (both headless goldens, perceptual SSIM diff).
 - raylib graceful-degradation validated (capability assertion + smoke).
 - Round out materials: `dissolve` + `outline`.
 - Manifest `.capabilities` mirror wired (pluggable-backends) so declared-but-unsupported
@@ -517,14 +531,23 @@ juice; P3 is the cross-backend guarantee.
 
 ---
 
-## 9. Open questions (need a decision)
+## 9. Open questions
 
-1. **Which backend leads P1/P2?** Tension: **bgfx** has the shader-program authoring precedent
-   (the YUV path — its toolchain already emits per-renderer variants), but **sokol** is the
-   *only* backend that produces the CI golden headless. Recommendation: **sokol leads** so the
-   golden exists from P1 day one; bgfx follows in P3 for parity. Confirm.
-2. **`Flash` rename** (§5): rename `effects.Flash` → `effects.TintPulse` (recommended,
-   free pre-release, but touches game code), or keep it and disambiguate in docs only?
+### Resolved (user decisions, 2026-07-10)
+
+- **Q1 — Which backend leads P1/P2? → bgfx leads.** It has the shader-program authoring
+  precedent (the YUV path, `programs.zig`). The earlier concern that only sokol can headless-
+  screenshot was **incorrect**: bgfx captures headless via an invisible GLFW window + backbuffer
+  readback (`window.zig:303–310`, `--headless --screenshot`), so the CI golden exists from P1
+  (§6). sokol is the P3 parity backend (surfaceless golden + SSIM diff).
+- **Q2 — `Flash` rename? → yes.** Rename `effects.Flash` → `effects.TintPulse` in P1; reserve
+  "flash" for the GPU material effect (§5).
+- **Q6 — `project.labelle` post-fx appetite? → static declaration + runtime API, both.** P2
+  ships the `.post_fx` block + codegen for the initial stack AND the runtime `setPostFx` API
+  (not runtime-only).
+
+### Still open
+
 3. **`color_grade` LUT format**: 2D unrolled strip (works everywhere) vs a true 3D texture
    (nicer, but not all backends expose 3D texture upload through the loader surface). Propose
    **2D strip** for v1 portability. Confirm.
@@ -537,10 +560,7 @@ juice; P3 is the cross-backend guarantee.
    enum (proposed — locked layout, no `@ptrCast`) vs a flat `[8]f32 + u32` bag the backend
    reinterprets. Union is safer/clearer; confirm the codegen adapter is happy with an `extern
    union` (the `Glyph` precedent is `extern struct`, not union — needs a quick assembler check).
-6. **`project.labelle` post-fx appetite**: is the assembler team OK adding a `.post_fx` block +
-   codegen for the initial stack in P2, or should v1 be **runtime-only** (`setPostFx`) with the
-   declaration deferred? Runtime-only is a smaller P2; the declaration can follow.
-7. **Post-fx and split-screen / multi-camera**: the stack composes over the *final* frame. Is a
+6. **Post-fx and split-screen / multi-camera**: the stack composes over the *final* frame. Is a
    whole-frame stack sufficient for v1, or is per-camera post-fx (each viewport its own stack)
    in scope? Propose whole-frame for v1; per-camera is a v2 (it multiplies the target count).
 
