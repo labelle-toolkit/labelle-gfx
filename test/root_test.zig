@@ -2465,10 +2465,10 @@ test "renderWithLayerHooks: split-screen fires per camera, each scissored to its
     try testing.expectEqual(@as(usize, 1), rec.events[0].viewport_count);
     try testing.expectEqual(@as(usize, 2), rec.events[1].viewport_count);
     // Viewport applications: the before-hook prelude applies one per active
-    // camera (cam0 left, cam1 right = 2). The DefaultLayers world layer is
-    // untagged here → it takes the slot-0 fallback, which now applies cam0's
-    // OWN viewport (gfx#303: a world fallback must not escape to full-window)
-    // ⇒ one more, 3 total. The two screen layers clear (unrecorded).
+    // camera (cam0 left, cam1 right = 2). The DefaultLayers world layer binds to
+    // "main", which resolves ONLY through slot-0 (cam1 is untagged here), so it
+    // applies cam0's viewport once more (gfx#303: a "main" world view stays
+    // inside cam0's viewport) ⇒ 3 total. The two screen layers clear (unrecorded).
     try testing.expectEqual(@as(usize, 3), MockBackend.getViewportCalls().len);
     // Each camera's before-hook drew its own background rectangle.
     try testing.expectEqual(@as(usize, 2), MockBackend.getShapeCallCount());
@@ -2555,32 +2555,59 @@ test "CameraManager: findByTag returns the lowest active slot; resetSecondary cl
     mgr.setActive(1, true);
     mgr.setActive(2, true);
     mgr.setActive(3, true);
-    // Two cameras carry "main"; findByTag must return the LOWEST active slot.
-    mgr.setTag(2, "main");
-    mgr.setTag(1, "main");
+    // Use a NON-"main" tag for the lowest-slot check — slot 0 is pre-tagged
+    // "main" by the default-camera invariant, so "main" always resolves to it.
+    // Two secondary cameras carry "hud"; findByTag returns the LOWEST active.
+    mgr.setTag(2, "hud");
+    mgr.setTag(1, "hud");
     mgr.setTag(3, "minimap");
 
-    try testing.expectEqual(mgr.getCamera(1), mgr.findByTag("main").?);
+    try testing.expectEqual(mgr.getCamera(1), mgr.findByTag("hud").?);
     try testing.expectEqual(mgr.getCamera(3), mgr.findByTag("minimap").?);
     try testing.expect(mgr.findByTag("nope") == null);
+    // The invariant: slot 0 is the "main" camera.
+    try testing.expectEqual(mgr.getCamera(0), mgr.findByTag("main").?);
 
     // An inactive camera carrying the tag is skipped.
     mgr.setActive(1, false);
-    try testing.expectEqual(mgr.getCamera(2), mgr.findByTag("main").?);
+    try testing.expectEqual(mgr.getCamera(2), mgr.findByTag("hud").?);
 
     // resetSecondary: slot 0 untouched; slots 1-3 deactivated AND untagged.
-    mgr.setActive(0, true);
-    mgr.setTag(0, "main");
+    mgr.setActive(1, true);
     mgr.resetSecondary();
     try testing.expect(mgr.isActive(0));
     try testing.expect(mgr.getCamera(0).hasTag("main")); // slot 0 preserved
     try testing.expect(!mgr.isActive(1));
     try testing.expect(!mgr.isActive(2));
     try testing.expect(!mgr.isActive(3));
-    try testing.expect(!mgr.getCamera(1).hasTag("main"));
+    try testing.expect(!mgr.getCamera(1).hasTag("hud"));
     try testing.expect(!mgr.getCamera(3).hasTag("minimap"));
-    // Slot 0 is still the only camera resolving "main".
+    // Slot 0 still resolves "main" after the reset.
     try testing.expectEqual(mgr.getCamera(0), mgr.findByTag("main").?);
+}
+
+test "CameraManager: default-camera invariant — slot 0 is active and 'main' from construction and across resets" {
+    const Mgr = gfx.CameraManager(MockBackend);
+
+    // Freshly constructed: slot 0 active + tagged "main".
+    var mgr = Mgr.init();
+    try testing.expect(mgr.isActive(0));
+    try testing.expect(mgr.getCamera(0).hasTag("main"));
+    try testing.expectEqual(mgr.getCamera(0), mgr.findByTag("main").?);
+
+    // resetSecondary preserves slot 0's tag + active bit.
+    mgr.setActive(1, true);
+    mgr.setTag(1, "main"); // a stale secondary "main"
+    mgr.resetSecondary();
+    try testing.expect(mgr.isActive(0));
+    try testing.expect(mgr.getCamera(0).hasTag("main"));
+    try testing.expect(!mgr.isActive(1));
+    try testing.expect(!mgr.getCamera(1).hasTag("main"));
+
+    // initCentered upholds the invariant too.
+    var mgr2 = Mgr.initCentered();
+    try testing.expect(mgr2.isActive(0));
+    try testing.expect(mgr2.getCamera(0).hasTag("main"));
 }
 
 test "CameraBinding: middle layer bound to a secondary camera keeps global z-order (sky-under-world)" {
@@ -2709,6 +2736,63 @@ test "CameraBinding: a bound .screen layer receives the camera transform (parall
     try testing.expectEqual(@as(usize, 2), MockBackend.getDrawCalls().len);
 }
 
+test "CameraBinding: a .screen layer tagged 'main' follows slot 0 with ZERO authored cameras (default-camera invariant)" {
+    // codex gfx#303 (A): a screen layer explicitly tagged "main" in a scene
+    // with NO authored Camera entity must resolve THROUGH slot 0 (camera-bound
+    // — it moves with the main view), NOT hit the fallback and pin. The
+    // default-camera invariant (slot 0 pre-tagged "main") is what guarantees
+    // this WITHOUT any setTag call here. A NON-"main" tagged screen layer whose
+    // camera is missing still pins (verified by the parallax/warn tests).
+    const SkyLayers = enum {
+        main_screen, // screen, camera "main" → binds to slot 0 (the invariant)
+
+        pub fn config(_: @This()) LayerConfig {
+            return .{ .space = .screen, .order = 0, .camera = "main" };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    const Renderer = GfxRenderer(MockBackend, SkyLayers, u32);
+
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+    // No setTag / no authored cameras — rely purely on the invariant.
+
+    const e = ecs.createEntity();
+    ecs.addComponent(e, core.Position{ .x = 9, .y = 0 });
+    ecs.addComponent(e, Renderer.Sprite{ .sprite_name = "sky", .layer = .main_screen });
+    renderer.trackEntity(e, .sprite);
+    renderer.sync(MockEcs, &ecs);
+
+    const Rec = struct {
+        in_cam: bool = false,
+        fires: usize = 0,
+        fn cb(self: *@This(), layer: SkyLayers, cam: *const Renderer.CameraType) void {
+            _ = layer;
+            _ = cam;
+            self.in_cam = MockBackend.isInCameraMode();
+            self.fires += 1;
+        }
+    };
+    var rec = Rec{};
+    renderer.renderWithLayerHook(*Rec, &rec, Rec.cb);
+
+    // Camera-bound (NOT pinned): drew inside slot 0's transform → one camera
+    // pass, and the layer never latched the unresolved-tag fallback warning.
+    try testing.expectEqual(@as(usize, 1), rec.fires);
+    try testing.expect(rec.in_cam);
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+    try testing.expect(!renderer.cameraBindingWarned(.main_screen));
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCalls().len);
+}
+
 test "CameraBinding: on_after_layer receives the BOUND camera, inside its transform" {
     // The interleave hook must receive the camera the layer is bound to (not
     // slot 0). Bind a world layer to "hero" carried ONLY by camera 1, which is
@@ -2834,10 +2918,15 @@ test "CameraBinding: a .world fallback layer stays inside cam0's viewport, not f
     // owns a screen_viewport the world fallback layer escaped to full-window.
     // It must instead be constrained to cam0's viewport (applyViewport(cam0)).
     const WLayers = enum {
-        w, // world, implicit "main" — unresolved (cam0 untagged) → fallback
+        // World layer bound to an EXPLICIT unresolved tag → slot-0 fallback.
+        // (An implicit-"main" world layer now resolves through slot 0 via the
+        // binding path per the default-camera invariant, so it never reaches
+        // the fallback — the explicit missing tag is how a world layer still
+        // does.)
+        w,
 
         pub fn config(_: @This()) LayerConfig {
-            return .{ .space = .world, .order = 0 };
+            return .{ .space = .world, .order = 0, .camera = "ghost" };
         }
     };
 
@@ -2854,8 +2943,8 @@ test "CameraBinding: a .world fallback layer stays inside cam0's viewport, not f
     defer renderer.deinit();
     renderer.setScreenHeight(600);
 
-    // cam0 owns a split-screen viewport (left half); no camera carries "main",
-    // so the world layer takes the slot-0 fallback path.
+    // cam0 (slot 0) owns a split-screen viewport (left half); no camera carries
+    // "ghost", so the world layer takes the slot-0 fallback path.
     renderer.getCameraManager().getCamera(0).screen_viewport =
         .{ .x = 0, .y = 0, .width = 400, .height = 600 };
 

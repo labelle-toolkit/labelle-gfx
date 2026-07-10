@@ -753,6 +753,12 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                 // back to slot 0). An UNRESOLVED EXPLICIT tag is a config
                 // mistake — render unbound (slot 0) and warn ONCE per layer.
                 if (!rendered) {
+                    // Default-camera invariant (camera/src/root.zig): slot 0 is
+                    // ALWAYS active, so it is a sound fallback target. Assert it
+                    // rather than silently leaking slot 0's content into a frame
+                    // meant only for secondary cameras if the invariant were
+                    // ever violated (codex gfx#303). Folds away in release.
+                    std.debug.assert(self.camera_mgr.isActive(0));
                     const cam0 = self.camera_mgr.getCamera(0);
                     if (space == .world) {
                         // Respect cam0's OWN viewport (gfx#303): a world

@@ -420,12 +420,23 @@ pub fn CameraManagerWith(comptime BackendImpl: type, comptime y_axis: YAxis) typ
         current_layout: SplitScreenLayout = .single,
 
         pub fn init() Self {
-            return .{};
+            var mgr = Self{};
+            // Default-camera invariant (camera-bound layers,
+            // labelle-engine#723/#724): slot 0 is ALWAYS active (`active_mask`
+            // default 0b0001) and ALWAYS carries the "main" tag. This makes any
+            // "main"-bound layer (world layers implicitly, screen layers when
+            // explicitly tagged) resolve through slot 0 via the normal binding
+            // path even in a scene with ZERO authored Camera entities — so the
+            // primary view never falls back to an untagged camera. Secondary
+            // slots (1–3) start untagged; `resetSecondary` never clears slot 0.
+            mgr.cameras[0].setTag("main");
+            return mgr;
         }
 
         pub fn initCentered() Self {
             var mgr = Self{};
             mgr.cameras[0].centerOnScreen();
+            mgr.cameras[0].setTag("main"); // uphold the default-camera invariant
             return mgr;
         }
 
@@ -505,6 +516,10 @@ pub fn CameraManagerWith(comptime BackendImpl: type, comptime y_axis: YAxis) typ
         /// leaving slot 0 untouched. The engine's reset-then-seed primitive:
         /// call before re-seeding a scene's camera bindings so stale secondary
         /// cameras never linger active or carry a previous scene's tag.
+        ///
+        /// Slot 0 is deliberately skipped (loop starts at 1): the
+        /// default-camera invariant keeps slot 0 active and "main"-tagged
+        /// across resets, so the primary "main" binding survives a scene swap.
         pub fn resetSecondary(self: *Self) void {
             var i: u3 = 1;
             while (i < MAX_CAMERAS) : (i += 1) {
