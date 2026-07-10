@@ -196,7 +196,16 @@ pub fn CameraWith(comptime BackendImpl: type, comptime y_axis: YAxis) type {
         /// position across a resize. The engine's `framebuffer_resized` handler
         /// calls this (via the manager) after each backend `onResize`.
         pub fn onFramebufferResize(self: *Self) void {
-            if (self.auto_recenter) self.centerOnDesign();
+            if (self.auto_recenter) {
+                self.centerOnDesign();
+                // `centerOnDesign` writes x/y directly (like the design
+                // center is unconstrained), so re-apply the same bounds
+                // clamp every other mutator uses — otherwise a bounded
+                // camera can land outside its bounds after a resize. No-op
+                // when bounds are disabled, so unbounded cameras are
+                // unchanged (labelle-gfx#249 review).
+                self.clampToBounds();
+            }
         }
 
         pub fn setPosition(self: *Self, x: f32, y: f32) void {

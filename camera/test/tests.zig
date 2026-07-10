@@ -218,6 +218,14 @@ const ResizableBackend = struct {
         }
     }
 
+    /// Set the design canvas independently of the physical screen — lets a
+    /// test grow the design past the camera's bounds while keeping the
+    /// viewport (screen) small, so the bounds clamp genuinely constrains.
+    pub fn setDesign(w: i32, h: i32) void {
+        design_w = w;
+        design_h = h;
+    }
+
     pub fn getScreenWidth() i32 {
         return screen_w;
     }
@@ -270,6 +278,32 @@ pub const ResizeTests = struct {
         cam.onFramebufferResize();
         try std.testing.expectEqual(@as(f32, 123), cam.x);
         try std.testing.expectEqual(@as(f32, 456), cam.y);
+    }
+
+    test "onFramebufferResize keeps an auto_recenter camera inside its bounds" {
+        ResizableBackend.reset();
+        // Small physical viewport (400x300 → half-extents 200x150) so a bounds
+        // clamp with room to spare actually constrains the recenter.
+        ResizableBackend.resize(400, 300, false);
+        const Cam = camera.Camera(ResizableBackend);
+        var cam = Cam.init();
+        cam.setAutoRecenter(true);
+        // Bounds (0,0 .. 800,600): valid center range is x∈[200,600], y∈[150,450].
+        cam.setBounds(0, 0, 800, 600);
+        cam.centerOnDesign(); // design still 800x600 → (400,300), inside bounds
+        try std.testing.expectEqual(@as(f32, 400), cam.x);
+        try std.testing.expectEqual(@as(f32, 300), cam.y);
+
+        // Grow the design canvas past the bounds (physical viewport unchanged).
+        // Unclamped centerOnDesign would jump to (800, 600) — outside the
+        // bounds' valid center range.
+        ResizableBackend.setDesign(1600, 1200);
+        cam.onFramebufferResize();
+
+        // Re-applied clamp keeps the recentered camera at the bounds edge
+        // (600, 450), not the drifted (800, 600).
+        try std.testing.expectEqual(@as(f32, 600), cam.x);
+        try std.testing.expectEqual(@as(f32, 450), cam.y);
     }
 
     test "manager onFramebufferResize recenters opted-in cameras and re-fits split viewports" {
