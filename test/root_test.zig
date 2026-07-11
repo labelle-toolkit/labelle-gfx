@@ -2913,6 +2913,100 @@ test "renderWithLayerHooks: a no-op on_before_layers folds away — render() inj
     try testing.expectEqual(@as(usize, 0), MockBackend.getShapeCallCount());
 }
 
+// ── Post-fx through the CAMERA-AWARE render path (labelle-gfx#305/#309) ──
+//
+// The regression guard for the 1.28.0 no-op bug: gfx 1.28.0 wired the
+// `PostFxDriver.begin`/`resolve` only into the retained engine's STANDALONE
+// `render()`, but the engine's camera-aware path — `renderWithLayerHooks`,
+// which real games reach via `labelle run` — never drove the driver, so a
+// declarative `.post_fx` stack was silently a no-op for real games. The prior
+// post-fx tests all drove the driver in ISOLATION (or through the standalone
+// `render()`); NONE exercised the wrapping through `renderWithLayerHooks`,
+// which is exactly why the bug shipped. These two tests close that gap: they
+// assert the driver actually runs (begin allocates the ping-pong targets +
+// resolve applies the passes) AROUND the layer loop, and that an EMPTY stack
+// keeps the zero-cost byte-identical path.
+
+fn postFxNoopBefore(_: void, _: *const HookCamera) void {}
+fn postFxNoopAfter(_: void, _: DefaultLayers, _: *const HookCamera) void {}
+
+test "renderWithLayerHooks: an active post-fx stack drives begin+resolve around the layer loop (gfx#309)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = HookRenderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(480);
+
+    // A world-layer shape so the scene actually draws — it must land in the
+    // offscreen redirect target, not straight to the backbuffer.
+    const e = ecs.createEntity();
+    ecs.addComponent(e, core.Position{ .x = 10, .y = 20 });
+    ecs.addComponent(e, HookRenderer.Shape{
+        .shape = .{ .line = .{ .end = .{ .x = 5, .y = 6 } } },
+        .color = .{ .r = 1, .g = 2, .b = 3, .a = 4 },
+    });
+    renderer.trackEntity(e, .shape);
+    renderer.sync(MockEcs, &ecs);
+
+    // Declarative-equivalent: seed an active [bloom, vignette] stack, both
+    // supported by the mock.
+    renderer.inner.setPostFx(&.{ .{ .kind = .bloom }, .{ .kind = .vignette } });
+
+    // The CAMERA-AWARE path — what `labelle run` drives. This is the wrapping
+    // this PR adds; it must fire begin BEFORE and resolve AFTER the layer loop.
+    renderer.renderWithLayerHooks(void, {}, postFxNoopBefore, postFxNoopAfter);
+
+    // `begin` allocated the two ping-pong targets (proves the scene was
+    // redirected offscreen through THIS path — not the standalone render()).
+    try testing.expectEqual(@as(usize, 2), MockBackend.getRenderTargetCallCount());
+    // `resolve` walked the stack: bloom then vignette applied, in order.
+    const passes = MockBackend.getPostPassCalls();
+    try testing.expectEqual(@as(usize, 2), passes.len);
+    try testing.expectEqual(core.PostPassKind.bloom, passes[0].kind);
+    try testing.expectEqual(core.PostPassKind.vignette, passes[1].kind);
+    // Redirection ended before the final blit — back to the backbuffer.
+    try testing.expectEqual(@as(u32, 0), MockBackend.getActiveRenderTarget());
+    // The scene's world-layer line still drew (into the offscreen target).
+    try testing.expectEqual(@as(usize, 1), MockBackend.getLineCallCount());
+}
+
+test "renderWithLayerHooks: an empty post-fx stack drives NO target/pass (zero-cost path, gfx#309)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = HookRenderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(480);
+
+    const e = ecs.createEntity();
+    ecs.addComponent(e, core.Position{ .x = 10, .y = 20 });
+    ecs.addComponent(e, HookRenderer.Shape{
+        .shape = .{ .line = .{ .end = .{ .x = 5, .y = 6 } } },
+        .color = .{ .r = 1, .g = 2, .b = 3, .a = 4 },
+    });
+    renderer.trackEntity(e, .shape);
+    renderer.sync(MockEcs, &ecs);
+
+    // No `setPostFx` → the stack is empty → `active()` is false → begin binds
+    // nothing and returns false, resolve never runs. Byte-identical to pre-#305.
+    renderer.renderWithLayerHooks(void, {}, postFxNoopBefore, postFxNoopAfter);
+
+    try testing.expectEqual(@as(usize, 0), MockBackend.getRenderTargetCallCount());
+    try testing.expectEqual(@as(usize, 0), MockBackend.getPostPassCallCount());
+    try testing.expectEqual(@as(u32, 0), MockBackend.getActiveRenderTarget());
+    // The scene still rendered straight to the backbuffer.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getLineCallCount());
+}
+
 // ── Camera-bound layers (labelle-engine#723/#724 PR 1) ─────────────────
 //
 // Layers name a camera TAG (`LayerConfig.camera`); the renderer draws each

@@ -711,10 +711,17 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             // returns false, so `resolve` never runs — byte-identical to the
             // pre-#305 path.
             const post_fx_active = self.inner.post_fx.active();
+            // Query the backbuffer dimensions ONCE per active frame and reuse
+            // them for both `begin` and `resolve` — they are stable within a
+            // single render call (gfx#309, gemini). The query stays INSIDE the
+            // `active` guard so the no-post-fx path adds ZERO backend calls and
+            // remains byte-identical to the pre-#305 baseline.
+            var post_fx_w: u16 = 0;
+            var post_fx_h: u16 = 0;
             if (post_fx_active) {
-                const w: u16 = @intCast(B.getScreenWidth());
-                const h: u16 = @intCast(B.getScreenHeight());
-                _ = self.inner.post_fx.begin(w, h);
+                post_fx_w = @intCast(B.getScreenWidth());
+                post_fx_h = @intCast(B.getScreenHeight());
+                _ = self.inner.post_fx.begin(post_fx_w, post_fx_h);
             }
 
             // Viewport culling (labelle-gfx#208) populates the engine's
@@ -851,9 +858,7 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             // ping-pong pass chain, composite to the backbuffer. No-op unless
             // `begin` redirected above (guarded by the same `active` state).
             if (post_fx_active) {
-                const w: u16 = @intCast(B.getScreenWidth());
-                const h: u16 = @intCast(B.getScreenHeight());
-                self.inner.post_fx.resolve(w, h);
+                self.inner.post_fx.resolve(post_fx_w, post_fx_h);
             }
         }
 
