@@ -464,26 +464,26 @@ gracefully**; batching cost documented.*
 lead candidates can capture a screenshot headless — the earlier "sokol only" framing was too
 absolute:
 
-- **bgfx** runs `--headless` by creating an **invisible GLFW window** (`glfw.windowHint(.visible,
-  false)`, `window.zig:303–310`) and reads the backbuffer back for `--screenshot`
-  (`bgfx.requestScreenShot`, `window.zig:726`). It is not *surfaceless* — bgfx needs a real
-  native surface to init its swapchain — but it gives the "no window pops up" CI behaviour and
-  keeps the render+readback path intact. Practical caveat: the invisible window still needs a
-  native surface — a **logged-in GUI session on macOS** (present on GitHub-hosted macOS
-  runners; NOT in a bare sessionless SSH/agent shell) or **xvfb / an EGL surface on Linux**.
-- **sokol** is the *truly surfaceless* one (raw Metal device, no native window at all), so it
-  captures with no GUI session / display server whatsoever — the only option from a bare
-  sessionless shell.
+- **bgfx has TWO headless paths.** (1) The older `--headless` knob renders into an **invisible
+  GLFW window** (`glfw.windowHint(.visible, false)`, `window.zig:303–310`) + backbuffer
+  readback — that one needs a real native surface (a GUI session / xvfb). (2) **The one that
+  matters here: a truly *surfaceless* `initHeadless` path** (labelle-bgfx#36) — a raw Metal
+  offscreen framebuffer, `nwh = null`, **no window at all** — captured to a TGA. This is what
+  the Slice-B golden actually uses, and it runs with **no GUI session / display server**, same
+  as sokol. So the earlier "bgfx needs a surface" caveat is superseded: bgfx captures fully
+  headless.
+- **sokol** is also truly surfaceless (raw Metal device, no native window). Either backend can
+  produce a golden from a bare sessionless shell via its surfaceless offscreen path.
 
-Because **bgfx leads P1/P2 (decided)** and bgfx *can* headless-screenshot, the always-green
-golden exists **from P1**, not deferred:
+Because **bgfx leads P1/P2 (decided)** and bgfx captures *truly surfaceless* (bgfx#36), the
+always-green golden exists **from P1**, no CI-surface caveat:
 
-- **P1/P2 (bgfx, the lead):** the flash + palette_swap + bloom + CRT scenes render for a fixed
-  number of ticks under `--headless`, dump a BMP via `--screenshot`, the golden is committed,
-  and CI diffs against it. bgfx is also where the curated shaders are *authored* (reusing the
-  YUV toolchain / `programs.zig`), so leading with it costs nothing on the verification side.
-  The one CI-infra task is ensuring the bgfx screenshot job has a surface (native on the macOS
-  runner; xvfb on Linux).
+- **P1/P2 (bgfx, the lead):** the flash + palette_swap (P1) then bloom + CRT (P2) scenes render
+  for a fixed number of ticks through the surfaceless `initHeadless` offscreen FB, dump a TGA,
+  the golden is committed, and CI (`zig build material-golden`) diffs against it with a
+  per-channel tolerance. **P1 status: DONE — golden blessed at 0/73728 outlier bytes.** bgfx is
+  also where the curated shaders are *authored* (reusing the YUV toolchain / `programs.zig`), so
+  leading with it costs nothing on the verification side.
 - **P3 (sokol, the parity backend):** sokol re-implements the set and captures **surfaceless**;
   bgfx↔sokol parity is a perceptual/**SSIM** diff of the two goldens (bloom/CRT are not bit-exact
   across GPUs — never exact pixel equality).
