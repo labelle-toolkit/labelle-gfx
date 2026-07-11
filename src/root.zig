@@ -34,6 +34,18 @@ pub const MaterialEffect = backend_mod.MaterialEffect;
 pub const MaterialUniforms = backend_mod.MaterialUniforms;
 pub const MaterialCapabilities = backend_mod.MaterialCapabilities;
 pub const materialCapabilities = backend_mod.materialCapabilities;
+/// Full-screen post-fx pass stack (labelle-gfx#305, RFC §2). Value types +
+/// capability helpers from core, plus the gfx-owned ping-pong stack driver
+/// (`PostFxDriver`). The runtime API (`setPostFx`/`pushPostPass`/`clearPostFx`)
+/// lives on the retained engine surface.
+pub const post_fx_mod = @import("post_fx.zig");
+pub const PostFxDriver = post_fx_mod.PostFxDriver;
+pub const PostPass = backend_mod.PostPass;
+pub const PostPassKind = backend_mod.PostPassKind;
+pub const PostPassUniforms = backend_mod.PostPassUniforms;
+pub const RenderTargetId = backend_mod.RenderTargetId;
+pub const PostFxCapabilities = backend_mod.PostFxCapabilities;
+pub const postFxCapabilities = backend_mod.postFxCapabilities;
 pub const MockBackend = mock_backend_mod.MockBackend;
 pub const RetainedEngineWith = retained_engine_mod.RetainedEngineWith;
 pub const GfxRenderer = renderer_mod.GfxRenderer;

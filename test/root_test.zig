@@ -819,6 +819,229 @@ test "Material: gfx re-exports the core types + capability helper" {
     try testing.expectEqual(@as(usize, 1), NoMaterial.draws);
 }
 
+// ── Post-fx stack driver (labelle-gfx#305, RFC §2.4) ───────────────────────
+
+const PostFxDriver = gfx.PostFxDriver;
+const PostPass = gfx.PostPass;
+
+/// A full-contract render backend that implements NEITHER the render-target
+/// sub-surface NOR `applyPostPass` — the whole-seam degradation fixture.
+const NoPostFxBackend = struct {
+    pub const Texture = struct { id: u32 };
+    pub const Color = struct { r: u8, g: u8, b: u8, a: u8 };
+    pub const Rectangle = struct { x: f32, y: f32, width: f32, height: f32 };
+    pub const Vector2 = struct { x: f32, y: f32 };
+    pub const Camera2D = struct { zoom: f32 = 1 };
+    const C = @This().Color;
+
+    pub const white = C{ .r = 255, .g = 255, .b = 255, .a = 255 };
+    pub const black = C{ .r = 0, .g = 0, .b = 0, .a = 255 };
+    pub const red = C{ .r = 255, .g = 0, .b = 0, .a = 255 };
+    pub const green = C{ .r = 0, .g = 255, .b = 0, .a = 255 };
+    pub const blue = C{ .r = 0, .g = 0, .b = 255, .a = 255 };
+    pub const transparent = C{ .r = 0, .g = 0, .b = 0, .a = 0 };
+
+    pub fn drawTexturePro(_: Texture, _: Rectangle, _: Rectangle, _: Vector2, _: f32, _: C) void {}
+    pub fn drawRectangleRec(_: Rectangle, _: C) void {}
+    pub fn drawCircle(_: f32, _: f32, _: f32, _: C) void {}
+    pub fn drawTriangle(_: Vector2, _: Vector2, _: Vector2, _: C) void {}
+    pub fn drawPolygon(_: []const Vector2, _: C) void {}
+    pub fn drawLine(_: f32, _: f32, _: f32, _: f32, _: f32, _: C) void {}
+    pub fn drawText(_: [:0]const u8, _: f32, _: f32, _: f32, _: C) void {}
+    pub fn loadTexture(_: [:0]const u8) !Texture {
+        return .{ .id = 1 };
+    }
+    pub fn decodeImage(_: [:0]const u8, _: []const u8, allocator: std.mem.Allocator) !core.DecodedImage {
+        const pixels = try allocator.alloc(u8, 4);
+        @memset(pixels, 0);
+        return .{ .pixels = pixels, .width = 1, .height = 1 };
+    }
+    pub fn uploadTexture(_: core.DecodedImage) !Texture {
+        return .{ .id = 2 };
+    }
+    pub fn unloadTexture(_: Texture) void {}
+    pub fn beginMode2D(_: Camera2D) void {}
+    pub fn endMode2D() void {}
+    pub fn getScreenWidth() i32 {
+        return 640;
+    }
+    pub fn getScreenHeight() i32 {
+        return 480;
+    }
+    pub fn screenToWorld(pos: Vector2, _: Camera2D) Vector2 {
+        return pos;
+    }
+    pub fn worldToScreen(pos: Vector2, _: Camera2D) Vector2 {
+        return pos;
+    }
+    pub fn setDesignSize(_: i32, _: i32) void {}
+};
+
+test "PostFx: a [bloom, vignette] stack ping-pongs the two targets in order" {
+    // The gfx driver owns the two-buffer ping-pong. Both passes are supported by
+    // the mock, so each records an `applyPostPass` with correctly ALTERNATING
+    // src/dst (target_a→target_b, then target_b→target_a).
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var driver = PostFxDriver(MockBackend){};
+    defer driver.deinit();
+    driver.setPostFx(&.{
+        .{ .kind = .bloom, .uniforms = .{ .scalar0 = 0.8, .scalar1 = 0.6 } },
+        .{ .kind = .vignette, .uniforms = .{ .scalar0 = 0.5 } },
+    });
+
+    try testing.expect(driver.active());
+    try testing.expect(driver.begin(320, 240));
+    // Exactly two ping-pong buffers were allocated (both distinct, non-zero).
+    const targets = MockBackend.getRenderTargetCalls();
+    try testing.expectEqual(@as(usize, 2), targets.len);
+    const t_a = targets[0].id;
+    const t_b = targets[1].id;
+    try testing.expect(t_a != 0 and t_b != 0 and t_a != t_b);
+    // The scene was redirected offscreen into target_a.
+    try testing.expectEqual(t_a, MockBackend.getActiveRenderTarget());
+
+    driver.resolve(320, 240);
+
+    const passes = MockBackend.getPostPassCalls();
+    try testing.expectEqual(@as(usize, 2), passes.len);
+    // Order preserved.
+    try testing.expectEqual(core.PostPassKind.bloom, passes[0].kind);
+    try testing.expectEqual(core.PostPassKind.vignette, passes[1].kind);
+    // Ping-pong: bloom reads a→writes b; vignette reads b→writes a.
+    try testing.expectEqual(t_a, passes[0].src);
+    try testing.expectEqual(t_b, passes[0].dst);
+    try testing.expectEqual(t_b, passes[1].src);
+    try testing.expectEqual(t_a, passes[1].dst);
+    // Redirection ended (back to backbuffer) before the final blit.
+    try testing.expectEqual(@as(u32, 0), MockBackend.getActiveRenderTarget());
+}
+
+test "PostFx: an unsupported pass is skipped (warn-once) without breaking the chain" {
+    // The mock declines `crt`. The driver skips it WITHOUT advancing the
+    // ping-pong pair, warns once, and the surrounding supported passes still run.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var driver = PostFxDriver(MockBackend){};
+    defer driver.deinit();
+    driver.setPostFx(&.{
+        .{ .kind = .bloom },
+        .{ .kind = .crt }, // unsupported by the mock
+        .{ .kind = .vignette },
+    });
+
+    try testing.expect(!driver.warnedFor(.crt));
+    try testing.expect(driver.begin(64, 64));
+    driver.resolve(64, 64);
+
+    // crt dropped → only bloom + vignette applied.
+    const passes = MockBackend.getPostPassCalls();
+    try testing.expectEqual(@as(usize, 2), passes.len);
+    try testing.expectEqual(core.PostPassKind.bloom, passes[0].kind);
+    try testing.expectEqual(core.PostPassKind.vignette, passes[1].kind);
+    // Contiguous ping-pong across the skip: bloom a→b, vignette b→a (the skipped
+    // crt did NOT advance the pair, so vignette reads bloom's output).
+    try testing.expectEqual(passes[0].dst, passes[1].src);
+    try testing.expect(driver.warnedFor(.crt));
+
+    // warn-once: a second frame re-skips crt but the guard is still latched
+    // (only ever one log line).
+    MockBackend.resetMock();
+    _ = driver.begin(64, 64);
+    driver.resolve(64, 64);
+    try testing.expectEqual(@as(usize, 2), MockBackend.getPostPassCallCount());
+    try testing.expect(driver.warnedFor(.crt));
+}
+
+test "PostFx: an empty stack allocates no targets and applies no passes (zero cost)" {
+    // The default/empty stack must be byte-identical to no-post-fx: `active()`
+    // false, `begin` returns false + allocates/binds NOTHING, `resolve` no-ops.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var driver = PostFxDriver(MockBackend){};
+    defer driver.deinit();
+
+    try testing.expect(!driver.active());
+    try testing.expect(!driver.begin(320, 240));
+    driver.resolve(320, 240);
+
+    try testing.expectEqual(@as(usize, 0), MockBackend.getRenderTargetCallCount());
+    try testing.expectEqual(@as(usize, 0), MockBackend.getPostPassCallCount());
+    try testing.expectEqual(@as(u32, 0), MockBackend.getActiveRenderTarget());
+}
+
+test "PostFx: a backend without the render-target/post-fx seams degrades the whole stack" {
+    // A full-contract backend that implements NEITHER the render-target
+    // sub-surface NOR `applyPostPass`. `active()` is comptime-false, so the whole
+    // stack is a no-op that still compiles at zero cost.
+    var driver = PostFxDriver(NoPostFxBackend){};
+    defer driver.deinit();
+    driver.setPostFx(&.{ .{ .kind = .bloom }, .{ .kind = .vignette } });
+
+    try testing.expect(!PostFxDriver(NoPostFxBackend).backendSupportsPostFx());
+    try testing.expect(!driver.active());
+    try testing.expect(!driver.begin(100, 100));
+    driver.resolve(100, 100); // no-op, compiles
+    // Stack still tracked (the game asked for it); it's just never driven.
+    try testing.expectEqual(@as(usize, 2), driver.stack().len);
+}
+
+test "PostFx: setPostFx / pushPostPass / clearPostFx mutate the stack" {
+    var driver = PostFxDriver(MockBackend){};
+    defer driver.deinit();
+
+    try testing.expectEqual(@as(usize, 0), driver.stack().len);
+
+    driver.setPostFx(&.{ .{ .kind = .bloom }, .{ .kind = .crt } });
+    try testing.expectEqual(@as(usize, 2), driver.stack().len);
+    try testing.expectEqual(core.PostPassKind.bloom, driver.stack()[0].kind);
+
+    driver.pushPostPass(.{ .kind = .vignette, .uniforms = .{ .scalar0 = 0.3 } });
+    try testing.expectEqual(@as(usize, 3), driver.stack().len);
+    try testing.expectEqual(core.PostPassKind.vignette, driver.stack()[2].kind);
+    try testing.expectEqual(@as(f32, 0.3), driver.stack()[2].uniforms.scalar0);
+
+    // setPostFx REPLACES (not appends).
+    driver.setPostFx(&.{.{ .kind = .color_grade }});
+    try testing.expectEqual(@as(usize, 1), driver.stack().len);
+    try testing.expectEqual(core.PostPassKind.color_grade, driver.stack()[0].kind);
+
+    driver.clearPostFx();
+    try testing.expectEqual(@as(usize, 0), driver.stack().len);
+}
+
+test "PostFx: the engine runtime API drives the stack through render()" {
+    // End-to-end through the retained engine surface: `setPostFx` + `render()`
+    // redirects the scene offscreen and runs the ping-pong; `clearPostFx`
+    // returns to the zero-cost straight-to-backbuffer path (no passes applied).
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{ .sprite_name = "scene" }, .{ .x = 10, .y = 20 });
+
+    engine.setPostFx(&.{ .{ .kind = .bloom }, .{ .kind = .vignette } });
+    engine.render();
+    try testing.expectEqual(@as(usize, 2), MockBackend.getRenderTargetCallCount());
+    try testing.expectEqual(@as(usize, 2), MockBackend.getPostPassCallCount());
+    // The sprite still drew (into the offscreen target).
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+
+    // Clear → next frame allocates no NEW targets and applies no passes.
+    MockBackend.resetMock();
+    engine.clearPostFx();
+    engine.render();
+    try testing.expectEqual(@as(usize, 0), MockBackend.getRenderTargetCallCount());
+    try testing.expectEqual(@as(usize, 0), MockBackend.getPostPassCallCount());
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
 test "RetainedEngine: source_rect default uses width/height as display size" {
     // Legacy behavior — when display_width/height are 0, the renderer
     // falls back to source_rect.width/height for the destination size.

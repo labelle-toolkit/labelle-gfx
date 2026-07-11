@@ -38,3 +38,16 @@ pub const MaterialEffect = core.backend_contract.MaterialEffect;
 pub const MaterialUniforms = core.backend_contract.MaterialUniforms;
 pub const MaterialCapabilities = core.backend_contract.MaterialCapabilities;
 pub const materialCapabilities = core.backend_contract.materialCapabilities;
+
+/// Full-screen post-fx pass stack (labelle-gfx#305, RFC §2). Value types +
+/// capability introspection re-exported from core; the ping-pong stack DRIVER is
+/// `post_fx.PostFxDriver` in gfx. The optional `createRenderTarget`/…/
+/// `applyPostPass`/`postPassSupported` decls live on `Backend(Impl)` and degrade
+/// gracefully on backends without them.
+pub const RenderTargetId = core.backend_contract.RenderTargetId;
+pub const PostPass = core.backend_contract.PostPass;
+pub const PostPassKind = core.backend_contract.PostPassKind;
+pub const PostPassUniforms = core.backend_contract.PostPassUniforms;
+pub const PostFxCapabilities = core.backend_contract.PostFxCapabilities;
+pub const postFxCapabilities = core.backend_contract.postFxCapabilities;
+pub const hasRenderTargetSubSurface = core.backend_contract.hasRenderTargetSubSurface;
