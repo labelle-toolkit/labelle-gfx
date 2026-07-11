@@ -1042,6 +1042,229 @@ test "PostFx: the engine runtime API drives the stack through render()" {
     try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
 }
 
+test "PostFx: clearing the stack MID-frame still unbinds + composites (no lost frame)" {
+    // gfx#309 Bug 1. A hook (`on_before_layers`/`on_after_layer`) clears the
+    // post-fx stack AFTER `begin()` already redirected the scene into target_a.
+    // The renderer snapshots `active()` ONCE, so `resolve()` still runs — and it
+    // must gate on `redirected` (not `active()`): it MUST `endRenderTarget()`
+    // (no leaked binding into the next frame) and composite target_a to the
+    // backbuffer (no lost/black frame), even with an empty stack.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var driver = PostFxDriver(MockBackend){};
+    defer driver.deinit();
+    driver.setPostFx(&.{ .{ .kind = .bloom }, .{ .kind = .vignette } });
+
+    try testing.expect(driver.begin(320, 240));
+    const t_a = MockBackend.getRenderTargetCalls()[0].id;
+    // begin() bound target_a offscreen.
+    try testing.expectEqual(t_a, MockBackend.getActiveRenderTarget());
+
+    // A mid-render hook empties the stack.
+    driver.clearPostFx();
+    try testing.expect(!driver.active());
+
+    driver.resolve(320, 240);
+
+    // THE discriminator: `endRenderTarget` ran, so the redirect is unbound
+    // (active back to backbuffer 0). If `resolve()` were still gated on
+    // `active()` this would FAIL — target_a would stay bound and leak into the
+    // next frame. No passes ran (the stack was empty).
+    try testing.expectEqual(@as(u32, 0), MockBackend.getActiveRenderTarget());
+    try testing.expectEqual(@as(usize, 0), MockBackend.getPostPassCallCount());
+    // No NEW targets allocated during resolve (the two from begin are reused).
+    try testing.expectEqual(@as(usize, 2), MockBackend.getRenderTargetCallCount());
+
+    // Never-redirected ⇒ resolve is a true no-op (redirected latch cleared).
+    driver.resolve(320, 240);
+    try testing.expectEqual(@as(u32, 0), MockBackend.getActiveRenderTarget());
+}
+
+/// A render backend that models the bgfx-style NESTING render-target stack
+/// (`view_stack`) AND records the composite target of `drawRenderTarget`. The
+/// core `MockBackend` is a FLAT recorder — `endRenderTarget` resets to the
+/// backbuffer (0) with no stack, so it cannot express nesting — this local
+/// fixture does, letting us assert (a) Bug 1's composite lands and (b) Bug 2's
+/// post-fx nests inside a caller-bound (mirror/capture) target.
+const StackRtBackend = struct {
+    pub const Texture = struct { id: u32 };
+    pub const Color = struct { r: u8, g: u8, b: u8, a: u8 };
+    pub const Rectangle = struct { x: f32, y: f32, width: f32, height: f32 };
+    pub const Vector2 = struct { x: f32, y: f32 };
+    pub const Camera2D = struct { zoom: f32 = 1 };
+    const C = @This().Color;
+
+    pub const white = C{ .r = 255, .g = 255, .b = 255, .a = 255 };
+    pub const black = C{ .r = 0, .g = 0, .b = 0, .a = 255 };
+    pub const red = C{ .r = 255, .g = 0, .b = 0, .a = 255 };
+    pub const green = C{ .r = 0, .g = 255, .b = 0, .a = 255 };
+    pub const blue = C{ .r = 0, .g = 0, .b = 255, .a = 255 };
+    pub const transparent = C{ .r = 0, .g = 0, .b = 0, .a = 0 };
+
+    pub fn drawTexturePro(_: Texture, _: Rectangle, _: Rectangle, _: Vector2, _: f32, _: C) void {}
+    pub fn drawRectangleRec(_: Rectangle, _: C) void {}
+    pub fn drawCircle(_: f32, _: f32, _: f32, _: C) void {}
+    pub fn drawTriangle(_: Vector2, _: Vector2, _: Vector2, _: C) void {}
+    pub fn drawPolygon(_: []const Vector2, _: C) void {}
+    pub fn drawLine(_: f32, _: f32, _: f32, _: f32, _: f32, _: C) void {}
+    pub fn drawText(_: [:0]const u8, _: f32, _: f32, _: f32, _: C) void {}
+    pub fn loadTexture(_: [:0]const u8) !Texture {
+        return .{ .id = 1 };
+    }
+    pub fn decodeImage(_: [:0]const u8, _: []const u8, allocator: std.mem.Allocator) !core.DecodedImage {
+        const pixels = try allocator.alloc(u8, 4);
+        @memset(pixels, 0);
+        return .{ .pixels = pixels, .width = 1, .height = 1 };
+    }
+    pub fn uploadTexture(_: core.DecodedImage) !Texture {
+        return .{ .id = 2 };
+    }
+    pub fn unloadTexture(_: Texture) void {}
+    pub fn beginMode2D(_: Camera2D) void {}
+    pub fn endMode2D() void {}
+    pub fn getScreenWidth() i32 {
+        return 640;
+    }
+    pub fn getScreenHeight() i32 {
+        return 480;
+    }
+    pub fn screenToWorld(pos: Vector2, _: Camera2D) Vector2 {
+        return pos;
+    }
+    pub fn worldToScreen(pos: Vector2, _: Camera2D) Vector2 {
+        return pos;
+    }
+    pub fn setDesignSize(_: i32, _: i32) void {}
+
+    // ── Render-target sub-surface (NESTING, like bgfx's view_stack) ──────────
+    const Composite = struct { src: u32, into: u32 };
+    threadlocal var counter: u32 = 1;
+    threadlocal var view_stack: [8]u32 = undefined;
+    threadlocal var depth: usize = 0;
+    threadlocal var active: u32 = 0; // 0 = backbuffer
+    threadlocal var composites: [16]Composite = undefined;
+    threadlocal var composite_count: usize = 0;
+    threadlocal var post_pass_count: usize = 0;
+
+    pub fn reset() void {
+        counter = 1;
+        depth = 0;
+        active = 0;
+        composite_count = 0;
+        post_pass_count = 0;
+    }
+    pub fn currentTarget() u32 {
+        return active;
+    }
+    pub fn compositeCalls() []const Composite {
+        return composites[0..composite_count];
+    }
+    pub fn postPassCount() usize {
+        return post_pass_count;
+    }
+
+    pub fn createRenderTarget(_: u16, _: u16) u32 {
+        const id = counter;
+        counter += 1;
+        return id;
+    }
+    pub fn beginRenderTarget(id: u32) void {
+        // Save the enclosing target, then switch — the nesting semantics bgfx's
+        // `view_stack` implements and the contract documents ("restore to the
+        // primary view OR an enclosing target").
+        if (depth < view_stack.len) view_stack[depth] = active;
+        depth += 1;
+        active = id;
+    }
+    pub fn endRenderTarget() void {
+        if (depth == 0) {
+            active = 0;
+            return;
+        }
+        depth -= 1;
+        active = if (depth < view_stack.len) view_stack[depth] else 0;
+    }
+    pub fn drawRenderTarget(id: u32, _: Rectangle, _: C) void {
+        // Composite into WHATEVER target is currently bound (the backbuffer, or
+        // an enclosing caller-bound target).
+        if (composite_count < composites.len) {
+            composites[composite_count] = .{ .src = id, .into = active };
+            composite_count += 1;
+        }
+    }
+    pub fn destroyRenderTarget(_: u32) void {}
+    pub fn applyPostPass(_: PostPass, _: u32, _: u32) void {
+        // Balanced view save/restore (bgfx does `defer setActiveView(saved)`), so
+        // the enclosing target stays active across the ping-pong chain.
+        post_pass_count += 1;
+    }
+};
+
+test "PostFx: Bug 1 — cleared mid-frame composites the scene to the backbuffer" {
+    // Same Bug-1 scenario, but on the NESTING fixture so we can assert the
+    // composite ACTUALLY happens: target_a is drawn into the backbuffer (0).
+    StackRtBackend.reset();
+
+    var driver = PostFxDriver(StackRtBackend){};
+    defer driver.deinit();
+    driver.setPostFx(&.{ .{ .kind = .bloom }, .{ .kind = .vignette } });
+
+    try testing.expect(driver.begin(320, 240));
+    driver.clearPostFx(); // hook empties the stack mid-frame
+    driver.resolve(320, 240);
+
+    // endRenderTarget unbound the redirect (back to the backbuffer).
+    try testing.expectEqual(@as(u32, 0), StackRtBackend.currentTarget());
+    // Zero passes ran, but the scene (target_a = id 1) WAS composited to the
+    // backbuffer (into = 0) — no lost frame.
+    try testing.expectEqual(@as(usize, 0), StackRtBackend.postPassCount());
+    const comps = StackRtBackend.compositeCalls();
+    try testing.expectEqual(@as(usize, 1), comps.len);
+    try testing.expectEqual(@as(u32, 1), comps[0].src); // target_a
+    try testing.expectEqual(@as(u32, 0), comps[0].into); // backbuffer
+}
+
+test "PostFx: Bug 2 — post-fx nests inside a caller-bound render target (mirror/capture)" {
+    // gfx#309 Bug 2. A caller (headless capture / transport mirror) wraps the
+    // camera-aware render in beginRenderTarget(capture)/endRenderTarget(). The
+    // post-fx driver's begin/resolve run INSIDE that. With a nesting render-
+    // target stack (bgfx's view_stack — the ONLY real backend implementing the
+    // seam; raylib degrades), the post-fx'd result composites into the CALLER's
+    // target, not the backbuffer, and the caller's target is restored afterward.
+    StackRtBackend.reset();
+
+    var driver = PostFxDriver(StackRtBackend){};
+    defer driver.deinit();
+    driver.setPostFx(&.{ .{ .kind = .bloom }, .{ .kind = .vignette } });
+
+    // Caller binds its capture target (id 1 is the caller's; the driver's two
+    // ping-pong targets are created lazily inside begin()).
+    const capture = StackRtBackend.createRenderTarget(320, 240);
+    StackRtBackend.beginRenderTarget(capture);
+    try testing.expectEqual(capture, StackRtBackend.currentTarget());
+
+    // The whole-frame post-fx render happens inside the caller's target.
+    try testing.expect(driver.begin(320, 240));
+    // Scene is now redirected into the driver's target_a (nested on top).
+    try testing.expect(StackRtBackend.currentTarget() != capture);
+    driver.resolve(320, 240);
+
+    // After resolve the caller's target is restored (nesting popped correctly).
+    try testing.expectEqual(capture, StackRtBackend.currentTarget());
+    // Both passes ran, and the FINAL composite landed INTO the caller's capture
+    // target — not the backbuffer. This is the "handled" outcome: post-fx-in-
+    // mirror works because the render-target stack nests.
+    try testing.expectEqual(@as(usize, 2), StackRtBackend.postPassCount());
+    const comps = StackRtBackend.compositeCalls();
+    try testing.expectEqual(@as(usize, 1), comps.len);
+    try testing.expectEqual(capture, comps[0].into);
+
+    // Caller unwinds back to the backbuffer.
+    StackRtBackend.endRenderTarget();
+    try testing.expectEqual(@as(u32, 0), StackRtBackend.currentTarget());
+}
+
 test "RetainedEngine: source_rect default uses width/height as display size" {
     // Legacy behavior — when display_width/height are 0, the renderer
     // falls back to source_rect.width/height for the destination size.
@@ -2911,6 +3134,100 @@ test "renderWithLayerHooks: a no-op on_before_layers folds away — render() inj
     try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
     // And no stray background shape leaked in from a no-op hook.
     try testing.expectEqual(@as(usize, 0), MockBackend.getShapeCallCount());
+}
+
+// ── Post-fx through the CAMERA-AWARE render path (labelle-gfx#305/#309) ──
+//
+// The regression guard for the 1.28.0 no-op bug: gfx 1.28.0 wired the
+// `PostFxDriver.begin`/`resolve` only into the retained engine's STANDALONE
+// `render()`, but the engine's camera-aware path — `renderWithLayerHooks`,
+// which real games reach via `labelle run` — never drove the driver, so a
+// declarative `.post_fx` stack was silently a no-op for real games. The prior
+// post-fx tests all drove the driver in ISOLATION (or through the standalone
+// `render()`); NONE exercised the wrapping through `renderWithLayerHooks`,
+// which is exactly why the bug shipped. These two tests close that gap: they
+// assert the driver actually runs (begin allocates the ping-pong targets +
+// resolve applies the passes) AROUND the layer loop, and that an EMPTY stack
+// keeps the zero-cost byte-identical path.
+
+fn postFxNoopBefore(_: void, _: *const HookCamera) void {}
+fn postFxNoopAfter(_: void, _: DefaultLayers, _: *const HookCamera) void {}
+
+test "renderWithLayerHooks: an active post-fx stack drives begin+resolve around the layer loop (gfx#309)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = HookRenderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(480);
+
+    // A world-layer shape so the scene actually draws — it must land in the
+    // offscreen redirect target, not straight to the backbuffer.
+    const e = ecs.createEntity();
+    ecs.addComponent(e, core.Position{ .x = 10, .y = 20 });
+    ecs.addComponent(e, HookRenderer.Shape{
+        .shape = .{ .line = .{ .end = .{ .x = 5, .y = 6 } } },
+        .color = .{ .r = 1, .g = 2, .b = 3, .a = 4 },
+    });
+    renderer.trackEntity(e, .shape);
+    renderer.sync(MockEcs, &ecs);
+
+    // Declarative-equivalent: seed an active [bloom, vignette] stack, both
+    // supported by the mock.
+    renderer.inner.setPostFx(&.{ .{ .kind = .bloom }, .{ .kind = .vignette } });
+
+    // The CAMERA-AWARE path — what `labelle run` drives. This is the wrapping
+    // this PR adds; it must fire begin BEFORE and resolve AFTER the layer loop.
+    renderer.renderWithLayerHooks(void, {}, postFxNoopBefore, postFxNoopAfter);
+
+    // `begin` allocated the two ping-pong targets (proves the scene was
+    // redirected offscreen through THIS path — not the standalone render()).
+    try testing.expectEqual(@as(usize, 2), MockBackend.getRenderTargetCallCount());
+    // `resolve` walked the stack: bloom then vignette applied, in order.
+    const passes = MockBackend.getPostPassCalls();
+    try testing.expectEqual(@as(usize, 2), passes.len);
+    try testing.expectEqual(core.PostPassKind.bloom, passes[0].kind);
+    try testing.expectEqual(core.PostPassKind.vignette, passes[1].kind);
+    // Redirection ended before the final blit — back to the backbuffer.
+    try testing.expectEqual(@as(u32, 0), MockBackend.getActiveRenderTarget());
+    // The scene's world-layer line still drew (into the offscreen target).
+    try testing.expectEqual(@as(usize, 1), MockBackend.getLineCallCount());
+}
+
+test "renderWithLayerHooks: an empty post-fx stack drives NO target/pass (zero-cost path, gfx#309)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const MockEcs = core.MockEcsBackend(u32);
+    var ecs = MockEcs.init(testing.allocator);
+    defer ecs.deinit();
+
+    var renderer = HookRenderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(480);
+
+    const e = ecs.createEntity();
+    ecs.addComponent(e, core.Position{ .x = 10, .y = 20 });
+    ecs.addComponent(e, HookRenderer.Shape{
+        .shape = .{ .line = .{ .end = .{ .x = 5, .y = 6 } } },
+        .color = .{ .r = 1, .g = 2, .b = 3, .a = 4 },
+    });
+    renderer.trackEntity(e, .shape);
+    renderer.sync(MockEcs, &ecs);
+
+    // No `setPostFx` → the stack is empty → `active()` is false → begin binds
+    // nothing and returns false, resolve never runs. Byte-identical to pre-#305.
+    renderer.renderWithLayerHooks(void, {}, postFxNoopBefore, postFxNoopAfter);
+
+    try testing.expectEqual(@as(usize, 0), MockBackend.getRenderTargetCallCount());
+    try testing.expectEqual(@as(usize, 0), MockBackend.getPostPassCallCount());
+    try testing.expectEqual(@as(u32, 0), MockBackend.getActiveRenderTarget());
+    // The scene still rendered straight to the backbuffer.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getLineCallCount());
 }
 
 // ── Camera-bound layers (labelle-engine#723/#724 PR 1) ─────────────────
