@@ -63,6 +63,16 @@ pub fn PostFxDriver(comptime BackendImpl: type) type {
         targets_w: u16 = 0,
         targets_h: u16 = 0,
 
+        /// Did `begin()` bind `target_a` this frame? Set true when `begin`
+        /// redirects the scene offscreen, cleared by the matching `resolve`.
+        /// `resolve()` gates on THIS — not `active()` — so once `begin` has
+        /// redirected, `resolve` ALWAYS unbinds + composites even if a mid-render
+        /// hook cleared the stack (`clearPostFx`/`setPostFx(&.{})`) meanwhile. The
+        /// renderer snapshots `active()` ONCE before the layer loop; without this
+        /// latch a stack cleared MID-frame would leave `target_a` bound (leaked
+        /// into the next frame) and the scene never composited (lost/black frame).
+        redirected: bool = false,
+
         /// Per-pass-kind warn-once table (mirrors `renderer.zig`'s `layer_warned`
         /// + the material seam's `material_warned`). A skipped pass logs once.
         warned: [pass_kind_count]bool = [_]bool{false} ** pass_kind_count,
@@ -123,14 +133,21 @@ pub fn PostFxDriver(comptime BackendImpl: type) type {
             if (!self.active()) return false;
             self.ensureTargets(w, h);
             B.beginRenderTarget(self.target_a);
+            self.redirected = true;
             return true;
         }
 
         /// Frame end. Ends the offscreen redirection, runs the ping-pong pass
         /// chain, and blits the final target to the backbuffer. A no-op unless
-        /// the matching `begin` redirected (guarded by `active()`).
+        /// the matching `begin` redirected — gated on `self.redirected`, NOT
+        /// `active()`, so a stack cleared MID-frame (by a hook) still gets
+        /// unbound + composited. When the stack is now empty, the ping-pong loop
+        /// runs zero passes and `read` stays `target_a`, so the untouched scene
+        /// still reaches the backbuffer (no lost frame). Never redirected ⇒ true
+        /// no-op (the zero-cost idle path).
         pub fn resolve(self: *Self, w: u16, h: u16) void {
-            if (!self.active()) return;
+            if (!self.redirected) return;
+            self.redirected = false;
             B.endRenderTarget();
 
             var read = self.target_a;
