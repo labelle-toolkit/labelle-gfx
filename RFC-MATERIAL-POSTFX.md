@@ -86,34 +86,34 @@ pub const MaterialEffect = enum(u8) {
     outline,
 };
 
-/// Per-effect uniform block. `extern union` keyed by `MaterialEffect` so the
-/// codegen marshal boundary sees a fixed, locked layout (same rationale as
-/// `Glyph`/`CodepointEntry` — the assembler-generated adapter must not need a
-/// `@ptrCast` reinterpret). Each arm is a small `extern struct`; the largest
-/// arm sizes the union (all arms ≤ 8×f32 + one aux handle).
-pub const MaterialUniforms = extern union {
-    palette_swap: extern struct {
-        /// Backend texture handle of the palette LUT (a 1×N or 256×1 ramp
-        /// mapping source-index → target color). `0` = no LUT bound → degrade.
-        lut: u32,
-        /// Number of active entries in the ramp (≤ lut width).
-        count: u32,
-    },
-    flash: extern struct {
-        r: f32, g: f32, b: f32, a: f32, // flash color (linear 0..1)
-        amount: f32,                    // 0 = sprite, 1 = fully flashed
-    },
-    dissolve: extern struct {
-        threshold: f32,                 // 0 = solid, 1 = fully dissolved
-        edge_width: f32,                // px band of the burn edge
-        edge_r: f32, edge_g: f32, edge_b: f32, // burn-edge glow color
-        noise: u32,                     // aux noise texture handle; 0 = built-in
-    },
-    outline: extern struct {
-        r: f32, g: f32, b: f32, a: f32, // outline color
-        thickness: f32,                 // px, in design space
-        softness: f32,                  // 0 = hard edge, 1 = feathered
-    },
+/// Per-effect uniform block — a FLAT `extern struct` (decided: NOT an
+/// `extern union`, see §9 Q5). Rationale: the marshal seam (the assembler-
+/// generated backend adapter) reinterprets contract value types by locked
+/// `extern struct` layout + `@ptrCast`, and EVERY existing contract type
+/// (`Glyph`, `CodepointRange`, `CodepointEntry`, `KernPair`) is an `extern
+/// struct` — there is ZERO `extern union` anywhere in the toolkit. A flat
+/// struct is the proven, reinterpret-safe shape; the backend switches on
+/// `Material.effect` and reads the fields that effect uses (unused = 0). The
+/// named-superset layout below covers all four effects in ≤ 24 bytes.
+pub const MaterialUniforms = extern struct {
+    /// Effect color, linear 0..1. `flash`/`outline`: the effect color;
+    /// `dissolve`: the burn-edge glow (`r,g,b` used, `a` ignored);
+    /// `palette_swap`: unused.
+    r: f32 = 0, g: f32 = 0, b: f32 = 0, a: f32 = 0,
+    /// Primary scalar. `flash`: amount (0=sprite … 1=fully flashed) ·
+    /// `dissolve`: threshold (0=solid … 1=gone) · `outline`: thickness (px) ·
+    /// `palette_swap`: unused.
+    scalar0: f32 = 0,
+    /// Secondary scalar. `dissolve`: edge_width (px) · `outline`: softness
+    /// (0=hard … 1=feathered) · others: unused.
+    scalar1: f32 = 0,
+    /// Aux backend-texture handle. `palette_swap`: the LUT ramp (0 = none →
+    /// degrade) · `dissolve`: noise texture (0 = backend built-in) · others:
+    /// unused. Plain `u32` handle — same shape as `drawMesh` taking a texture
+    /// (§9 Q4, decided).
+    aux_texture: u32 = 0,
+    /// `palette_swap`: active ramp entry count (≤ LUT width). Others: unused.
+    aux_count: u32 = 0,
 };
 
 /// A per-draw material: a curated effect + its uniform block. Rides a sprite
@@ -121,18 +121,20 @@ pub const MaterialUniforms = extern union {
 /// material draw for it. Small + copyable; lives inline on `SpriteVisual`.
 pub const Material = extern struct {
     effect: MaterialEffect = .none,
-    uniforms: MaterialUniforms = .{ .flash = .{ .r = 0, .g = 0, .b = 0, .a = 0, .amount = 0 } },
+    uniforms: MaterialUniforms = .{},
 };
 ```
 
 **Uniform spelling per effect (the load-bearing detail #305 asks for):**
 
-| effect | uniforms | notes |
+| effect | uniforms (→ flat `MaterialUniforms` field) | notes |
 |---|---|---|
-| `palette_swap` | `lut: u32` (ramp texture handle), `count: u32` | recolor a shared atlas by index; the LUT is an ordinary backend texture uploaded via the loader surface |
-| `flash` | `rgba: f32×4`, `amount: f32` | mix sprite→flash color by `amount`; the GPU version of a hit-flash (see §5) |
-| `dissolve` | `threshold: f32`, `edge_width: f32`, `edge_rgb: f32×3`, `noise: u32` | burn-away; `noise=0` uses the backend's built-in noise |
-| `outline` | `rgba: f32×4`, `thickness: f32`, `softness: f32` | alpha-dilated silhouette; thickness in design px |
+| `palette_swap` | LUT ramp → `aux_texture`, entry count → `aux_count` | recolor a shared atlas by index; the LUT is an ordinary backend texture uploaded via the loader surface |
+| `flash` | rgba → `r,g,b,a`, amount → `scalar0` | mix sprite→flash color by `amount`; the GPU version of a hit-flash (see §5) |
+| `dissolve` | threshold → `scalar0`, edge_width → `scalar1`, edge_rgb → `r,g,b`, noise → `aux_texture` | burn-away; `aux_texture=0` uses the backend's built-in noise |
+| `outline` | rgba → `r,g,b,a`, thickness → `scalar0`, softness → `scalar1` | alpha-dilated silhouette; thickness in design px |
+
+The flat layout trades per-arm field names for a locked, reinterpret-safe `extern struct` (§9 Q5); the semantic mapping above is the authoritative spelling, mirrored in the field doc-comments.
 
 ### 1.2 The backend contract decl (labelle-core)
 
@@ -281,27 +283,40 @@ stand on. If the whole `render_target` sub-surface is absent, the post-fx stack 
 ```zig
 pub const PostPassKind = enum(u8) { bloom, vignette, color_grade, crt };
 
-pub const PostPassUniforms = extern union {
-    bloom:       extern struct { threshold: f32, intensity: f32, radius: f32 },
-    vignette:    extern struct { intensity: f32, radius: f32, softness: f32, r: f32, g: f32, b: f32 },
-    color_grade: extern struct { lut: u32, strength: f32 }, // lut = backend texture handle
-    crt:         extern struct { curvature: f32, scanline: f32, mask: f32, aberration: f32 },
+/// Flat `extern struct` (decided §9 Q5 — not an `extern union`; same
+/// marshal-seam rationale as `MaterialUniforms`). The backend switches on
+/// `PostPass.kind` and reads the fields that pass uses (unused = 0).
+pub const PostPassUniforms = extern struct {
+    /// bloom: threshold · vignette: intensity · color_grade: strength ·
+    /// crt: curvature.
+    scalar0: f32 = 0,
+    /// bloom: intensity · vignette: radius · crt: scanline.
+    scalar1: f32 = 0,
+    /// bloom: radius · vignette: softness · crt: mask.
+    scalar2: f32 = 0,
+    /// crt: aberration · others: unused.
+    scalar3: f32 = 0,
+    /// vignette: tint color (linear 0..1). Other passes: unused.
+    r: f32 = 0, g: f32 = 0, b: f32 = 0,
+    /// color_grade: the LUT backend-texture handle (§9 Q3 — a 2D unrolled
+    /// strip; 0 = no LUT → pass degrades to no-op). Others: unused.
+    aux_texture: u32 = 0,
 };
 
 pub const PostPass = extern struct {
     kind: PostPassKind,
-    uniforms: PostPassUniforms,
+    uniforms: PostPassUniforms = .{},
 };
 ```
 
-**Per-pass uniforms (spelled out per #305):**
+**Per-pass uniforms (spelled out per #305; → flat field):**
 
-| pass | uniforms | notes |
+| pass | uniforms → flat `PostPassUniforms` field | notes |
 |---|---|---|
-| `bloom` | `threshold`, `intensity`, `radius` | bright-pass + blur + composite; the backend owns the internal downsample chain |
-| `vignette` | `intensity`, `radius`, `softness`, `rgb` | darken toward the edges toward `rgb` |
-| `color_grade` | `lut: u32`, `strength` | apply a color LUT; `lut` is an ordinary backend texture (see open Q on 2D-strip vs 3D) |
-| `crt` | `curvature`, `scanline`, `mask`, `aberration` | barrel distort + scanlines + shadow-mask + chromatic aberration |
+| `bloom` | threshold → `scalar0`, intensity → `scalar1`, radius → `scalar2` | bright-pass + blur + composite; the backend owns the internal downsample chain |
+| `vignette` | intensity → `scalar0`, radius → `scalar1`, softness → `scalar2`, rgb → `r,g,b` | darken toward the edges toward `rgb` |
+| `color_grade` | lut → `aux_texture`, strength → `scalar0` | apply a color LUT; the LUT is a **2D unrolled strip** texture (§9 Q3, decided) uploaded via the loader surface |
+| `crt` | curvature → `scalar0`, scanline → `scalar1`, mask → `scalar2`, aberration → `scalar3` | barrel distort + scanlines + shadow-mask + chromatic aberration |
 
 ### 2.3 The backend decl (labelle-core)
 
@@ -546,24 +561,28 @@ juice; P3 is the cross-backend guarantee.
 - **Q6 — `project.labelle` post-fx appetite? → static declaration + runtime API, both.** P2
   ships the `.post_fx` block + codegen for the initial stack AND the runtime `setPostFx` API
   (not runtime-only).
+- **Q3 — `color_grade` LUT format? → 2D unrolled strip.** Portable across every backend's
+  loader surface (a true 3D texture isn't uploadable through all backends). `MaterialUniforms`/
+  `PostPassUniforms` carry the strip as an ordinary `aux_texture` handle. A 3D-texture fast path
+  is a possible v2 for backends that expose it.
+- **Q4 — aux textures: plain handle vs material-resource API? → plain `u32` handle.** The LUT /
+  noise textures are ordinary backend textures the game uploads via the existing asset/loader
+  path; the material carries the handle inline (`aux_texture`), exactly as `drawMesh` takes a
+  `Texture`. No separate material-resource registry in v1.
+- **Q5 — uniform representation: `extern union` vs flat `extern struct`? → flat `extern
+  struct`.** *Reverses the draft's `extern union` proposal.* Verified against the code: the
+  marshal seam (the assembler-generated backend adapter) reinterprets contract value types by
+  locked `extern struct` layout + `@ptrCast`, EVERY existing contract type (`Glyph`,
+  `CodepointRange`, `CodepointEntry`, `KernPair`) is an `extern struct`, and there is **zero
+  `extern union`** anywhere in the toolkit. A flat struct is the proven, reinterpret-safe shape
+  (§1.1 / §2.2), removing the "is the codegen adapter happy with a union?" risk entirely rather
+  than betting on it.
+- **Q7 — post-fx & split-screen/multi-camera? → whole-frame stack for v1.** The stack composes
+  over the final frame; per-camera post-fx (each viewport its own stack) is a v2 — it multiplies
+  the render-target count and interacts with the camera-bound-layers work.
 
-### Still open
-
-3. **`color_grade` LUT format**: 2D unrolled strip (works everywhere) vs a true 3D texture
-   (nicer, but not all backends expose 3D texture upload through the loader surface). Propose
-   **2D strip** for v1 portability. Confirm.
-4. **`palette_swap` / `color_grade` aux textures couple the material to the loader surface** —
-   the `lut`/`noise` handles are ordinary backend textures the game uploads via the existing
-   asset path. OK to have the material carry a `u32` texture handle (a small cross-sub-surface
-   reference), or should aux textures be registered through a separate material-resource API?
-   Propose the plain handle (simplest; matches how `drawMesh` takes a `Texture`).
-5. **Uniform representation across the marshal boundary**: `extern union` keyed by the effect
-   enum (proposed — locked layout, no `@ptrCast`) vs a flat `[8]f32 + u32` bag the backend
-   reinterprets. Union is safer/clearer; confirm the codegen adapter is happy with an `extern
-   union` (the `Glyph` precedent is `extern struct`, not union — needs a quick assembler check).
-6. **Post-fx and split-screen / multi-camera**: the stack composes over the *final* frame. Is a
-   whole-frame stack sufficient for v1, or is per-camera post-fx (each viewport its own stack)
-   in scope? Propose whole-frame for v1; per-camera is a v2 (it multiplies the target count).
+*(All open questions now resolved. The RFC is ready to move from Draft toward P1 implementation
+once a final read-through lands.)*
 
 ## References
 
