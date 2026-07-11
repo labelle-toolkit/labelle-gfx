@@ -1,4 +1,4 @@
-/// Visual effects — Fade, Flash, TemporalFade.
+/// Visual effects — Fade, TintPulse, TemporalFade.
 /// Simple stateless components for entity-level effects.
 const types_mod = @import("types.zig");
 const Color = types_mod.Color;
@@ -55,35 +55,42 @@ pub const TemporalFade = struct {
     }
 };
 
-/// Quick color pulse effect (damage flash, pickup feedback).
-pub const Flash = struct {
+/// Quick color pulse effect (damage flash, pickup feedback): a stateless,
+/// timed tint SWAP that runs on every backend at zero GPU cost — it replaces
+/// `tint` with `color` for `duration` seconds, then restores it.
+///
+/// Renamed from `Flash` (labelle-gfx#305, RFC §5) to reserve the word "flash"
+/// for the GPU material effect. For a shader-based flash with soft edges or a
+/// partial `amount` mix (which a flat tint swap can't express), reach for
+/// `MaterialEffect.flash` on `SpriteVisual.material` instead.
+pub const TintPulse = struct {
     duration: f32 = 0.1,
     remaining: f32 = 0.1,
     color: Color = Color.white,
     original_tint: Color = Color.white,
 
-    pub fn update(self: *Flash, dt: f32) void {
+    pub fn update(self: *TintPulse, dt: f32) void {
         if (self.remaining > 0) {
             self.remaining = @max(0, self.remaining - dt);
         }
     }
 
-    pub fn isComplete(self: *const Flash) bool {
+    pub fn isComplete(self: *const TintPulse) bool {
         return self.remaining <= 0;
     }
 
-    pub fn getDisplayColor(self: *const Flash) Color {
+    pub fn getDisplayColor(self: *const TintPulse) Color {
         if (self.remaining > 0) return self.color;
         return self.original_tint;
     }
 
-    /// Convenience: create a white flash.
-    pub fn white(duration: f32, original: Color) Flash {
+    /// Convenience: create a white pulse.
+    pub fn white(duration: f32, original: Color) TintPulse {
         return .{ .duration = duration, .remaining = duration, .color = Color.white, .original_tint = original };
     }
 
-    /// Convenience: create a red damage flash.
-    pub fn damage(original: Color) Flash {
+    /// Convenience: create a red damage pulse.
+    pub fn damage(original: Color) TintPulse {
         return .{
             .duration = 0.12,
             .remaining = 0.12,

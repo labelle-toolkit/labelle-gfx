@@ -2,6 +2,15 @@ const core = @import("labelle-core");
 
 pub const Position = core.Position;
 
+/// Per-draw curated material seam (labelle-gfx#305), re-exported from
+/// labelle-core so `SpriteVisual.material` and callers reference one nominal
+/// type. `Material.effect == .none` (the default) is the batch-friendly fast
+/// path; a non-`none` effect rides the optional `drawTextureProMaterial` backend
+/// decl (degrading to a plain sprite where a backend doesn't support it).
+pub const Material = core.backend_contract.Material;
+pub const MaterialEffect = core.backend_contract.MaterialEffect;
+pub const MaterialUniforms = core.backend_contract.MaterialUniforms;
+
 /// Entity identifier - provided by the caller (e.g., from an ECS)
 pub const EntityId = enum(u32) {
     _,

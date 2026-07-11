@@ -10,6 +10,7 @@ pub const SizeMode = types.SizeMode;
 pub const Container = types.Container;
 pub const Position = types.Position;
 pub const SourceRect = types.SourceRect;
+pub const Material = types.Material;
 pub const Shape = visuals.Shape;
 
 /// Creates visual types parameterized by layer enum.
@@ -52,6 +53,22 @@ pub fn VisualTypes(comptime LayerEnum: type) type {
             layer: LayerEnum = getDefaultLayer(),
             size_mode: SizeMode = .none,
             container: ?Container = null,
+            /// Optional per-draw curated shader effect (material seam,
+            /// labelle-gfx#305). Default `.effect == .none` is the fast path —
+            /// the renderer issues the byte-identical plain `drawTexturePro` and
+            /// this costs one enum compare per sprite in the sort loop. A
+            /// non-`none` material routes through the optional
+            /// `drawTextureProMaterial` backend decl, degrading to a plain
+            /// sprite (warn-once) on backends that don't support the effect.
+            ///
+            /// COST: a material BREAKS the backend's draw batch (program switch
+            /// + per-draw uniforms) — see the note in `drawSpriteEntry`. Paint
+            /// materials on the exception (a hit-flashing entity, a selected
+            /// unit), not on every sprite in a layer.
+            ///
+            /// For a zero-cost, every-backend timed tint swap use the CPU-side
+            /// `effects.TintPulse` instead (RFC §5).
+            material: Material = .{},
         };
 
         pub const ShapeVisual = struct {

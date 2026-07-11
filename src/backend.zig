@@ -26,3 +26,15 @@ pub const KernPair = core.backend_contract.KernPair;
 /// (`RetainedEngineWith.drawMesh`) and callers can name it without importing
 /// core directly.
 pub const BlendMode = core.backend_contract.BlendMode;
+
+/// Per-draw curated material seam (labelle-gfx#305). Re-exported from core
+/// alongside `BlendMode` so `SpriteVisual.material` authors and callers can name
+/// these without importing core directly. `Material.effect == .none` (the
+/// default) is the batch-friendly fast path; a non-`none` effect rides the
+/// optional `drawTextureProMaterial` backend decl and degrades where a backend
+/// doesn't support it. See also the CPU-side `effects.TintPulse` (RFC §5).
+pub const Material = core.backend_contract.Material;
+pub const MaterialEffect = core.backend_contract.MaterialEffect;
+pub const MaterialUniforms = core.backend_contract.MaterialUniforms;
+pub const MaterialCapabilities = core.backend_contract.MaterialCapabilities;
+pub const materialCapabilities = core.backend_contract.materialCapabilities;
