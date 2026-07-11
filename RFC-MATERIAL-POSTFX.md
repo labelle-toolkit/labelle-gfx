@@ -453,11 +453,12 @@ absolute:
   false)`, `window.zig:303–310`) and reads the backbuffer back for `--screenshot`
   (`bgfx.requestScreenShot`, `window.zig:726`). It is not *surfaceless* — bgfx needs a real
   native surface to init its swapchain — but it gives the "no window pops up" CI behaviour and
-  keeps the render+readback path intact. Practical caveat: it needs a windowing
-  system/compositor present, which is **always the case on macOS** and needs **xvfb (or an EGL
-  surface)** on a headless Linux runner.
-- **sokol** is the *truly surfaceless* one (no native window at all), so it captures with no
-  display server whatsoever.
+  keeps the render+readback path intact. Practical caveat: the invisible window still needs a
+  native surface — a **logged-in GUI session on macOS** (present on GitHub-hosted macOS
+  runners; NOT in a bare sessionless SSH/agent shell) or **xvfb / an EGL surface on Linux**.
+- **sokol** is the *truly surfaceless* one (raw Metal device, no native window at all), so it
+  captures with no GUI session / display server whatsoever — the only option from a bare
+  sessionless shell.
 
 Because **bgfx leads P1/P2 (decided)** and bgfx *can* headless-screenshot, the always-green
 golden exists **from P1**, not deferred:
