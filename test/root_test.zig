@@ -650,6 +650,175 @@ test "RetainedEngine: render produces draw calls" {
     try testing.expectEqual(2, MockBackend.getDrawCallCount());
 }
 
+// ── Material seam (labelle-gfx#305) ────────────────────────
+
+test "Material: a flash sprite routes through drawTextureProMaterial with exact uniforms" {
+    // A non-`.none` material the backend supports (mock advertises flash) is
+    // forwarded to `drawTextureProMaterial`; the mock records the exact effect
+    // + uniform block. A `.none` sprite in the same render takes the plain
+    // `drawTexturePro` path (never the material path).
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{
+        .sprite_name = "flasher",
+        .material = .{ .effect = .flash, .uniforms = .{ .r = 1, .g = 1, .b = 1, .a = 1, .scalar0 = 0.5 } },
+    }, .{ .x = 10, .y = 20 });
+    engine.createSprite(EntityId.from(2), .{ .sprite_name = "plain" }, .{ .x = 30, .y = 40 });
+
+    engine.render();
+
+    // One material draw (the flash), one plain draw (the .none sprite).
+    try testing.expectEqual(@as(usize, 1), MockBackend.getMaterialCallCount());
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+
+    const mats = MockBackend.getMaterialCalls();
+    try testing.expectEqual(core.MaterialEffect.flash, mats[0].material.effect);
+    try testing.expectEqual(@as(f32, 0.5), mats[0].material.uniforms.scalar0);
+    try testing.expectEqual(@as(f32, 1), mats[0].material.uniforms.a);
+}
+
+test "Material: an unsupported effect degrades to a plain sprite draw" {
+    // The mock declines `outline`, so the renderer's material branch falls back
+    // to `drawTexturePro` — the sprite still draws (no MaterialCall), a graceful
+    // degradation. warn-once fires (visible in the log; not asserted here).
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{
+        .sprite_name = "outlined",
+        .material = .{ .effect = .outline, .uniforms = .{ .r = 1, .scalar0 = 2 } },
+    }, .{ .x = 0, .y = 0 });
+
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 0), MockBackend.getMaterialCallCount());
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
+test "Material: distinct materials break the batch; two .none sprites share the plain path" {
+    // Batching happens inside the backend (immediate submits in gfx). Two
+    // sprites carrying DIFFERENT supported materials each issue their own
+    // material submit (the batch can't merge across a program/uniform switch —
+    // RFC §1.4), while two `.none` sprites both take the fully-batchable plain
+    // path. This test pins those two counts.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Two different supported materials → two distinct material submits.
+    engine.createSprite(EntityId.from(1), .{
+        .sprite_name = "a",
+        .z_index = 0,
+        .material = .{ .effect = .flash, .uniforms = .{ .scalar0 = 0.3 } },
+    }, .{ .x = 0, .y = 0 });
+    engine.createSprite(EntityId.from(2), .{
+        .sprite_name = "b",
+        .z_index = 1,
+        .material = .{ .effect = .palette_swap, .uniforms = .{ .aux_texture = 7, .aux_count = 4 } },
+    }, .{ .x = 0, .y = 0 });
+    // Two plain sprites → two plain (batchable) draws.
+    engine.createSprite(EntityId.from(3), .{ .sprite_name = "c", .z_index = 2 }, .{ .x = 0, .y = 0 });
+    engine.createSprite(EntityId.from(4), .{ .sprite_name = "d", .z_index = 3 }, .{ .x = 0, .y = 0 });
+
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 2), MockBackend.getMaterialCallCount());
+    try testing.expectEqual(@as(usize, 2), MockBackend.getDrawCallCount());
+
+    const mats = MockBackend.getMaterialCalls();
+    try testing.expectEqual(core.MaterialEffect.flash, mats[0].material.effect);
+    try testing.expectEqual(core.MaterialEffect.palette_swap, mats[1].material.effect);
+    try testing.expectEqual(@as(u32, 7), mats[1].material.uniforms.aux_texture);
+}
+
+test "Material: gfx re-exports the core types + capability helper" {
+    // The seam types are reachable through gfx alongside BlendMode (RFC §1.3).
+    try testing.expectEqual(core.Material, gfx.Material);
+    try testing.expectEqual(core.MaterialEffect, gfx.MaterialEffect);
+    try testing.expectEqual(core.MaterialUniforms, gfx.MaterialUniforms);
+
+    // A backend WITHOUT `drawTextureProMaterial` advertises nothing and the
+    // wrapper degrades every material at zero cost (comptime-gated) — proven
+    // through gfx's re-exported helper so the renderer path compiles for a
+    // materialless backend too.
+    const NoMaterial = struct {
+        pub const Texture = struct { id: u32 };
+        pub const Color = struct { r: u8, g: u8, b: u8, a: u8 };
+        pub const Rectangle = struct { x: f32, y: f32, width: f32, height: f32 };
+        pub const Vector2 = struct { x: f32, y: f32 };
+        pub const Camera2D = struct { zoom: f32 = 1 };
+        const C = @This().Color;
+
+        pub const white = C{ .r = 255, .g = 255, .b = 255, .a = 255 };
+        pub const black = C{ .r = 0, .g = 0, .b = 0, .a = 255 };
+        pub const red = C{ .r = 255, .g = 0, .b = 0, .a = 255 };
+        pub const green = C{ .r = 0, .g = 255, .b = 0, .a = 255 };
+        pub const blue = C{ .r = 0, .g = 0, .b = 255, .a = 255 };
+        pub const transparent = C{ .r = 0, .g = 0, .b = 0, .a = 0 };
+
+        var draws: usize = 0;
+        pub fn drawTexturePro(_: Texture, _: Rectangle, _: Rectangle, _: Vector2, _: f32, _: C) void {
+            draws += 1;
+        }
+        pub fn drawRectangleRec(_: Rectangle, _: C) void {}
+        pub fn drawCircle(_: f32, _: f32, _: f32, _: C) void {}
+        pub fn drawTriangle(_: Vector2, _: Vector2, _: Vector2, _: C) void {}
+        pub fn drawPolygon(_: []const Vector2, _: C) void {}
+        pub fn drawLine(_: f32, _: f32, _: f32, _: f32, _: f32, _: C) void {}
+        pub fn drawText(_: [:0]const u8, _: f32, _: f32, _: f32, _: C) void {}
+        pub fn loadTexture(_: [:0]const u8) !Texture {
+            return .{ .id = 1 };
+        }
+        pub fn decodeImage(_: [:0]const u8, _: []const u8, allocator: std.mem.Allocator) !core.DecodedImage {
+            const pixels = try allocator.alloc(u8, 4);
+            @memset(pixels, 0);
+            return .{ .pixels = pixels, .width = 1, .height = 1 };
+        }
+        pub fn uploadTexture(_: core.DecodedImage) !Texture {
+            return .{ .id = 2 };
+        }
+        pub fn unloadTexture(_: Texture) void {}
+        pub fn beginMode2D(_: Camera2D) void {}
+        pub fn endMode2D() void {}
+        pub fn getScreenWidth() i32 {
+            return 640;
+        }
+        pub fn getScreenHeight() i32 {
+            return 480;
+        }
+        pub fn screenToWorld(pos: Vector2, _: Camera2D) Vector2 {
+            return pos;
+        }
+        pub fn worldToScreen(pos: Vector2, _: Camera2D) Vector2 {
+            return pos;
+        }
+        pub fn setDesignSize(_: i32, _: i32) void {}
+    };
+
+    const empty = comptime gfx.materialCapabilities(NoMaterial);
+    try testing.expectEqual(@as(usize, 0), empty.effects.len);
+
+    const B = Backend(NoMaterial);
+    try testing.expect(!B.materialSupported(.flash));
+    const tex = try B.loadTexture("x.png");
+    const rect = NoMaterial.Rectangle{ .x = 0, .y = 0, .width = 1, .height = 1 };
+    const origin = NoMaterial.Vector2{ .x = 0, .y = 0 };
+    B.drawTextureProMaterial(tex, rect, rect, origin, 0, B.white, .{ .effect = .flash });
+    try testing.expectEqual(@as(usize, 1), NoMaterial.draws);
+}
+
 test "RetainedEngine: source_rect default uses width/height as display size" {
     // Legacy behavior — when display_width/height are 0, the renderer
     // falls back to source_rect.width/height for the destination size.
@@ -1431,14 +1600,19 @@ test "Fade: fades from 1 to 0" {
     try testing.expect(fade.shouldRemove());
 }
 
-test "Flash: expires after duration" {
-    var flash = gfx.Flash.damage(.{ .r = 200, .g = 50, .b = 50, .a = 255 });
-    try testing.expect(!flash.isComplete());
-    try testing.expectEqual(255, flash.getDisplayColor().r); // White flash
+test "TintPulse: expires after duration" {
+    // Renamed from `Flash` (labelle-gfx#305, RFC §5).
+    var pulse = gfx.TintPulse.damage(.{ .r = 200, .g = 50, .b = 50, .a = 255 });
+    try testing.expect(!pulse.isComplete());
+    try testing.expectEqual(255, pulse.getDisplayColor().r); // White pulse
 
-    flash.update(0.2);
-    try testing.expect(flash.isComplete());
-    try testing.expectEqual(200, flash.getDisplayColor().r); // Original color
+    pulse.update(0.2);
+    try testing.expect(pulse.isComplete());
+    try testing.expectEqual(200, pulse.getDisplayColor().r); // Original color
+
+    // The old `Flash` name is gone (pre-release rename, no migrator).
+    try testing.expect(!@hasDecl(gfx, "Flash"));
+    try testing.expect(@hasDecl(gfx, "TintPulse"));
 }
 
 test "TemporalFade: alpha varies by hour" {

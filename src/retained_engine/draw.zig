@@ -8,6 +8,10 @@
 
 const std = @import("std");
 
+/// Curated per-draw material effect enum (labelle-gfx#305), for the warn-once
+/// table's index + tag name. Re-exported from labelle-core via `types.zig`.
+const MaterialEffect = @import("../types.zig").MaterialEffect;
+
 /// Returns the draw helpers for a concrete `RetainedEngine` type.
 ///
 /// `Self` must expose `BackendType` (the resolved `Backend(...)`),
@@ -80,13 +84,55 @@ pub fn DrawHelpers(comptime Self: type) type {
                 final_src_h = -src_h;
             }
 
-            B.drawTexturePro(
-                backend_tex,
-                .{ .x = src_x, .y = src_y, .width = final_src_w, .height = final_src_h },
-                .{ .x = pos.x, .y = pos.y, .width = dest_w, .height = dest_h },
-                .{ .x = origin_x, .y = origin_y },
-                sprite.rotation,
-                .{ .r = sprite.tint.r, .g = sprite.tint.g, .b = sprite.tint.b, .a = sprite.tint.a },
+            const src_rect: B.Rectangle = .{ .x = src_x, .y = src_y, .width = final_src_w, .height = final_src_h };
+            const dest_rect: B.Rectangle = .{ .x = pos.x, .y = pos.y, .width = dest_w, .height = dest_h };
+            const origin: B.Vector2 = .{ .x = origin_x, .y = origin_y };
+            const tint: B.Color = .{ .r = sprite.tint.r, .g = sprite.tint.g, .b = sprite.tint.b, .a = sprite.tint.a };
+
+            // Per-draw material seam (labelle-gfx#305). `.none` (the overwhelming
+            // common case) takes the byte-identical plain path — one enum compare,
+            // zero cost, fully batchable by the backend. A non-`none` material
+            // routes through the optional `drawTextureProMaterial` backend decl.
+            //
+            // BATCHING COST (documented per RFC §1.4): a non-`none` material
+            // BREAKS the backend's internal draw batch on two axes — (1) a
+            // program switch (a curated effect binds a different shader than the
+            // plain sprite program, flushing the pending batch at every effect
+            // boundary) and (2) a per-draw uniform block (two `flash` sprites
+            // with different `amount` can't share one instanced submit in v1). So
+            // one material sprite ≈ one submit. The no-material path above is
+            // unchanged and fully batched; materials are the exception (a few
+            // hit-flashing/selected entities), never a whole-layer default.
+            if (sprite.material.effect == .none) {
+                B.drawTexturePro(backend_tex, src_rect, dest_rect, origin, sprite.rotation, tint);
+            } else if (B.materialSupported(sprite.material.effect)) {
+                // The backend both declares the decl AND advertises this effect →
+                // draw with the material. `materialSupported` folds the coarse
+                // `@hasDecl` gate and the fine-grained per-effect capability.
+                B.drawTextureProMaterial(backend_tex, src_rect, dest_rect, origin, sprite.rotation, tint, sprite.material);
+            } else {
+                // Backend lacks the seam or this specific effect → degrade to a
+                // plain sprite (still visible + legible) and warn-once.
+                warnMaterialDegraded(sprite.material.effect);
+                B.drawTexturePro(backend_tex, src_rect, dest_rect, origin, sprite.rotation, tint);
+            }
+        }
+
+        /// Per-effect warn-once table (labelle-gfx#305), mirroring
+        /// `renderer.zig`'s `layer_warned` dedupe. One bool per `MaterialEffect`
+        /// tag; the struct is instantiated once per (engine type, backend), so
+        /// the table is a per-backend static — a dropped effect logs exactly
+        /// once, no per-frame spam. Degradation leaves the game playable (the
+        /// sprite still draws), so this is a polish note, not an error.
+        var material_warned = [_]bool{false} ** @typeInfo(MaterialEffect).@"enum".fields.len;
+
+        fn warnMaterialDegraded(effect: MaterialEffect) void {
+            const idx = @intFromEnum(effect);
+            if (material_warned[idx]) return;
+            material_warned[idx] = true;
+            std.log.warn(
+                "labelle-gfx: material effect '{s}' not supported by this backend — drawing the sprite without it (labelle-gfx#305). This is a graceful degradation, not an error.",
+                .{@tagName(effect)},
             );
         }
 

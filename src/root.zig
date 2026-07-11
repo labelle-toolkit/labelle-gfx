@@ -25,6 +25,15 @@ pub const KernPair = backend_mod.KernPair;
 /// Blend mode for the optional `drawMesh` textured-mesh primitive
 /// (labelle-gfx#290, Spine Phase 2), re-exported from core.
 pub const BlendMode = backend_mod.BlendMode;
+/// Per-draw curated material seam (labelle-gfx#305), re-exported from core
+/// alongside `BlendMode`. Rides `SpriteVisual.material`; degrades gracefully on
+/// backends without the optional `drawTextureProMaterial` decl. See also the
+/// CPU-side `effects.TintPulse` (RFC §5).
+pub const Material = backend_mod.Material;
+pub const MaterialEffect = backend_mod.MaterialEffect;
+pub const MaterialUniforms = backend_mod.MaterialUniforms;
+pub const MaterialCapabilities = backend_mod.MaterialCapabilities;
+pub const materialCapabilities = backend_mod.materialCapabilities;
 pub const MockBackend = mock_backend_mod.MockBackend;
 pub const RetainedEngineWith = retained_engine_mod.RetainedEngineWith;
 pub const GfxRenderer = renderer_mod.GfxRenderer;
@@ -66,14 +75,16 @@ pub const getSortedLayers = layer_mod.getSortedLayers;
 // Effects
 pub const Fade = effects_mod.Fade;
 pub const TemporalFade = effects_mod.TemporalFade;
-pub const Flash = effects_mod.Flash;
+/// Timed CPU-side tint swap. Renamed from `Flash` (labelle-gfx#305, RFC §5) —
+/// "flash" is now reserved for the GPU `MaterialEffect.flash`.
+pub const TintPulse = effects_mod.TintPulse;
 
 /// Components exported for ECS integration.
 /// Auto-discovered by the CLI when labelle-gfx is available.
 pub const Components = struct {
     pub const Fade = effects_mod.Fade;
     pub const TemporalFade = effects_mod.TemporalFade;
-    pub const Flash = effects_mod.Flash;
+    pub const TintPulse = effects_mod.TintPulse;
 };
 
 // Camera
