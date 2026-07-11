@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .labelle_core = .{
-            .url = "https://github.com/labelle-toolkit/labelle-core/archive/refs/tags/v1.25.0.tar.gz",
-            .hash = "labelle_core-1.25.0-OauRcA-3BgCbF6Y9NmYx_rgW_GZpR1AD_yeJinSVhvSl",
+            .url = "git+https://github.com/labelle-toolkit/labelle-core?ref=feat/305-postfx-contract#74dc10282e67e5c543d7e05ac26536c22de73f84",
+            .hash = "labelle_core-1.25.0-OauRcDwJBwDB2_H4crO8ewdFSHXB3V21gVdAUhaWMnQr",
         },
         .spatial_grid = .{
             .path = "spatial_grid",

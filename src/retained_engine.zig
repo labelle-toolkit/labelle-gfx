@@ -8,6 +8,7 @@ const spatial_grid = @import("spatial_grid");
 const tilemap_mod = @import("tilemap");
 const bounds_mod = @import("retained_engine/bounds.zig");
 const draw_mod = @import("retained_engine/draw.zig");
+const post_fx_mod = @import("post_fx.zig");
 
 /// Viewport rectangle (engine coordinate space) used to cull off-screen
 /// entities. Stored axis-aligned; `x,y` is the top-left corner.
@@ -42,6 +43,11 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         /// `TileMapRenderer.TextureResolver` seam so the engine can route
         /// them through the same texture path sprites use.
         pub const TileMapRenderer = tilemap_mod.TileMapRendererWith(B);
+
+        /// Full-screen post-fx pass-stack driver (labelle-gfx#305) bound to this
+        /// engine's backend. Instantiated once here; the `post_fx` field holds
+        /// the live stack + ping-pong targets.
+        pub const PostFx = post_fx_mod.PostFxDriver(BackendImpl);
         pub const SpriteVisual = VTypes.SpriteVisual;
         pub const ShapeVisual = VTypes.ShapeVisual;
         pub const TextVisual = VTypes.TextVisual;
@@ -128,6 +134,14 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         // (see `rebuildGrid`) or by `clearEntities`/`init`.
         grid_incomplete: bool = false,
 
+        /// Full-screen post-fx pass stack + driver (labelle-gfx#305, RFC §2.4).
+        /// `render()` drives its ping-pong; the runtime API
+        /// (`setPostFx`/`pushPostPass`/`clearPostFx`) mutates the stack. Default
+        /// `.{}` is an EMPTY stack → the zero-cost straight-to-backbuffer path
+        /// (no render targets are ever allocated until a pass is added on a
+        /// backend that implements the post-fx seams).
+        post_fx: PostFx = .{},
+
         pub const Config = struct {
             screen_width: f32 = 800,
             screen_height: f32 = 600,
@@ -166,6 +180,34 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             self.grid.deinit();
             self.entity_bounds.deinit();
             self.cull_scratch.deinit(self.allocator);
+            self.post_fx.deinit();
+        }
+
+        // -- Post-fx stack runtime API (labelle-gfx#305, RFC §2.5) --
+        //
+        // A thin façade over `self.post_fx` (the driver). The static
+        // `project.labelle` `.post_fx` seed (assembler codegen, Slice C) and
+        // these runtime mutators feed the SAME stack; static is just the seed.
+        // On a backend without the render-target/post-fx seams these still
+        // mutate the stack, but `render()`'s driver stays a no-op (whole-stack
+        // degradation, warn-once) — the mutators never fail.
+
+        /// Replace the whole post-fx stack (e.g. seeding from `project.labelle`
+        /// or swapping "retro mode" on/off). Passes beyond the driver's fixed
+        /// cap are dropped.
+        pub fn setPostFx(self: *Self, passes: []const post_fx_mod.PostPass) void {
+            self.post_fx.setPostFx(passes);
+        }
+
+        /// Append one full-screen pass to the stack.
+        pub fn pushPostPass(self: *Self, pass: post_fx_mod.PostPass) void {
+            self.post_fx.pushPostPass(pass);
+        }
+
+        /// Empty the post-fx stack — back to the zero-cost straight-to-backbuffer
+        /// path.
+        pub fn clearPostFx(self: *Self) void {
+            self.post_fx.clearPostFx();
         }
 
         /// Clear all entity visuals but keep textures loaded.
@@ -708,6 +750,20 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         // -- Rendering --
 
         pub fn render(self: *Self) void {
+            // Post-fx stack (labelle-gfx#305, RFC §2.4). When a stack is active
+            // AND the backend implements the render-target + post-fx seams,
+            // `begin` redirects the whole scene into an offscreen target;
+            // `resolve` runs the ping-pong pass chain + blits to the backbuffer.
+            // The EMPTY-stack / no-seam case is byte-identical to the pre-#305
+            // path: `begin` allocates + binds nothing and returns false, so
+            // `resolve` never runs. Only computes screen size on the active path.
+            const post_fx_active = self.post_fx.active();
+            if (post_fx_active) {
+                const w: u16 = @intCast(B.getScreenWidth());
+                const h: u16 = @intCast(B.getScreenHeight());
+                _ = self.post_fx.begin(w, h);
+            }
+
             const sorted = comptime blk: {
                 var layers: [layer_fields.len]LayerEnum = undefined;
                 for (layer_fields, 0..) |field, i| {
@@ -740,6 +796,15 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             };
             inline for (sorted) |layer| {
                 self.renderLayerWithCandidates(layer, frame_candidates);
+            }
+
+            // Resolve the post-fx stack: end the offscreen redirection, run the
+            // ping-pong pass chain, blit to the backbuffer. No-op unless `begin`
+            // redirected above (guarded by the same `active()` state).
+            if (post_fx_active) {
+                const w: u16 = @intCast(B.getScreenWidth());
+                const h: u16 = @intCast(B.getScreenHeight());
+                self.post_fx.resolve(w, h);
             }
         }
 
