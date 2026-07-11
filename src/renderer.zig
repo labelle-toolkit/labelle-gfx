@@ -701,6 +701,22 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             comptime on_before_layers: fn (ctx: Ctx, cam: *const CameraT) void,
             comptime on_after_layer: fn (ctx: Ctx, layer: LayerEnum, cam: *const CameraT) void,
         ) void {
+            // Post-fx redirect (labelle-gfx#305). The engine's camera-aware
+            // render path routes through THIS function (via `render` /
+            // `renderWithLayerHook` / `renderWithLayerHooks`), NOT the
+            // retained engine's standalone `render`, so the post-fx begin/
+            // resolve must wrap the layer loop HERE for the declarative
+            // `.post_fx` stack to reach the framebuffer. When the stack is
+            // empty (or the backend lacks the seam) `begin` binds nothing and
+            // returns false, so `resolve` never runs — byte-identical to the
+            // pre-#305 path.
+            const post_fx_active = self.inner.post_fx.active();
+            if (post_fx_active) {
+                const w: u16 = @intCast(B.getScreenWidth());
+                const h: u16 = @intCast(B.getScreenHeight());
+                _ = self.inner.post_fx.begin(w, h);
+            }
+
             // Viewport culling (labelle-gfx#208) populates the engine's
             // global cull rect once per frame, derived from the union of all
             // active cameras, before any layer pass.
@@ -830,6 +846,15 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                 BackendImpl.setApplyFit(true);
             }
             clearViewport();
+
+            // Resolve the post-fx stack: end the offscreen redirect, run the
+            // ping-pong pass chain, composite to the backbuffer. No-op unless
+            // `begin` redirected above (guarded by the same `active` state).
+            if (post_fx_active) {
+                const w: u16 = @intCast(B.getScreenWidth());
+                const h: u16 = @intCast(B.getScreenHeight());
+                self.inner.post_fx.resolve(w, h);
+            }
         }
 
         /// Render ephemeral gizmo draws (debug lines, rects, circles, arrows).
