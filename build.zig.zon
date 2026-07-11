@@ -5,12 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .labelle_core = .{
-            // TEMPORARY (labelle-gfx#305): pinned to the UNRELEASED core PR
-            // branch feat/305-material-contract so CI builds green against the
-            // Material contract before core is tagged. MUST flip to the core
-            // release tag (v1.25.0) before this PR merges. See the PR body.
-            .url = "git+https://github.com/labelle-toolkit/labelle-core#feat/305-material-contract",
-            .hash = "labelle_core-1.24.0-OauRcA-3BgDCM5piXm4KSRTUu24raRzNW3m7MAQf_v60",
+            .url = "https://github.com/labelle-toolkit/labelle-core/archive/refs/tags/v1.25.0.tar.gz",
+            .hash = "labelle_core-1.25.0-OauRcA-3BgCbF6Y9NmYx_rgW_GZpR1AD_yeJinSVhvSl",
         },
         .spatial_grid = .{
             .path = "spatial_grid",
