@@ -244,6 +244,38 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             self.inner.endRenderTarget();
         }
 
+        // -- Screen-space UI primitives (labelle-engine#771) -- the wrapper
+        // the engine holds, forwarding the in-game UI-kit DrawList seam to
+        // `RetainedEngine`. See the RetainedEngine note for the SCREEN-space
+        // (top-left, Y-down, pixels; no camera transform) coordinate contract.
+
+        pub fn drawScreenTexture(
+            self: *Self,
+            texture_id: u32,
+            src_x: f32,
+            src_y: f32,
+            src_w: f32,
+            src_h: f32,
+            dst_x: f32,
+            dst_y: f32,
+            dst_w: f32,
+            dst_h: f32,
+            r: u8,
+            g: u8,
+            b: u8,
+            a: u8,
+        ) void {
+            self.inner.drawScreenTexture(texture_id, src_x, src_y, src_w, src_h, dst_x, dst_y, dst_w, dst_h, r, g, b, a);
+        }
+
+        pub fn drawScreenRect(self: *Self, x: f32, y: f32, w: f32, h: f32, r: u8, g: u8, b: u8, a: u8) void {
+            self.inner.drawScreenRect(x, y, w, h, r, g, b, a);
+        }
+
+        pub fn createTextureFromPixels(self: *Self, width: u32, height: u32, pixels: []const u8) !u32 {
+            return self.inner.createTextureFromPixels(width, height, pixels);
+        }
+
         pub fn drawRenderTarget(self: *Self, id: u32, x: f32, y: f32, width: f32, height: f32, r: u8, g: u8, b: u8, a: u8) void {
             self.inner.drawRenderTarget(id, x, y, width, height, r, g, b, a);
         }
