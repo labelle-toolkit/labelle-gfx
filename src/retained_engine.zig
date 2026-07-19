@@ -641,17 +641,26 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         /// be `width * height * 4`. The backend copies the pixels; the caller
         /// owns and frees `pixels` after this returns.
         pub fn createTextureFromPixels(self: *Self, width: u32, height: u32, pixels: []const u8) !u32 {
+            // Contract: `pixels` is width*height*4 RGBA8. Assert so a caller
+            // buffer-size bug is caught in dev instead of an OOB read in the
+            // backend upload.
+            std.debug.assert(pixels.len == @as(usize, width) * @as(usize, height) * 4);
             const tex = try B.uploadTexture(.{
                 .pixels = @constCast(pixels),
                 .width = width,
                 .height = height,
             });
+            // Destroy the just-uploaded GPU texture if we can't register it —
+            // otherwise an OOM on the map insert leaks it (it can never be
+            // found for `unloadTexture` / `deinit`) and we'd return a handle
+            // that silently resolves to nothing on every draw.
+            errdefer B.unloadTexture(tex);
             const id = TextureId.from(tex.id);
-            self.textures.put(id.toInt(), .{
+            try self.textures.put(id.toInt(), .{
                 .backend_texture = tex,
                 .width = @floatFromInt(width),
                 .height = @floatFromInt(height),
-            }) catch {};
+            });
             return id.toInt();
         }
 

@@ -167,6 +167,37 @@ test "RetainedEngine: filled triangle takes drawTriangle, outline takes drawLine
     try testing.expectEqual(@as(usize, 3), MockBackend.getLineCallCount());
 }
 
+// ── Screen-space UI primitives (labelle-engine#771) ──────────────────────
+
+test "RetainedEngine: createTextureFromPixels registers a drawable screen texture" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Upload a 2x2 RGBA atlas and register it — the `try put` success path.
+    const rgba = [_]u8{0xFF} ** (2 * 2 * 4);
+    const id = try engine.createTextureFromPixels(2, 2, &rgba);
+
+    // A screen texture draw resolves the handle and reaches drawTexturePro
+    // (getDrawCallCount tracks drawTexturePro).
+    try testing.expectEqual(@as(usize, 0), MockBackend.getDrawCallCount());
+    engine.drawScreenTexture(id, 0, 0, 2, 2, 10, 20, 32, 32, 255, 255, 255, 255);
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+
+    // A solid screen rect reaches drawRectangleRec (tracked as a shape call).
+    try testing.expectEqual(@as(usize, 0), MockBackend.getShapeCallCount());
+    engine.drawScreenRect(5, 5, 40, 12, 20, 30, 40, 255);
+    try testing.expectEqual(@as(usize, 1), MockBackend.getShapeCallCount());
+
+    // An unknown handle is a no-op (does NOT reach the backend), so a
+    // mis-resolved UI quad silently skips rather than drawing garbage.
+    engine.drawScreenTexture(999_999, 0, 0, 1, 1, 0, 0, 1, 1, 255, 255, 255, 255);
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
 test "RetainedEngine: drawMesh resolves TextureId and reaches the backend with the mesh data" {
     const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
 
