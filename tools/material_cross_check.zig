@@ -128,6 +128,12 @@ const Image = struct {
 
 const DecodeError = error{ UnsupportedFormat, CorruptFile, OutOfMemory };
 
+/// Upper bound on decoded dimensions. The goldens are 720×96 / 192×128; the
+/// cap exists so header-declared dimensions can never overflow the size
+/// arithmetic below (16384² × 4 bytes ≪ usize) — a corrupt/hostile header
+/// fails as CorruptFile instead of wrapping an allocation size.
+const MAX_DIM: u32 = 16384;
+
 /// Decode an uncompressed truecolor TGA (type 2, 24/32 bpp) — the format
 /// labelle-bgfx's `captureHeadless` writes (32 bpp BGRA, top-down via
 /// descriptor bit 5). Alpha is dropped; both orientations are normalized to
@@ -142,7 +148,7 @@ fn decodeTga(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!Image 
     const height: u32 = std.mem.readInt(u16, bytes[14..16], .little);
     const bpp = bytes[16];
     const descriptor = bytes[17];
-    if (width == 0 or height == 0) return error.CorruptFile;
+    if (width == 0 or height == 0 or width > MAX_DIM or height > MAX_DIM) return error.CorruptFile;
     if (bpp != 32 and bpp != 24) return error.UnsupportedFormat;
     // Descriptor bit 4 = right-to-left pixel order: never produced by our
     // writers, refuse rather than silently mis-diff.
@@ -189,14 +195,19 @@ fn decodeBmp(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!Image 
     const compression = std.mem.readInt(u32, bytes[30..34], .little);
     if (compression != 0) return error.UnsupportedFormat; // BI_RGB only
     if (bpp != 24 and bpp != 32) return error.UnsupportedFormat;
-    if (width_i <= 0 or height_i == 0) return error.CorruptFile;
+    // Reject minInt(i32) height BEFORE negating it (negation would overflow).
+    if (width_i <= 0 or height_i == 0 or height_i == std.math.minInt(i32)) return error.CorruptFile;
 
     const width: u32 = @intCast(width_i);
     const top_down = height_i < 0;
     const height: u32 = @intCast(if (top_down) -height_i else height_i);
+    if (width > MAX_DIM or height > MAX_DIM) return error.CorruptFile;
+    if (data_offset < 54 or data_offset > bytes.len) return error.CorruptFile;
     const bytes_per_px: usize = bpp / 8;
     // Rows are padded to 4-byte boundaries.
     const row_stride = (@as(usize, width) * bytes_per_px + 3) / 4 * 4;
+    // Capped dims keep the product well inside usize, and the offset bound
+    // above keeps the sum from wrapping past `bytes.len`.
     const need = data_offset + row_stride * height;
     if (bytes.len < need) return error.CorruptFile;
 
@@ -505,6 +516,32 @@ test "decoders reject unsupported encodings" {
     std.mem.writeInt(u16, bmp[28..30], 24, .little);
     std.mem.writeInt(u32, bmp[30..34], 1, .little); // BI_RLE8
     try testing.expectError(error.UnsupportedFormat, decodeBmp(testing.allocator, &bmp));
+}
+
+test "decoders reject hostile headers (dimension caps, offset bounds, minInt height)" {
+    // Header-declared dimensions past MAX_DIM, an out-of-file data offset, and
+    // the minInt(i32) BMP height must all fail cleanly as CorruptFile — never
+    // wrap the size arithmetic into a small allocation / OOB access.
+    var tga = [_]u8{0} ** 32;
+    tga[2] = 2;
+    std.mem.writeInt(u16, tga[12..14], 0xFFFF, .little); // 65535 > MAX_DIM
+    std.mem.writeInt(u16, tga[14..16], 0xFFFF, .little);
+    tga[16] = 32;
+    try testing.expectError(error.CorruptFile, decodeTga(testing.allocator, &tga));
+
+    var bmp = [_]u8{0} ** 64;
+    bmp[0] = 'B';
+    bmp[1] = 'M';
+    std.mem.writeInt(u32, bmp[14..18], 40, .little);
+    std.mem.writeInt(i32, bmp[18..22], 1, .little);
+    std.mem.writeInt(u16, bmp[28..30], 24, .little);
+    // minInt height: negation would overflow without the explicit reject.
+    std.mem.writeInt(i32, bmp[22..26], std.math.minInt(i32), .little);
+    try testing.expectError(error.CorruptFile, decodeBmp(testing.allocator, &bmp));
+    // data offset beyond the file.
+    std.mem.writeInt(i32, bmp[22..26], 1, .little);
+    std.mem.writeInt(u32, bmp[10..14], 0xFFFF_FF00, .little);
+    try testing.expectError(error.CorruptFile, decodeBmp(testing.allocator, &bmp));
 }
 
 test "diff policy: zero budget outside the AA allowance, bounded inside it" {
