@@ -36,8 +36,9 @@ GPU material is for soft-edged/partial-mix shading.
 
 Cross-backend visual parity of the effect set is CI-gated here (the seam
 owner): `zig build material-cross-check` fetches the bgfx and sokol committed
-golden captures of the same 10-column material scene at SHAs pinned in
-`build.zig` and diffs them per effect (`tools/material_cross_check.zig`).
+golden captures of the same 10-column material scene AND the same bloom→crt
+post-fx scene at SHAs pinned in `build.zig` and diffs them per effect
+(`tools/material_cross_check.zig`).
 
 ### Batching cost
 

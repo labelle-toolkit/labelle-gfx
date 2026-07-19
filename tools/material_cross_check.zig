@@ -11,11 +11,18 @@
 //!
 //! This tool decodes both, normalizes them to top-down RGB, and diffs them
 //! per column — proving the two backends render the curated material set with
-//! identical visual results. `zig build material-cross-check` fetches the two
-//! goldens at PINNED commit SHAs (see build.zig, "Cross-backend material
-//! golden pins") and runs this check; CI runs that step. Any future shader
-//! change in either backend that breaks visual parity fails this check on the
-//! next pin bump — the bump itself is the review point.
+//! identical visual results. It ALSO diffs the two backends' bloom→crt
+//! post-fx-stack goldens of the shared 192×128 scene (the other half of the
+//! #305 v1 acceptance):
+//!
+//!   - labelle-bgfx  `test/golden/post_fx_bloom_crt.tga` (`src/post_fx_golden.zig`)
+//!   - labelle-sokol `test/golden/post_fx_bloom_crt.bmp` (`src/post_fx_golden.zig`)
+//!
+//! `zig build material-cross-check` fetches all four goldens at PINNED commit
+//! SHAs (see build.zig, "Cross-backend material golden pins") and runs this
+//! check; CI runs that step. Any future shader change in either backend that
+//! breaks visual parity fails this check on the next pin bump — the bump
+//! itself is the review point.
 //!
 //! ── Diff policy ────────────────────────────────────────────────────────────
 //!
@@ -49,14 +56,20 @@
 //! Anything past these allowances fails loudly with a per-column report
 //! naming the effect.
 //!
+//!   - Post-fx (whole image, no allowance): the bloom→crt goldens are
+//!     BYTE-IDENTICAL across backends today (max Δ0 measured), so the policy
+//!     is simply the base tolerance with a zero outlier budget.
+//!
 //! Exit codes:
 //!   0 = parity within policy
 //!   1 = usage / could not read an input file
 //!   2 = decode failure (unsupported/corrupt TGA or BMP)
-//!   3 = dimension mismatch (not the 720×96 shared scene)
+//!   3 = dimension mismatch (not the shared scene dimensions)
 //!   4 = drift beyond the allowances
 //!
-//! Run directly:  material-cross-check <bgfx.tga> <sokol.bmp>
+//! Run directly:
+//!   material-cross-check <materials-bgfx.tga> <materials-sokol.bmp> \
+//!                        <postfx-bgfx.tga> <postfx-sokol.bmp>
 
 const std = @import("std");
 
@@ -66,6 +79,10 @@ const WIDTH: u32 = 720;
 const HEIGHT: u32 = 96;
 const COLUMNS: u32 = 10;
 const COLUMN_WIDTH: u32 = WIDTH / COLUMNS; // 72 px per column strip
+
+/// The bloom→crt post-fx golden scene (both backends' `post_fx_golden.zig`).
+const POSTFX_WIDTH: u32 = 192;
+const POSTFX_HEIGHT: u32 = 128;
 
 const COLUMN_NAMES = [COLUMNS][]const u8{
     "flash (amount 0.6)",
@@ -258,6 +275,49 @@ fn diffColumns(a: *const Image, b: *const Image) [COLUMNS]ColumnStat {
 
 // ── Entry point ─────────────────────────────────────────────────────────────
 
+/// Read + decode one backend pair (bgfx TGA + sokol BMP), enforcing the shared
+/// scene dimensions. Exits with the documented codes on failure.
+fn loadPair(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    tga_path: []const u8,
+    bmp_path: []const u8,
+    expected_w: u32,
+    expected_h: u32,
+) struct { bgfx: Image, sokol: Image } {
+    const cwd = std.Io.Dir.cwd();
+    const tga_bytes = cwd.readFileAlloc(io, tga_path, allocator, .limited(64 << 20)) catch |err| {
+        std.debug.print("material-cross-check: cannot read '{s}': {s}\n", .{ tga_path, @errorName(err) });
+        std.process.exit(1);
+    };
+    defer allocator.free(tga_bytes);
+    const bmp_bytes = cwd.readFileAlloc(io, bmp_path, allocator, .limited(64 << 20)) catch |err| {
+        std.debug.print("material-cross-check: cannot read '{s}': {s}\n", .{ bmp_path, @errorName(err) });
+        std.process.exit(1);
+    };
+    defer allocator.free(bmp_bytes);
+
+    const bgfx_img = decodeTga(allocator, tga_bytes) catch |err| {
+        std.debug.print("material-cross-check: TGA decode failed for '{s}': {s}\n", .{ tga_path, @errorName(err) });
+        std.process.exit(2);
+    };
+    const sokol_img = decodeBmp(allocator, bmp_bytes) catch |err| {
+        std.debug.print("material-cross-check: BMP decode failed for '{s}': {s}\n", .{ bmp_path, @errorName(err) });
+        std.process.exit(2);
+    };
+
+    if (bgfx_img.width != expected_w or bgfx_img.height != expected_h or
+        sokol_img.width != expected_w or sokol_img.height != expected_h)
+    {
+        std.debug.print(
+            "material-cross-check: dimension mismatch — bgfx {d}x{d}, sokol {d}x{d}, expected {d}x{d} (the shared scene)\n",
+            .{ bgfx_img.width, bgfx_img.height, sokol_img.width, sokol_img.height, expected_w, expected_h },
+        );
+        std.process.exit(3);
+    }
+    return .{ .bgfx = bgfx_img, .sokol = sokol_img };
+}
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;
@@ -265,80 +325,81 @@ pub fn main(init: std.process.Init) !void {
     var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
     defer args.deinit();
     _ = args.skip(); // program name
-    const tga_path = args.next() orelse return usage();
-    const bmp_path = args.next() orelse return usage();
+    const mat_tga_path = args.next() orelse return usage();
+    const mat_bmp_path = args.next() orelse return usage();
+    const pfx_tga_path = args.next() orelse return usage();
+    const pfx_bmp_path = args.next() orelse return usage();
 
-    const cwd = std.Io.Dir.cwd();
-    const tga_bytes = cwd.readFileAlloc(io, tga_path, allocator, .limited(64 << 20)) catch |err| {
-        std.debug.print("material-cross-check: cannot read '{s}': {t}\n", .{ tga_path, err });
-        std.process.exit(1);
-    };
-    defer allocator.free(tga_bytes);
-    const bmp_bytes = cwd.readFileAlloc(io, bmp_path, allocator, .limited(64 << 20)) catch |err| {
-        std.debug.print("material-cross-check: cannot read '{s}': {t}\n", .{ bmp_path, err });
-        std.process.exit(1);
-    };
-    defer allocator.free(bmp_bytes);
-
-    const bgfx_img = decodeTga(allocator, tga_bytes) catch |err| {
-        std.debug.print("material-cross-check: TGA decode failed for '{s}': {t}\n", .{ tga_path, err });
-        std.process.exit(2);
-    };
-    defer allocator.free(bgfx_img.rgb);
-    const sokol_img = decodeBmp(allocator, bmp_bytes) catch |err| {
-        std.debug.print("material-cross-check: BMP decode failed for '{s}': {t}\n", .{ bmp_path, err });
-        std.process.exit(2);
-    };
-    defer allocator.free(sokol_img.rgb);
-
-    if (bgfx_img.width != WIDTH or bgfx_img.height != HEIGHT or
-        sokol_img.width != WIDTH or sokol_img.height != HEIGHT)
-    {
-        std.debug.print(
-            "material-cross-check: dimension mismatch — bgfx {d}x{d}, sokol {d}x{d}, expected {d}x{d} (the shared 10-column scene)\n",
-            .{ bgfx_img.width, bgfx_img.height, sokol_img.width, sokol_img.height, WIDTH, HEIGHT },
-        );
-        std.process.exit(3);
-    }
-
-    const stats = diffColumns(&bgfx_img, &sokol_img);
-
-    std.debug.print(
-        "material-cross-check: bgfx(TGA) vs sokol(BMP), {d}x{d}, base tol \u{0394}\u{2264}{d}\n",
-        .{ WIDTH, HEIGHT, BASE_CHANNEL_TOL },
-    );
     var failed = false;
-    var total_outliers: usize = 0;
-    var total_bytes: usize = 0;
-    for (stats, 0..) |stat, i| {
-        const col: u32 = @intCast(i);
-        const ok = stat.pass(col);
-        if (!ok) failed = true;
-        total_outliers += stat.outliers;
-        total_bytes += stat.total;
-        const allowance = if (col == AA_SOFT_DISC_ALLOWANCE.column) " [AA soft-disc allowance]" else "";
+
+    // ── Per-draw materials: the 10-column scene, per-column policy ──────────
+    {
+        const pair = loadPair(io, allocator, mat_tga_path, mat_bmp_path, WIDTH, HEIGHT);
+        defer allocator.free(pair.bgfx.rgb);
+        defer allocator.free(pair.sokol.rgb);
+
+        const stats = diffColumns(&pair.bgfx, &pair.sokol);
+
         std.debug.print(
-            "  col {d:2} {s:<40} outliers {d:5}/{d} ({d:.3}%)  max\u{0394} {d:3}  {s}{s}\n",
-            .{ col + 1, COLUMN_NAMES[i], stat.outliers, stat.total, stat.outlierFrac() * 100, stat.max_delta, if (ok) "OK" else "FAIL", allowance },
+            "material-cross-check [materials]: bgfx(TGA) vs sokol(BMP), {d}x{d}, base tol \u{0394}\u{2264}{d}\n",
+            .{ WIDTH, HEIGHT, BASE_CHANNEL_TOL },
+        );
+        var total_outliers: usize = 0;
+        var total_bytes: usize = 0;
+        for (stats, 0..) |stat, i| {
+            const col: u32 = @intCast(i);
+            const ok = stat.pass(col);
+            if (!ok) failed = true;
+            total_outliers += stat.outliers;
+            total_bytes += stat.total;
+            const allowance = if (col == AA_SOFT_DISC_ALLOWANCE.column) " [AA soft-disc allowance]" else "";
+            std.debug.print(
+                "  col {d:2} {s:<40} outliers {d:5}/{d} ({d:.3}%)  max\u{0394} {d:3}  {s}{s}\n",
+                .{ col + 1, COLUMN_NAMES[i], stat.outliers, stat.total, stat.outlierFrac() * 100, stat.max_delta, if (ok) "OK" else "FAIL", allowance },
+            );
+        }
+        std.debug.print(
+            "  total: {d}/{d} outlier bytes ({d:.4}%)\n",
+            .{ total_outliers, total_bytes, @as(f64, @floatFromInt(total_outliers)) / @as(f64, @floatFromInt(total_bytes)) * 100 },
         );
     }
-    std.debug.print(
-        "  total: {d}/{d} outlier bytes ({d:.4}%)\n",
-        .{ total_outliers, total_bytes, @as(f64, @floatFromInt(total_outliers)) / @as(f64, @floatFromInt(total_bytes)) * 100 },
-    );
+
+    // ── Post-fx stack: bloom→crt scene, whole image, zero outlier budget ────
+    {
+        const pair = loadPair(io, allocator, pfx_tga_path, pfx_bmp_path, POSTFX_WIDTH, POSTFX_HEIGHT);
+        defer allocator.free(pair.bgfx.rgb);
+        defer allocator.free(pair.sokol.rgb);
+
+        var outliers: usize = 0;
+        var max_delta: u8 = 0;
+        for (pair.bgfx.rgb, pair.sokol.rgb) |av, bv| {
+            const delta: u8 = if (av > bv) av - bv else bv - av;
+            if (delta > BASE_CHANNEL_TOL) outliers += 1;
+            if (delta > max_delta) max_delta = delta;
+        }
+        const ok = outliers == 0;
+        if (!ok) failed = true;
+        std.debug.print(
+            "material-cross-check [post-fx bloom\u{2192}crt]: {d}x{d}  outliers {d}/{d}  max\u{0394} {d:3}  {s}\n",
+            .{ POSTFX_WIDTH, POSTFX_HEIGHT, outliers, pair.bgfx.rgb.len, max_delta, if (ok) "OK" else "FAIL" },
+        );
+    }
 
     if (failed) {
         std.debug.print(
-            "material-cross-check: FAIL — cross-backend drift beyond the policy. A shader/renderer change in labelle-bgfx or labelle-sokol broke visual parity of the curated material set; fix the divergent backend (or, for an INTENTIONAL rendering change, land it on BOTH backends and bump both pins in build.zig).\n",
+            "material-cross-check: FAIL — cross-backend drift beyond the policy. A shader/renderer change in labelle-bgfx or labelle-sokol broke visual parity of the curated material/post-fx set; fix the divergent backend (or, for an INTENTIONAL rendering change, land it on BOTH backends and bump both pins in build.zig).\n",
             .{},
         );
         std.process.exit(4);
     }
-    std.debug.print("material-cross-check: OK — backends render the material set within policy.\n", .{});
+    std.debug.print("material-cross-check: OK — backends render the material set + post-fx stack within policy.\n", .{});
 }
 
 fn usage() void {
-    std.debug.print("usage: material-cross-check <bgfx-golden.tga> <sokol-golden.bmp>\n", .{});
+    std.debug.print(
+        "usage: material-cross-check <materials-bgfx.tga> <materials-sokol.bmp> <postfx-bgfx.tga> <postfx-sokol.bmp>\n",
+        .{},
+    );
     std.process.exit(1);
 }
 

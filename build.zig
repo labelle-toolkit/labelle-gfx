@@ -123,6 +123,16 @@ pub fn build(b: *std.Build) void {
         // labelle-sokol PR #16 (v0.5.0) — dissolve + outline ported from bgfx.
         "9ead0e45e2f471b40391ef9c17be1cede1c8dcea" ++
         "/test/golden/material_effects.bmp";
+    // The bloom→crt post-fx-stack goldens (same bump procedure; byte-identical
+    // across backends at these pins).
+    const bgfx_postfx_url = "https://raw.githubusercontent.com/labelle-toolkit/labelle-bgfx/" ++
+        // labelle-bgfx PR #46 — post-fx passes (P2 Slice B).
+        "7c640726d4d5e3d541c08f869852297b97f88537" ++
+        "/test/golden/post_fx_bloom_crt.tga";
+    const sokol_postfx_url = "https://raw.githubusercontent.com/labelle-toolkit/labelle-sokol/" ++
+        // labelle-sokol PR #15 (v0.4.0) — render-targets + post-fx passes.
+        "e70a5c47b4ce45a7ce932f6e6617fe0f4aeb6378" ++
+        "/test/golden/post_fx_bloom_crt.bmp";
 
     // Fetch each golden through a cached Run step: the URL (with its pinned
     // SHA) is part of the cache key, so a pin bump re-fetches and an unchanged
@@ -133,6 +143,12 @@ pub fn build(b: *std.Build) void {
     const fetch_sokol_golden = b.addSystemCommand(&.{ "curl", "-fsSL", "--retry", "3", "-o" });
     const sokol_golden_file = fetch_sokol_golden.addOutputFileArg("material_effects.bmp");
     fetch_sokol_golden.addArg(sokol_golden_url);
+    const fetch_bgfx_postfx = b.addSystemCommand(&.{ "curl", "-fsSL", "--retry", "3", "-o" });
+    const bgfx_postfx_file = fetch_bgfx_postfx.addOutputFileArg("post_fx_bloom_crt.tga");
+    fetch_bgfx_postfx.addArg(bgfx_postfx_url);
+    const fetch_sokol_postfx = b.addSystemCommand(&.{ "curl", "-fsSL", "--retry", "3", "-o" });
+    const sokol_postfx_file = fetch_sokol_postfx.addOutputFileArg("post_fx_bloom_crt.bmp");
+    fetch_sokol_postfx.addArg(sokol_postfx_url);
 
     const cross_check_module = b.createModule(.{
         .root_source_file = b.path("tools/material_cross_check.zig"),
@@ -146,9 +162,11 @@ pub fn build(b: *std.Build) void {
     const run_cross_check = b.addRunArtifact(cross_check_exe);
     run_cross_check.addFileArg(bgfx_golden_file);
     run_cross_check.addFileArg(sokol_golden_file);
+    run_cross_check.addFileArg(bgfx_postfx_file);
+    run_cross_check.addFileArg(sokol_postfx_file);
     const cross_check_step = b.step(
         "material-cross-check",
-        "Diff the pinned bgfx + sokol material goldens for cross-backend parity (labelle-gfx#305)",
+        "Diff the pinned bgfx + sokol material/post-fx goldens for cross-backend parity (labelle-gfx#305)",
     );
     cross_check_step.dependOn(&run_cross_check.step);
 
