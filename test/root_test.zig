@@ -718,6 +718,27 @@ test "Material: a flash sprite routes through drawTextureProMaterial with exact 
     try testing.expectEqual(@as(f32, 1), mats[0].material.uniforms.a);
 }
 
+test "Material: SpriteComponent.toVisual carries the material through to SpriteVisual" {
+    // The game-facing SpriteComponent (what engine's Game.setMaterial writes,
+    // see labelle-engine#790) must propagate its material to the render-side
+    // SpriteVisual via toVisual — otherwise a set material never reaches the
+    // draw path (labelle-gfx#789).
+    const Sprite = SpriteComponent(DefaultLayers);
+
+    // Default: no-effect material, byte-identical to pre-#789 behaviour.
+    const plain = (Sprite{ .sprite_name = "plain" }).toVisual();
+    try testing.expectEqual(core.MaterialEffect.none, plain.material.effect);
+
+    // A flash material set on the component reaches the visual intact.
+    const flashed = (Sprite{
+        .sprite_name = "flasher",
+        .material = .{ .effect = .flash, .uniforms = .{ .scalar0 = 0.5, .a = 1 } },
+    }).toVisual();
+    try testing.expectEqual(core.MaterialEffect.flash, flashed.material.effect);
+    try testing.expectEqual(@as(f32, 0.5), flashed.material.uniforms.scalar0);
+    try testing.expectEqual(@as(f32, 1), flashed.material.uniforms.a);
+}
+
 test "Material: an unsupported effect degrades to a plain sprite draw" {
     // The mock declines `outline`, so the renderer's material branch falls back
     // to `drawTexturePro` — the sprite still draws (no MaterialCall), a graceful

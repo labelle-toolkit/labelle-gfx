@@ -11,6 +11,7 @@ pub const Pivot = types_mod.Pivot;
 pub const SizeMode = types_mod.SizeMode;
 pub const Container = types_mod.Container;
 pub const TextureId = types_mod.TextureId;
+pub const Material = types_mod.Material;
 pub const Shape = visuals_mod.Shape;
 pub const VisualType = core.VisualType;
 
@@ -41,6 +42,13 @@ pub fn SpriteComponent(comptime LayerEnum: type) type {
         layer: LayerEnum = VTypes.getDefaultLayer(),
         size_mode: SizeMode = .none,
         container: ?Container = null,
+        /// Optional per-draw curated shader effect (material seam,
+        /// labelle-gfx#305). Default `.effect == .none` is the byte-identical
+        /// fast path; a non-`none` material rides the optional
+        /// `drawTextureProMaterial` backend decl (engine sets this via
+        /// `Game.setMaterial`, see labelle-engine#790). Propagated to
+        /// `SpriteVisual.material` by `toVisual` below.
+        material: Material = .{},
 
         pub fn toVisual(self: Self) SpriteVisual {
             return .{
@@ -59,6 +67,7 @@ pub fn SpriteComponent(comptime LayerEnum: type) type {
                 .layer = self.layer,
                 .size_mode = self.size_mode,
                 .container = self.container,
+                .material = self.material,
             };
         }
     };
