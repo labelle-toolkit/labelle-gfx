@@ -645,7 +645,18 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // buffer-size bug is caught in dev instead of an OOB read in the
             // backend upload.
             std.debug.assert(pixels.len == @as(usize, width) * @as(usize, height) * 4);
-            const tex = try B.uploadTexture(.{
+            // Upload straight through `BackendImpl` (NOT the `B =
+            // Backend(Impl)` core-contract wrapper): the wrapper's
+            // `uploadTexture` forwarder is typed against core's
+            // `DecodedImage`, but a backend's own `DecodedImage` is only
+            // STRUCTURALLY identical (backends carry no labelle-core dep — see
+            // the backend `texture.zig` note), so routing through `B` would
+            // cross the nominal-type boundary and fail to compile on every real
+            // backend. Backend-native texture handles pass straight through,
+            // exactly like the render-target methods below (labelle-engine#787:
+            // this is what made #771's font pipeline compile only against the
+            // mock renderer, never a GPU backend).
+            const tex = try BackendImpl.uploadTexture(.{
                 .pixels = @constCast(pixels),
                 .width = width,
                 .height = height,
@@ -654,7 +665,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // otherwise an OOM on the map insert leaks it (it can never be
             // found for `unloadTexture` / `deinit`) and we'd return a handle
             // that silently resolves to nothing on every draw.
-            errdefer B.unloadTexture(tex);
+            errdefer BackendImpl.unloadTexture(tex);
             const id = TextureId.from(tex.id);
             try self.textures.put(id.toInt(), .{
                 .backend_texture = tex,
