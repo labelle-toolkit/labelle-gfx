@@ -576,6 +576,85 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             }
         }
 
+        // -- Immediate-mode screen-space UI primitives (labelle-engine#771) --
+        //
+        // The engine side of the in-game UI-kit DrawList seam (labelle-gui
+        // `ui_kit`): the engine walks the kit's backend-agnostic DrawList and
+        // issues these per command — a textured atlas quad (9-slice cells,
+        // glyph quads), a solid rect (panel fallback, focus ring), and a
+        // one-shot RGBA texture upload for a baked font atlas.
+        //
+        // All three forward to REQUIRED backend-contract decls (`drawTexturePro`
+        // / `drawRectangleRec` / `uploadTexture`), so — unlike `drawMesh` and
+        // the render targets below — they need no `@hasDecl` gate and work on
+        // every backend. The engine still gates its call site on
+        // `@hasDecl(Renderer, "drawScreenTexture")` so a game pinned to an
+        // older gfx degrades to a no-op UI rather than failing to compile.
+        //
+        // COORDINATE SPACE: SCREEN space — top-left origin, Y-DOWN, pixels; NOT
+        // world/`y_axis` space and NOT camera-transformed, matching
+        // `drawRenderTarget`. `src_*` is in texture pixels (the `drawTexturePro`
+        // source-rect convention); `dst_*` is the on-screen rect.
+
+        /// Draw a textured atlas quad in screen space. `texture_id` is a loaded
+        /// texture handle (from `loadTextureFromMemory`, `registerCatalogTexture`,
+        /// or `createTextureFromPixels`); no-ops if unknown.
+        pub fn drawScreenTexture(
+            self: *Self,
+            texture_id: u32,
+            src_x: f32,
+            src_y: f32,
+            src_w: f32,
+            src_h: f32,
+            dst_x: f32,
+            dst_y: f32,
+            dst_w: f32,
+            dst_h: f32,
+            r: u8,
+            g: u8,
+            b: u8,
+            a: u8,
+        ) void {
+            const info = self.textures.get(texture_id) orelse return;
+            B.drawTexturePro(
+                info.backend_texture,
+                .{ .x = src_x, .y = src_y, .width = src_w, .height = src_h },
+                .{ .x = dst_x, .y = dst_y, .width = dst_w, .height = dst_h },
+                .{ .x = 0, .y = 0 }, // origin — top-left, no rotation pivot
+                0, // rotation
+                .{ .r = r, .g = g, .b = b, .a = a },
+            );
+        }
+
+        /// Draw a solid-colored rect in screen space.
+        pub fn drawScreenRect(self: *Self, x: f32, y: f32, w: f32, h: f32, r: u8, g: u8, b: u8, a: u8) void {
+            _ = self;
+            B.drawRectangleRec(
+                .{ .x = x, .y = y, .width = w, .height = h },
+                .{ .r = r, .g = g, .b = b, .a = a },
+            );
+        }
+
+        /// Upload an RGBA8 pixel buffer as a new texture and register it in the
+        /// engine's texture table, returning its handle. Used by the engine's
+        /// `bakeUiFont` for the expanded font-atlas texture. `pixels.len` must
+        /// be `width * height * 4`. The backend copies the pixels; the caller
+        /// owns and frees `pixels` after this returns.
+        pub fn createTextureFromPixels(self: *Self, width: u32, height: u32, pixels: []const u8) !u32 {
+            const tex = try B.uploadTexture(.{
+                .pixels = @constCast(pixels),
+                .width = width,
+                .height = height,
+            });
+            const id = TextureId.from(tex.id);
+            self.textures.put(id.toInt(), .{
+                .backend_texture = tex,
+                .width = @floatFromInt(width),
+                .height = @floatFromInt(height),
+            }) catch {};
+            return id.toInt();
+        }
+
         // -- Offscreen render targets (the transport mirror + headless capture,
         // labelle-bgfx#36) --
         //
