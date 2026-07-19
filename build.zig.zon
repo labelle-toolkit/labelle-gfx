@@ -29,5 +29,11 @@
         "spatial_grid",
         "tilemap",
         "camera",
+        // build.zig references these outside src/: the #305 cross-check tool
+        // (`zig build material-cross-check` + its unit tests) and the test
+        // roots (`zig build test`). Without them a package-cache copy of this
+        // repo can't compile those steps.
+        "tools",
+        "test",
     },
 }
