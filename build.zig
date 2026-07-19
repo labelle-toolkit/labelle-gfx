@@ -98,13 +98,78 @@ pub fn build(b: *std.Build) void {
         .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
     });
 
+    // ── Cross-backend material golden pins (labelle-gfx#305) ─────────────────
+    //
+    // The ONE place the pinned goldens live. `zig build material-cross-check`
+    // fetches both backends' committed material goldens at these EXACT commit
+    // SHAs and diffs them (tools/material_cross_check.zig — policy + column
+    // map documented there). Pinned-SHA fetch instead of vendored copies:
+    // a vendored copy goes stale silently, while a pin makes every golden
+    // update an explicit, reviewable bump here.
+    //
+    // BUMP PROCEDURE (this bump IS the cross-backend review point): when a
+    // backend re-blesses its material golden (its own `zig build
+    // material-golden-bless` flow), update that backend's SHA below to the
+    // commit that landed the new golden and run `zig build
+    // material-cross-check`. If the check fails, the backends have diverged
+    // visually — fix the divergent backend (or land the intentional rendering
+    // change on BOTH backends) before bumping. Never widen the tool's
+    // allowances to make a bump pass without recording why in its policy doc.
+    const bgfx_golden_url = "https://raw.githubusercontent.com/labelle-toolkit/labelle-bgfx/" ++
+        // labelle-bgfx PR #49 — dissolve + outline complete the curated set.
+        "b80c1540f79662b072892e2903dafd0b83706532" ++
+        "/test/golden/material_effects.tga";
+    const sokol_golden_url = "https://raw.githubusercontent.com/labelle-toolkit/labelle-sokol/" ++
+        // labelle-sokol PR #16 (v0.5.0) — dissolve + outline ported from bgfx.
+        "9ead0e45e2f471b40391ef9c17be1cede1c8dcea" ++
+        "/test/golden/material_effects.bmp";
+
+    // Fetch each golden through a cached Run step: the URL (with its pinned
+    // SHA) is part of the cache key, so a pin bump re-fetches and an unchanged
+    // pin reuses the cached file — no network on repeat runs.
+    const fetch_bgfx_golden = b.addSystemCommand(&.{ "curl", "-fsSL", "--retry", "3", "-o" });
+    const bgfx_golden_file = fetch_bgfx_golden.addOutputFileArg("material_effects.tga");
+    fetch_bgfx_golden.addArg(bgfx_golden_url);
+    const fetch_sokol_golden = b.addSystemCommand(&.{ "curl", "-fsSL", "--retry", "3", "-o" });
+    const sokol_golden_file = fetch_sokol_golden.addOutputFileArg("material_effects.bmp");
+    fetch_sokol_golden.addArg(sokol_golden_url);
+
+    const cross_check_module = b.createModule(.{
+        .root_source_file = b.path("tools/material_cross_check.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const cross_check_exe = b.addExecutable(.{
+        .name = "material-cross-check",
+        .root_module = cross_check_module,
+    });
+    const run_cross_check = b.addRunArtifact(cross_check_exe);
+    run_cross_check.addFileArg(bgfx_golden_file);
+    run_cross_check.addFileArg(sokol_golden_file);
+    const cross_check_step = b.step(
+        "material-cross-check",
+        "Diff the pinned bgfx + sokol material goldens for cross-backend parity (labelle-gfx#305)",
+    );
+    cross_check_step.dependOn(&run_cross_check.step);
+
+    // The tool's own decoder/policy unit tests ride the regular test step.
+    const cross_check_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/material_cross_check.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
     const run_tests = b.addRunArtifact(tests);
     const run_root_tests = b.addRunArtifact(root_tests);
     const run_tilemap_tests = b.addRunArtifact(tilemap_tests);
     const run_camera_tests = b.addRunArtifact(camera_tests);
+    const run_cross_check_tests = b.addRunArtifact(cross_check_tests);
     const test_step = b.step("test", "Run labelle-gfx tests");
     test_step.dependOn(&run_tests.step);
     test_step.dependOn(&run_root_tests.step);
     test_step.dependOn(&run_tilemap_tests.step);
     test_step.dependOn(&run_camera_tests.step);
+    test_step.dependOn(&run_cross_check_tests.step);
 }

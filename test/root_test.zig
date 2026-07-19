@@ -652,6 +652,11 @@ test "RetainedEngine: render produces draw calls" {
 
 // ── Material seam (labelle-gfx#305) ────────────────────────
 
+// Raylib-shaped degrade proof + batching-cost measurement (v1 acceptance).
+comptime {
+    _ = @import("material_batch_cost.zig");
+}
+
 test "Material: a flash sprite routes through drawTextureProMaterial with exact uniforms" {
     // A non-`.none` material the backend supports (mock advertises flash) is
     // forwarded to `drawTextureProMaterial`; the mock records the exact effect
