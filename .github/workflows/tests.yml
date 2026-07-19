@@ -43,3 +43,24 @@ jobs:
 
       - name: Run tests
         run: zig build test --summary all
+
+  # Cross-backend material golden parity (labelle-gfx#305): fetch the bgfx +
+  # sokol committed material goldens at the SHAs pinned in build.zig and diff
+  # them (tools/material_cross_check.zig). Any shader change in either backend
+  # that breaks visual parity of the curated material set fails here on its pin
+  # bump — the seam owner's CI is the parity gate. The tool is std-only (no
+  # backend deps), so no native packages are needed.
+  material-cross-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: '0.16.0'
+
+      - name: Cross-backend material golden diff
+        run: zig build material-cross-check
