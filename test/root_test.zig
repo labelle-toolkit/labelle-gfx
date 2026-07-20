@@ -1564,6 +1564,159 @@ test "GfxRenderer: filled triangle vertices compose in logical space then flip o
     try testing.expectEqual(tri.v1.y - p3.y, tri.v3.y);
 }
 
+// ── World-space gizmo rect composes with the camera (regression: gfx#314) ──
+//
+// A world-space gizmo rect is `corner (x1,y1)` + `size (x2=w, y2=h)`, drawn
+// INSIDE `camera.begin()/end()` so the backend camera owns the world→screen
+// map. The old `drawGizmoPrimitive` flipped only `.y` (`toScreenY(y1)`) and
+// passed `.height = y2` RAW, so under `.up` the rect covered world [y1-h, y1]
+// instead of [y1, y1+h] — a slot-sized outline landed a full cell (h) off and
+// did not scale with zoom. The fix maps BOTH world corners through the same
+// `toScreenY` flip the sprite/entity path uses, so the rect overlays the sprite
+// at the same world coords for ANY camera pan/zoom.
+
+test "GfxRenderer: world-space gizmo rect overlays the same world coords as a sprite under a panned/zoomed camera (gfx#314)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    MockBackend.setScreenSize(800, 600);
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    const screen_h: f32 = 600;
+    renderer.setScreenHeight(screen_h);
+
+    // Pan + zoom the (always-active) camera 0 off its default so the world→
+    // screen transform is genuinely non-identity — the condition under which
+    // the old bug's drift became a full cell.
+    const cam = renderer.getCamera();
+    cam.x = 120;
+    cam.y = 75;
+    cam.zoom = 1.5;
+
+    // A slot-sized (156×93) world rect at a sprite's world position.
+    const wx: f32 = 100;
+    const wy: f32 = 50;
+    const w: f32 = 156;
+    const h: f32 = 93;
+
+    const draws = [_]core.GizmoDraw{.{
+        .kind = .rect,
+        .x1 = wx,
+        .y1 = wy,
+        .x2 = w,
+        .y2 = h,
+        .space = .world,
+    }};
+    renderer.renderGizmoDraws(&draws);
+
+    // Exactly one rect recorded (camera 0 is the only active camera). The mock
+    // records the PRE-camera pixel the primitive hands the backend, with the
+    // `.up` flip already applied.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getShapeCallCount());
+    const rec = MockBackend.getShapeCalls()[0].rect;
+
+    // Both world corners flip through the SAME `core.toScreenY` sprites use.
+    // Under `.up` the smaller screen-y is the world TOP corner (wy + h).
+    const top_screen_y = core.toScreenY(.up, wy + h, screen_h); // 600 - 143 = 457
+    const bot_screen_y = core.toScreenY(.up, wy, screen_h); //     600 -  50 = 550
+    try testing.expectEqual(wx, rec.x);
+    try testing.expectEqual(top_screen_y, rec.y);
+    try testing.expectEqual(w, rec.width);
+    try testing.expectEqual(h, rec.height);
+    // Regression guard: the old bug set `.y = toScreenY(y1)` (the BOTTOM edge)
+    // and `.height` raw, so the rect started a full cell (h) too low.
+    try testing.expect(rec.y != bot_screen_y);
+
+    // End-to-end: push the recorded pre-camera corners through the SAME camera
+    // transform the renderer draws them under (`worldToScreen`), and assert they
+    // land on the exact screen pixels of the two WORLD corners as computed by
+    // the sprite-facing `camera.worldToScreen`. This is precisely what "the
+    // gizmo overlays the sprite at that world coord for any pan/zoom" means.
+    const cam2d = cam.toBackend();
+    const gizmo_bottom_left = MockBackend.worldToScreen(.{ .x = rec.x, .y = rec.y + rec.height }, cam2d);
+    const gizmo_top_left = MockBackend.worldToScreen(.{ .x = rec.x, .y = rec.y }, cam2d);
+    const gizmo_top_right = MockBackend.worldToScreen(.{ .x = rec.x + rec.width, .y = rec.y }, cam2d);
+
+    const sprite_bottom_left = cam.worldToScreen(wx, wy);
+    const sprite_top_left = cam.worldToScreen(wx, wy + h);
+    const sprite_top_right = cam.worldToScreen(wx + w, wy + h);
+
+    try testing.expectApproxEqAbs(sprite_bottom_left.x, gizmo_bottom_left.x, 1e-3);
+    try testing.expectApproxEqAbs(sprite_bottom_left.y, gizmo_bottom_left.y, 1e-3);
+    try testing.expectApproxEqAbs(sprite_top_left.x, gizmo_top_left.x, 1e-3);
+    try testing.expectApproxEqAbs(sprite_top_left.y, gizmo_top_left.y, 1e-3);
+    try testing.expectApproxEqAbs(sprite_top_right.x, gizmo_top_right.x, 1e-3);
+    try testing.expectApproxEqAbs(sprite_top_right.y, gizmo_top_right.y, 1e-3);
+}
+
+test "GfxRendererWith(.down): world-space gizmo rect keeps corner + size (no flip), height not raw-mirrored (gfx#314)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    MockBackend.setScreenSize(800, 600);
+
+    // Under `.down`, `toScreenY` is the identity, so a rect at corner (x1,y1)
+    // with size (w,h) must record as exactly (x1, y1, w, h) — the fix must be
+    // y-axis-agnostic and not introduce an `.up`-only mirror.
+    const Renderer = GfxRendererWith(MockBackend, DefaultLayers, u32, .down);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    const wx: f32 = 100;
+    const wy: f32 = 50;
+    const w: f32 = 156;
+    const h: f32 = 93;
+
+    const draws = [_]core.GizmoDraw{.{
+        .kind = .rect,
+        .x1 = wx,
+        .y1 = wy,
+        .x2 = w,
+        .y2 = h,
+        .space = .world,
+    }};
+    renderer.renderGizmoDraws(&draws);
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getShapeCallCount());
+    const rec = MockBackend.getShapeCalls()[0].rect;
+    try testing.expectEqual(wx, rec.x);
+    try testing.expectEqual(wy, rec.y);
+    try testing.expectEqual(w, rec.width);
+    try testing.expectEqual(h, rec.height);
+}
+
+test "GfxRenderer: screen-space gizmo rect is untouched (corner + size, no camera, no flip) (gfx#314)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    MockBackend.setScreenSize(800, 600);
+
+    // The screen-space pass is called with `screen_height == 0` (no flip) and
+    // NO camera. It was correct before the fix and must stay byte-identical: a
+    // rect at (x1,y1) size (w,h) records verbatim as (x1, y1, w, h).
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    const draws = [_]core.GizmoDraw{.{
+        .kind = .rect,
+        .x1 = 10,
+        .y1 = 20,
+        .x2 = 40,
+        .y2 = 12,
+        .space = .screen,
+    }};
+    renderer.renderGizmoDraws(&draws);
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getShapeCallCount());
+    const rec = MockBackend.getShapeCalls()[0].rect;
+    try testing.expectEqual(@as(f32, 10), rec.x);
+    try testing.expectEqual(@as(f32, 20), rec.y);
+    try testing.expectEqual(@as(f32, 40), rec.width);
+    try testing.expectEqual(@as(f32, 12), rec.height);
+}
+
 // ── Y-axis convention (gfx#276) ────────────────────────────
 //
 // The renderer's vertical flip is comptime-parameterized by the project's

@@ -944,7 +944,28 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
 
             switch (d.kind) {
                 .line => B.drawLine(d.x1, y1, d.x2, y2, 2, c),
-                .rect => B.drawRectangleRec(.{ .x = d.x1, .y = y1, .width = d.x2, .height = d.y2 }, c),
+                .rect => {
+                    // A rect is corner `(x1, y1)` + size (`x2` = width, `y2` =
+                    // height). Flipping only `.y` while passing `.height` raw
+                    // (the old bug) drew the corner correctly but extended the
+                    // rect the WRONG way — under `.up` it covered world
+                    // [y1 - h, y1] instead of [y1, y1 + h], so a slot-sized
+                    // outline landed a full cell off and did not scale with the
+                    // camera (labelle-gfx#314). Map BOTH world corners through
+                    // the same `toScreenY` flip the entity/sprite path uses,
+                    // then take the min corner + |delta| so the rect lands (and
+                    // scales, once the camera transform is applied on top) on the
+                    // exact pixels a sprite at those world coords would — for
+                    // either y-axis and any camera pan/zoom.
+                    const ry0 = if (screen_height > 0) core.toScreenY(y_axis, d.y1, screen_height) else d.y1;
+                    const ry1 = if (screen_height > 0) core.toScreenY(y_axis, d.y1 + d.y2, screen_height) else d.y1 + d.y2;
+                    B.drawRectangleRec(.{
+                        .x = d.x1,
+                        .y = @min(ry0, ry1),
+                        .width = d.x2,
+                        .height = @abs(ry1 - ry0),
+                    }, c);
+                },
                 .circle => B.drawCircle(d.x1, y1, d.x2, c),
                 .arrow => {
                     B.drawLine(d.x1, y1, d.x2, y2, 2, c);
