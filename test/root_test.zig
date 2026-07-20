@@ -1717,6 +1717,247 @@ test "GfxRenderer: screen-space gizmo rect is untouched (corner + size, no camer
     try testing.expectEqual(@as(f32, 12), rec.height);
 }
 
+// ── World gizmos compose with the design→physical aspect-fit (gfx#314) ──
+//
+// The MockBackend can't catch the *whole* bug: it has no aspect-fit, so a
+// gizmo and a sprite at the same design-space coord always coincide there.
+// On a REAL backend (bgfx/sokol/raylib) draw calls are letterboxed design→
+// physical at draw time, gated by a `setApplyFit` global. Every LAYER sets
+// that global before `cam.begin()` (renderer.zig layer loop). `renderGizmoDraws`
+// was the ONE render pass that never set it — so world gizmos inherited whatever
+// fit state the post-fx composite / a `screen_fill` layer left, and drifted from
+// sprites by the design→physical scale for ALL primitives (line/circle/arrow/
+// rect), not just rect's raw height. (Discovered empirically on flying-platform,
+// bgfx 0.13 — a world gizmo landed a full band below its sprite.)
+//
+// `FitBackend` models exactly that pipeline (design canvas letterboxed into a
+// differently-shaped physical framebuffer, fit applied at draw time honoring
+// `setApplyFit`, camera pan/zoom in `beginMode2D`). It records the FINAL
+// framebuffer pixel of each primitive, so the test can assert a world gizmo
+// lands on the same framebuffer pixel as the sprite transform — `camera.
+// worldToFramebuffer`, which is `designToPhysical ∘ worldToScreen ∘ toScreenY`,
+// i.e. exactly where a sprite (`syncPosition` → design coord, drawn fitted) lands.
+
+var fit_design_w: f32 = 800;
+var fit_design_h: f32 = 600;
+var fit_phys_w: f32 = 800;
+var fit_phys_h: f32 = 1200;
+var fit_active: bool = true;
+var fit_cam: ?MockBackend.Camera2D = null;
+var fit_rec: [64]MockBackend.Vector2 = undefined;
+var fit_rec_n: usize = 0;
+
+fn fitResetState(dw: f32, dh: f32, pw: f32, ph: f32) void {
+    fit_design_w = dw;
+    fit_design_h = dh;
+    fit_phys_w = pw;
+    fit_phys_h = ph;
+    fit_active = true;
+    fit_cam = null;
+    fit_rec_n = 0;
+}
+
+fn fitScaleXY() struct { x: f32, y: f32 } {
+    const s = @min(fit_phys_w / fit_design_w, fit_phys_h / fit_design_h);
+    return .{ .x = s * fit_design_w / fit_phys_w, .y = s * fit_design_h / fit_phys_h };
+}
+
+fn fitCamXform(px: f32, py: f32) MockBackend.Vector2 {
+    if (fit_cam) |cam| {
+        return .{
+            .x = (px - cam.target.x) * cam.zoom + cam.offset.x,
+            .y = (py - cam.target.y) * cam.zoom + cam.offset.y,
+        };
+    }
+    return .{ .x = px, .y = py };
+}
+
+// The DRAW-time transform: camera → NDC (honoring `fit_active`, like bgfx's
+// `toNdc`) → physical framebuffer px. `fit_active == false` skips the fit,
+// mimicking a draw issued while the backend is in `screen_fill`/post-fx mode.
+fn fitToPhysicalDraw(px: f32, py: f32) MockBackend.Vector2 {
+    const c = fitCamXform(px, py);
+    const fs = fitScaleXY();
+    const fx: f32 = if (fit_active) fs.x else 1.0;
+    const fy: f32 = if (fit_active) fs.y else 1.0;
+    const ndc_x = ((c.x / fit_design_w) * 2.0 - 1.0) * fx;
+    const ndc_y = (1.0 - (c.y / fit_design_h) * 2.0) * fy;
+    return .{ .x = (ndc_x + 1.0) * 0.5 * fit_phys_w, .y = (1.0 - ndc_y) * 0.5 * fit_phys_h };
+}
+
+fn fitRecord(p: MockBackend.Vector2) void {
+    if (fit_rec_n < fit_rec.len) {
+        fit_rec[fit_rec_n] = p;
+        fit_rec_n += 1;
+    }
+}
+
+/// Backend that models the design→physical aspect-fit + camera pipeline (bgfx/
+/// sokol/raylib shape). Boring/unused decls delegate to MockBackend so the
+/// contract validates; the fit-relevant + recording decls are implemented here.
+const FitBackend = struct {
+    pub const DecodedImage = MockBackend.DecodedImage;
+    pub const Texture = MockBackend.Texture;
+    pub const Color = MockBackend.Color;
+    pub const Rectangle = MockBackend.Rectangle;
+    pub const Vector2 = MockBackend.Vector2;
+    pub const Camera2D = MockBackend.Camera2D;
+
+    pub const white = MockBackend.white;
+    pub const black = MockBackend.black;
+    pub const red = MockBackend.red;
+    pub const green = MockBackend.green;
+    pub const blue = MockBackend.blue;
+    pub const transparent = MockBackend.transparent;
+    pub const color = MockBackend.color;
+
+    // Unused-by-this-test required decls — delegated (never called here).
+    pub const drawTexturePro = MockBackend.drawTexturePro;
+    pub const drawTriangle = MockBackend.drawTriangle;
+    pub const drawPolygon = MockBackend.drawPolygon;
+    pub const drawText = MockBackend.drawText;
+    pub const loadTexture = MockBackend.loadTexture;
+    pub const decodeImage = MockBackend.decodeImage;
+    pub const uploadTexture = MockBackend.uploadTexture;
+    pub const unloadTexture = MockBackend.unloadTexture;
+    pub const screenToWorld = MockBackend.screenToWorld;
+
+    // ── Aspect-fit + camera state ──────────────────────────────
+    pub fn setApplyFit(active: bool) void {
+        fit_active = active;
+    }
+    pub fn setDesignSize(w: i32, h: i32) void {
+        fit_design_w = @floatFromInt(w);
+        fit_design_h = @floatFromInt(h);
+    }
+    pub fn getScreenWidth() i32 {
+        return @intFromFloat(fit_design_w);
+    }
+    pub fn getScreenHeight() i32 {
+        return @intFromFloat(fit_design_h);
+    }
+    pub fn beginMode2D(cam: Camera2D) void {
+        fit_cam = cam;
+    }
+    pub fn endMode2D() void {
+        fit_cam = null;
+    }
+    // Camera transform in design space (matches bgfx `transformX/Y`).
+    pub fn worldToScreen(pos: Vector2, cam: Camera2D) Vector2 {
+        return .{
+            .x = (pos.x - cam.target.x) * cam.zoom + cam.offset.x,
+            .y = (pos.y - cam.target.y) * cam.zoom + cam.offset.y,
+        };
+    }
+    // design → physical, ALWAYS fitted (matches bgfx `designToPhysical`; this is
+    // the "where a sprite lands" mapping `worldToFramebuffer` composes with).
+    pub fn designToPhysical(pos: Vector2) Vector2 {
+        const fs = fitScaleXY();
+        const ndc_x = ((pos.x / fit_design_w) * 2.0 - 1.0) * fs.x;
+        const ndc_y = (1.0 - (pos.y / fit_design_h) * 2.0) * fs.y;
+        return .{ .x = (ndc_x + 1.0) * 0.5 * fit_phys_w, .y = (1.0 - ndc_y) * 0.5 * fit_phys_h };
+    }
+
+    // ── Draw primitives: record the FINAL framebuffer pixel ────
+    pub fn drawLine(x1: f32, y1: f32, x2: f32, y2: f32, _: f32, _: Color) void {
+        fitRecord(fitToPhysicalDraw(x1, y1));
+        fitRecord(fitToPhysicalDraw(x2, y2));
+    }
+    pub fn drawCircle(cx: f32, cy: f32, _: f32, _: Color) void {
+        fitRecord(fitToPhysicalDraw(cx, cy));
+    }
+    pub fn drawRectangleRec(rec: Rectangle, _: Color) void {
+        fitRecord(fitToPhysicalDraw(rec.x, rec.y));
+        fitRecord(fitToPhysicalDraw(rec.x + rec.width, rec.y + rec.height));
+    }
+};
+
+fn expectPtEq(expected: anytype, got: anytype) !void {
+    try testing.expectApproxEqAbs(@as(f32, expected.x), @as(f32, got.x), 1e-2);
+    try testing.expectApproxEqAbs(@as(f32, expected.y), @as(f32, got.y), 1e-2);
+}
+
+test "GfxRenderer: line/circle/arrow/rect world gizmos land on the sprite's framebuffer pixel under camera pan+zoom+aspect-fit (gfx#314)" {
+    // Design 800x600 letterboxed into an 800x1200 physical framebuffer:
+    //   fit_scale = { x = 1.0, y = 0.5 } — the Y axis is genuinely scaled, so a
+    //   missing fit shows up as a vertical drift (the reported "band below").
+    fitResetState(800, 600, 800, 1200);
+
+    const Renderer = GfxRenderer(FitBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(fit_design_h); // == getScreenHeight(), the flip ref
+
+    const cam = renderer.getCamera();
+    cam.x = 130;
+    cam.y = 80;
+    cam.zoom = 1.4;
+
+    // Adversarial precondition: leave the backend's fit DISABLED before the
+    // gizmo pass — exactly what a post-fx composite or a `screen_fill` backdrop
+    // layer leaves behind. A correct gizmo pass must assert its OWN fit (like
+    // every layer does) and never inherit this. On main it inherits `false` and
+    // every assertion below drifts by the y fit_scale (0.5); after the fix the
+    // gizmo pass sets fit=true and all four primitives match the sprite pixel.
+    const preset_fit_off = false;
+
+    // ── LINE ──────────────────────────────────────────────────
+    {
+        FitBackend.setApplyFit(preset_fit_off);
+        fit_rec_n = 0;
+        const ax: f32 = 120;
+        const ay: f32 = 64;
+        const bx: f32 = 120 + 156;
+        const by: f32 = 64 + 93;
+        renderer.renderGizmoDraws(&[_]core.GizmoDraw{.{ .kind = .line, .x1 = ax, .y1 = ay, .x2 = bx, .y2 = by, .space = .world }});
+        try testing.expect(fit_rec_n >= 2);
+        try expectPtEq(cam.worldToFramebuffer(ax, ay), fit_rec[0]);
+        try expectPtEq(cam.worldToFramebuffer(bx, by), fit_rec[1]);
+    }
+
+    // ── CIRCLE ────────────────────────────────────────────────
+    {
+        FitBackend.setApplyFit(preset_fit_off);
+        fit_rec_n = 0;
+        const ccx: f32 = 200;
+        const ccy: f32 = 150;
+        renderer.renderGizmoDraws(&[_]core.GizmoDraw{.{ .kind = .circle, .x1 = ccx, .y1 = ccy, .x2 = 12, .space = .world }});
+        try testing.expect(fit_rec_n >= 1);
+        try expectPtEq(cam.worldToFramebuffer(ccx, ccy), fit_rec[0]);
+    }
+
+    // ── ARROW (shaft endpoints; recorded first) ───────────────
+    {
+        FitBackend.setApplyFit(preset_fit_off);
+        fit_rec_n = 0;
+        const ax: f32 = 90;
+        const ay: f32 = 40;
+        const bx: f32 = 300;
+        const by: f32 = 220;
+        renderer.renderGizmoDraws(&[_]core.GizmoDraw{.{ .kind = .arrow, .x1 = ax, .y1 = ay, .x2 = bx, .y2 = by, .space = .world }});
+        try testing.expect(fit_rec_n >= 2);
+        try expectPtEq(cam.worldToFramebuffer(ax, ay), fit_rec[0]);
+        try expectPtEq(cam.worldToFramebuffer(bx, by), fit_rec[1]);
+    }
+
+    // ── RECT (corner + size; both flipped world corners) ──────
+    {
+        FitBackend.setApplyFit(preset_fit_off);
+        fit_rec_n = 0;
+        const wx: f32 = 100;
+        const wy: f32 = 50;
+        const w: f32 = 156;
+        const h: f32 = 93;
+        renderer.renderGizmoDraws(&[_]core.GizmoDraw{.{ .kind = .rect, .x1 = wx, .y1 = wy, .x2 = w, .y2 = h, .space = .world }});
+        try testing.expect(fit_rec_n >= 2);
+        // The rect's design-space top-left corner is the flipped world TOP
+        // corner (wx, wy+h); the far corner is (wx+w, wy). Both must map to the
+        // sprite framebuffer pixels of those world coords.
+        try expectPtEq(cam.worldToFramebuffer(wx, wy + h), fit_rec[0]);
+        try expectPtEq(cam.worldToFramebuffer(wx + w, wy), fit_rec[1]);
+    }
+}
+
 // ── Y-axis convention (gfx#276) ────────────────────────────
 //
 // The renderer's vertical flip is comptime-parameterized by the project's

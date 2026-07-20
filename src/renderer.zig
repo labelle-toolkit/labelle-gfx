@@ -907,6 +907,25 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             // per active camera so split-screen views each get the debug
             // overlay (labelle-gfx#226 — previously only the primary
             // camera's view showed gizmos).
+            //
+            // The aspect-fit (`setApplyFit`) MUST be asserted here, before
+            // `camera.begin()`, exactly as the layer loop does for every layer
+            // (see `render`). A backend applies the design→physical letterbox
+            // at DRAW time gated on this global; `renderGizmoDraws` was the one
+            // render pass that never set it, so world gizmos inherited whatever
+            // fit state the post-fx composite / a `screen_fill` backdrop left.
+            // On a backend whose design canvas is letterboxed into a differently
+            // shaped surface, that dropped EVERY world-space primitive (line/
+            // circle/arrow/rect) off its sprite by the fit scale — not just
+            // rect's raw height (labelle-gfx#314). World gizmos are aspect-fit
+            // content, like a world layer (`space != .screen_fill`), so the fit
+            // is ON — which is also correct for the screen-space pass below
+            // (a `.screen` layer is aspect-fit too; only `.screen_fill` is not).
+            // No-op on backends without the hook (raylib/mock) — folds away.
+            if (@hasDecl(BackendImpl, "setApplyFit")) {
+                BackendImpl.setApplyFit(true);
+            }
+
             var it = self.camera_mgr.activeIterator();
             while (it.next()) |camera| {
                 applyViewport(camera);
