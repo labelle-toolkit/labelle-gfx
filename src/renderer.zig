@@ -907,6 +907,25 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             // per active camera so split-screen views each get the debug
             // overlay (labelle-gfx#226 — previously only the primary
             // camera's view showed gizmos).
+            //
+            // The aspect-fit (`setApplyFit`) MUST be asserted here, before
+            // `camera.begin()`, exactly as the layer loop does for every layer
+            // (see `render`). A backend applies the design→physical letterbox
+            // at DRAW time gated on this global; `renderGizmoDraws` was the one
+            // render pass that never set it, so world gizmos inherited whatever
+            // fit state the post-fx composite / a `screen_fill` backdrop left.
+            // On a backend whose design canvas is letterboxed into a differently
+            // shaped surface, that dropped EVERY world-space primitive (line/
+            // circle/arrow/rect) off its sprite by the fit scale — not just
+            // rect's raw height (labelle-gfx#314). World gizmos are aspect-fit
+            // content, like a world layer (`space != .screen_fill`), so the fit
+            // is ON — which is also correct for the screen-space pass below
+            // (a `.screen` layer is aspect-fit too; only `.screen_fill` is not).
+            // No-op on backends without the hook (raylib/mock) — folds away.
+            if (@hasDecl(BackendImpl, "setApplyFit")) {
+                BackendImpl.setApplyFit(true);
+            }
+
             var it = self.camera_mgr.activeIterator();
             while (it.next()) |camera| {
                 applyViewport(camera);
@@ -944,7 +963,28 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
 
             switch (d.kind) {
                 .line => B.drawLine(d.x1, y1, d.x2, y2, 2, c),
-                .rect => B.drawRectangleRec(.{ .x = d.x1, .y = y1, .width = d.x2, .height = d.y2 }, c),
+                .rect => {
+                    // A rect is corner `(x1, y1)` + size (`x2` = width, `y2` =
+                    // height). Flipping only `.y` while passing `.height` raw
+                    // (the old bug) drew the corner correctly but extended the
+                    // rect the WRONG way — under `.up` it covered world
+                    // [y1 - h, y1] instead of [y1, y1 + h], so a slot-sized
+                    // outline landed a full cell off and did not scale with the
+                    // camera (labelle-gfx#314). Map BOTH world corners through
+                    // the same `toScreenY` flip the entity/sprite path uses,
+                    // then take the min corner + |delta| so the rect lands (and
+                    // scales, once the camera transform is applied on top) on the
+                    // exact pixels a sprite at those world coords would — for
+                    // either y-axis and any camera pan/zoom.
+                    const ry0 = if (screen_height > 0) core.toScreenY(y_axis, d.y1, screen_height) else d.y1;
+                    const ry1 = if (screen_height > 0) core.toScreenY(y_axis, d.y1 + d.y2, screen_height) else d.y1 + d.y2;
+                    B.drawRectangleRec(.{
+                        .x = d.x1,
+                        .y = @min(ry0, ry1),
+                        .width = d.x2,
+                        .height = @abs(ry1 - ry0),
+                    }, c);
+                },
                 .circle => B.drawCircle(d.x1, y1, d.x2, c),
                 .arrow => {
                     B.drawLine(d.x1, y1, d.x2, y2, 2, c);
