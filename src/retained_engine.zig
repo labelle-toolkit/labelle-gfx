@@ -959,6 +959,34 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // frame the dropped set changed each frame → blinking.
             self.sort_scratch.clearRetainingCapacity();
 
+            // Reserve up front (candidate count / total sprite count is a safe
+            // upper bound) so the per-sprite appends below can't fail partway
+            // and leave a truncated, order-dependent set — the very drop this
+            // fixes. If even this single reservation fails (true OOM), fall back
+            // to drawing every matching sprite unsorted: nothing disappears,
+            // only z-order is lost in that degenerate case.
+            const upper_bound = if (candidates) |ids| ids.len else self.sprites.count();
+            self.sort_scratch.ensureTotalCapacity(self.allocator, upper_bound) catch {
+                if (candidates) |ids| {
+                    const vp = self.cull_viewport.?;
+                    for (ids) |id| {
+                        const entry = self.sprites.getPtr(id) orelse continue;
+                        const sprite = &entry.visual;
+                        if (sprite.layer != layer or !sprite.visible) continue;
+                        if (!self.spriteBounds(entry).overlaps(vp)) continue;
+                        Draw.drawSpriteEntry(self, entry);
+                    }
+                } else {
+                    var it = self.sprites.iterator();
+                    while (it.next()) |entry| {
+                        const sprite = &entry.value_ptr.visual;
+                        if (sprite.layer != layer or !sprite.visible) continue;
+                        Draw.drawSpriteEntry(self, entry.value_ptr);
+                    }
+                }
+                return;
+            };
+
             if (candidates) |ids| {
                 // Spatial-grid fast path: only consider entities the
                 // viewport query returned. An exact viewport recheck on
@@ -970,16 +998,14 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                     const sprite = &entry.visual;
                     if (sprite.layer != layer or !sprite.visible) continue;
                     if (!self.spriteBounds(entry).overlaps(vp)) continue;
-                    // OOM here is effectively impossible (a few thousand 6-byte
-                    // entries); on failure draw what we have rather than trap.
-                    self.sort_scratch.append(self.allocator, .{ .key = id, .z_index = sprite.z_index }) catch break;
+                    self.sort_scratch.appendAssumeCapacity(.{ .key = id, .z_index = sprite.z_index });
                 }
             } else {
                 var collect_iter = self.sprites.iterator();
                 while (collect_iter.next()) |entry| {
                     const sprite = &entry.value_ptr.visual;
                     if (sprite.layer != layer or !sprite.visible) continue;
-                    self.sort_scratch.append(self.allocator, .{ .key = entry.key_ptr.*, .z_index = sprite.z_index }) catch break;
+                    self.sort_scratch.appendAssumeCapacity(.{ .key = entry.key_ptr.*, .z_index = sprite.z_index });
                 }
             }
 
@@ -1010,20 +1036,44 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // 4096 shapes on one layer.
             self.sort_scratch.clearRetainingCapacity();
 
+            // Reserve up front (see renderSpritesOnLayer) so appends can't fail
+            // partway and truncate the set; on true OOM draw everything unsorted
+            // rather than a partial set.
+            const upper_bound = if (candidates) |ids| ids.len else self.shapes.count();
+            self.sort_scratch.ensureTotalCapacity(self.allocator, upper_bound) catch {
+                if (candidates) |ids| {
+                    const vp = self.cull_viewport.?;
+                    for (ids) |id| {
+                        const entry = self.shapes.getPtr(id) orelse continue;
+                        if (entry.visual.layer != layer or !entry.visual.visible) continue;
+                        if (!shapeBounds(entry).overlaps(vp)) continue;
+                        drawShapeEntry(entry);
+                    }
+                } else {
+                    var it = self.shapes.iterator();
+                    while (it.next()) |se| {
+                        const shape = &se.value_ptr.visual;
+                        if (shape.layer != layer or !shape.visible) continue;
+                        drawShapeEntry(se.value_ptr);
+                    }
+                }
+                return;
+            };
+
             if (candidates) |ids| {
                 const vp = self.cull_viewport.?;
                 for (ids) |id| {
                     const entry = self.shapes.getPtr(id) orelse continue;
                     if (entry.visual.layer != layer or !entry.visual.visible) continue;
                     if (!shapeBounds(entry).overlaps(vp)) continue;
-                    self.sort_scratch.append(self.allocator, .{ .key = id, .z_index = entry.visual.z_index }) catch break;
+                    self.sort_scratch.appendAssumeCapacity(.{ .key = id, .z_index = entry.visual.z_index });
                 }
             } else {
                 var shape_iter = self.shapes.iterator();
                 while (shape_iter.next()) |shape_entry| {
                     const shape = &shape_entry.value_ptr.visual;
                     if (shape.layer != layer or !shape.visible) continue;
-                    self.sort_scratch.append(self.allocator, .{ .key = shape_entry.key_ptr.*, .z_index = shape.z_index }) catch break;
+                    self.sort_scratch.appendAssumeCapacity(.{ .key = shape_entry.key_ptr.*, .z_index = shape.z_index });
                 }
             }
 
