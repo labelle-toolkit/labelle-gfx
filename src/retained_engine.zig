@@ -127,6 +127,14 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         entity_bounds: std.AutoHashMap(u32, BoundsEntry),
         cull_viewport: ?CullRect = null,
         cull_scratch: std.ArrayListUnmanaged(u32) = .empty,
+        /// Reusable z-sort buffer for the per-layer sprite/shape draws. Grows to
+        /// fit the visible set so no drawable is ever dropped (issue #685: a
+        /// fixed cap here silently dropped sprites past the limit, and because
+        /// collection order shifts frame to frame the dropped set changed each
+        /// frame → blinking). `clearRetainingCapacity` keeps the backing store
+        /// across frames, so steady state allocates nothing. Shared by the
+        /// sprite + shape passes, which run sequentially per layer.
+        sort_scratch: std.ArrayListUnmanaged(SortEntry) = .empty,
         // Set when a `grid.insert` fails (OOM): the grid is then missing
         // at least one entity, so a viewport query would silently drop
         // its draw. While set, `cullCandidates` forces the full linear
@@ -180,6 +188,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             self.grid.deinit();
             self.entity_bounds.deinit();
             self.cull_scratch.deinit(self.allocator);
+            self.sort_scratch.deinit(self.allocator);
             self.post_fx.deinit();
         }
 
@@ -943,9 +952,40 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         };
 
         fn renderSpritesOnLayer(self: *Self, layer: LayerEnum, candidates: ?[]const u32) void {
-            // Collect visible sprites for this layer, then sort by z_index
-            var sort_buf: [4096]SortEntry = undefined;
-            var sort_count: usize = 0;
+            // Collect visible sprites for this layer into the reusable growable
+            // buffer, then sort by z_index. Growing to fit (vs. the former fixed
+            // 4096 stack cap) is what fixes issue #685: past the cap, sprites
+            // were silently dropped, and since collection order shifts frame to
+            // frame the dropped set changed each frame → blinking.
+            self.sort_scratch.clearRetainingCapacity();
+
+            // Reserve up front (candidate count / total sprite count is a safe
+            // upper bound) so the per-sprite appends below can't fail partway
+            // and leave a truncated, order-dependent set — the very drop this
+            // fixes. If even this single reservation fails (true OOM), fall back
+            // to drawing every matching sprite unsorted: nothing disappears,
+            // only z-order is lost in that degenerate case.
+            const upper_bound = if (candidates) |ids| ids.len else self.sprites.count();
+            self.sort_scratch.ensureTotalCapacity(self.allocator, upper_bound) catch {
+                if (candidates) |ids| {
+                    const vp = self.cull_viewport.?;
+                    for (ids) |id| {
+                        const entry = self.sprites.getPtr(id) orelse continue;
+                        const sprite = &entry.visual;
+                        if (sprite.layer != layer or !sprite.visible) continue;
+                        if (!self.spriteBounds(entry).overlaps(vp)) continue;
+                        Draw.drawSpriteEntry(self, entry);
+                    }
+                } else {
+                    var it = self.sprites.iterator();
+                    while (it.next()) |entry| {
+                        const sprite = &entry.value_ptr.visual;
+                        if (sprite.layer != layer or !sprite.visible) continue;
+                        Draw.drawSpriteEntry(self, entry.value_ptr);
+                    }
+                }
+                return;
+            };
 
             if (candidates) |ids| {
                 // Spatial-grid fast path: only consider entities the
@@ -958,20 +998,14 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                     const sprite = &entry.visual;
                     if (sprite.layer != layer or !sprite.visible) continue;
                     if (!self.spriteBounds(entry).overlaps(vp)) continue;
-                    if (sort_count < sort_buf.len) {
-                        sort_buf[sort_count] = .{ .key = id, .z_index = sprite.z_index };
-                        sort_count += 1;
-                    }
+                    self.sort_scratch.appendAssumeCapacity(.{ .key = id, .z_index = sprite.z_index });
                 }
             } else {
                 var collect_iter = self.sprites.iterator();
                 while (collect_iter.next()) |entry| {
                     const sprite = &entry.value_ptr.visual;
                     if (sprite.layer != layer or !sprite.visible) continue;
-                    if (sort_count < sort_buf.len) {
-                        sort_buf[sort_count] = .{ .key = entry.key_ptr.*, .z_index = sprite.z_index };
-                        sort_count += 1;
-                    }
+                    self.sort_scratch.appendAssumeCapacity(.{ .key = entry.key_ptr.*, .z_index = sprite.z_index });
                 }
             }
 
@@ -981,7 +1015,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // and removed — without a tiebreaker, sprites sharing a z_index
             // swap front/back each frame, which with alpha blending looks like
             // flickering on the overlapping region.
-            std.mem.sort(SortEntry, sort_buf[0..sort_count], {}, struct {
+            std.mem.sort(SortEntry, self.sort_scratch.items, {}, struct {
                 fn lessThan(_: void, a: SortEntry, b: SortEntry) bool {
                     if (a.z_index != b.z_index) return a.z_index < b.z_index;
                     return a.key < b.key;
@@ -989,45 +1023,24 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             }.lessThan);
 
             // Draw in sorted order
-            for (sort_buf[0..sort_count]) |sorted| {
+            for (self.sort_scratch.items) |sorted| {
                 const entry = self.sprites.getPtr(sorted.key) orelse continue;
                 Draw.drawSpriteEntry(self, entry);
             }
         }
 
         fn renderShapesOnLayer(self: *Self, layer: LayerEnum, candidates: ?[]const u32) void {
-            // Collect visible shapes for this layer, then sort by z_index
-            var sort_buf: [4096]SortEntry = undefined;
-            var sort_count: usize = 0;
-            var overflowed = false;
+            // Same reusable growable buffer as renderSpritesOnLayer (#685). This
+            // replaces the former fixed 4096 cap + unsorted-overflow fallback:
+            // now nothing is dropped AND z-order is always preserved, even past
+            // 4096 shapes on one layer.
+            self.sort_scratch.clearRetainingCapacity();
 
-            if (candidates) |ids| {
-                const vp = self.cull_viewport.?;
-                for (ids) |id| {
-                    const entry = self.shapes.getPtr(id) orelse continue;
-                    if (entry.visual.layer != layer or !entry.visual.visible) continue;
-                    if (!shapeBounds(entry).overlaps(vp)) continue;
-                    if (sort_count < sort_buf.len) {
-                        sort_buf[sort_count] = .{ .key = id, .z_index = entry.visual.z_index };
-                        sort_count += 1;
-                    } else overflowed = true;
-                }
-            } else {
-                var shape_iter = self.shapes.iterator();
-                while (shape_iter.next()) |shape_entry| {
-                    const shape = &shape_entry.value_ptr.visual;
-                    if (shape.layer != layer or !shape.visible) continue;
-                    if (sort_count < sort_buf.len) {
-                        sort_buf[sort_count] = .{ .key = shape_entry.key_ptr.*, .z_index = shape.z_index };
-                        sort_count += 1;
-                    } else overflowed = true;
-                }
-            }
-
-            // Overflow (>4096 visible shapes on one layer): fall back to drawing
-            // every matching shape unsorted rather than dropping the surplus —
-            // z-order is lost in this rare case, but nothing disappears.
-            if (overflowed) {
+            // Reserve up front (see renderSpritesOnLayer) so appends can't fail
+            // partway and truncate the set; on true OOM draw everything unsorted
+            // rather than a partial set.
+            const upper_bound = if (candidates) |ids| ids.len else self.shapes.count();
+            self.sort_scratch.ensureTotalCapacity(self.allocator, upper_bound) catch {
                 if (candidates) |ids| {
                     const vp = self.cull_viewport.?;
                     for (ids) |id| {
@@ -1045,6 +1058,23 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                     }
                 }
                 return;
+            };
+
+            if (candidates) |ids| {
+                const vp = self.cull_viewport.?;
+                for (ids) |id| {
+                    const entry = self.shapes.getPtr(id) orelse continue;
+                    if (entry.visual.layer != layer or !entry.visual.visible) continue;
+                    if (!shapeBounds(entry).overlaps(vp)) continue;
+                    self.sort_scratch.appendAssumeCapacity(.{ .key = id, .z_index = entry.visual.z_index });
+                }
+            } else {
+                var shape_iter = self.shapes.iterator();
+                while (shape_iter.next()) |shape_entry| {
+                    const shape = &shape_entry.value_ptr.visual;
+                    if (shape.layer != layer or !shape.visible) continue;
+                    self.sort_scratch.appendAssumeCapacity(.{ .key = shape_entry.key_ptr.*, .z_index = shape.z_index });
+                }
             }
 
             // Sort by z_index (lower draws first = behind), with entity id as
@@ -1052,7 +1082,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // the rationale: std.mem.sort is unstable and hashmap iteration
             // order changes as entries are added and removed, so without a
             // tiebreaker shapes sharing a z_index swap front/back each frame.
-            std.mem.sort(SortEntry, sort_buf[0..sort_count], {}, struct {
+            std.mem.sort(SortEntry, self.sort_scratch.items, {}, struct {
                 fn lessThan(_: void, a: SortEntry, b: SortEntry) bool {
                     if (a.z_index != b.z_index) return a.z_index < b.z_index;
                     return a.key < b.key;
@@ -1060,7 +1090,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             }.lessThan);
 
             // Draw in sorted order
-            for (sort_buf[0..sort_count]) |sorted| {
+            for (self.sort_scratch.items) |sorted| {
                 const entry = self.shapes.getPtr(sorted.key) orelse continue;
                 drawShapeEntry(entry);
             }
