@@ -35,6 +35,16 @@ const types = @import("types.zig");
 const tile_map = @import("tile_map.zig");
 const renderer = @import("renderer.zig");
 
+// Anchor so `zig build test`'s src-unit-test step collects the inline
+// `test` blocks from every submodule (e.g. xml.zig's #300 leak regression),
+// not just the re-exports below.
+test {
+    _ = @import("types.zig");
+    _ = @import("xml.zig");
+    _ = @import("tile_map.zig");
+    _ = @import("renderer.zig");
+}
+
 // ── TMX data model (types.zig) ──────────────────────────────
 pub const TileFlags = types.TileFlags;
 pub const ParseError = types.ParseError;

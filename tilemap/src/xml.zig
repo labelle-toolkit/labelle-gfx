@@ -44,13 +44,19 @@ pub fn parseAttributes(allocator: std.mem.Allocator, content: []const u8, pos: *
         while (pos.* < content.len and content[pos.*] == '=') : (pos.* += 1) {}
 
         var value: []const u8 = "";
+        var value_owned = false;
         if (pos.* < content.len and content[pos.*] == '"') {
             pos.* += 1;
             const val_start = pos.*;
             while (pos.* < content.len and content[pos.*] != '"') : (pos.* += 1) {}
             value = try allocator.dupe(u8, content[val_start..pos.*]);
+            value_owned = true;
             pos.* += 1;
         }
+        // `value` is either the `""` literal (no value present) or a fresh
+        // dupe — free it only when owned, so an OOM at `append` below does
+        // not leak the duped value (and never frees the literal).
+        errdefer if (value_owned) allocator.free(value);
 
         try attrs.append(allocator, .{ .key = key, .value = value });
     }
@@ -80,4 +86,21 @@ pub fn getAttr(attrs: []const Attribute, key: []const u8) ?[]const u8 {
         if (std.mem.eql(u8, attr.key, key)) return attr.value;
     }
     return null;
+}
+
+// ── Regression: OOM after a quoted value is duped must not leak (#300) ──
+
+test "parseAttributes frees a duped value when the append OOMs" {
+    // Allocation order inside the attribute loop for `a="b"`:
+    //   0 → dupe(key)   1 → dupe(value)   2 → attrs.append grow
+    // Failing #2 makes `append` OOM *after* the value was duped, exercising
+    // the value errdefer. std.testing.allocator (the backing allocator)
+    // flags any leak at teardown, so a missing free fails this test.
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 2 });
+    const alloc = failing.allocator();
+
+    const content = "a=\"b\">";
+    var pos: usize = 0;
+    try std.testing.expectError(error.OutOfMemory, parseAttributes(alloc, content, &pos));
+    try std.testing.expect(failing.has_induced_failure);
 }
