@@ -441,10 +441,10 @@ pub fn CameraManager(comptime BackendImpl: type) type {
 /// it manages flips through the same core transform as the no-camera path.
 pub fn CameraManagerWith(comptime BackendImpl: type, comptime y_axis: YAxis) type {
     const CameraT = CameraWith(BackendImpl, y_axis);
+    const MAX_CAMERAS: usize = 4;
 
     return struct {
         const Self = @This();
-        pub const MAX_CAMERAS: usize = 4;
 
         cameras: [MAX_CAMERAS]CameraT = [_]CameraT{CameraT.init()} ** MAX_CAMERAS,
         active_mask: u4 = 0b0001,
@@ -457,15 +457,6 @@ pub fn CameraManagerWith(comptime BackendImpl: type, comptime y_axis: YAxis) typ
         /// so split-screen games could not move cameras 1-3.
         selected_index: u2 = 0,
         current_layout: SplitScreenLayout = .single,
-        /// Slots the CURRENT split-screen layout owns as views.
-        /// `recalculateViewports` / `resetSecondary` are the only writers.
-        ///
-        /// Distinct from "carries a `screen_viewport`": a MINIMAP is also
-        /// expressed as a camera with a viewport, and a camera-bound layer adds
-        /// a full-window camera with none. Neither is a layout pane, so
-        /// consumers that need "is this one of the split views?" must ask
-        /// `isSplitPane` rather than inspecting viewports (labelle-gfx#320).
-        pane_mask: u4 = 0b0001,
 
         pub fn init() Self {
             var mgr = Self{};
@@ -585,32 +576,10 @@ pub fn CameraManagerWith(comptime BackendImpl: type, comptime y_axis: YAxis) typ
             // `current_layout` consistent with that (`.single`).
             self.cameras[0].screen_viewport = null;
             self.current_layout = .single;
-            self.pane_mask = 0b0001;
         }
 
         pub fn activeCount(self: *const Self) u3 {
             return @popCount(self.active_mask);
-        }
-
-        pub fn currentLayout(self: *const Self) SplitScreenLayout {
-            return self.current_layout;
-        }
-
-        /// Is `index` one of the views an active SPLIT-SCREEN layout owns?
-        ///
-        /// False under `.single` — there are no panes then, just the one
-        /// full-window view.
-        ///
-        /// Deliberately NOT "does this camera have a `screen_viewport`".
-        /// A viewport is also how a MINIMAP is expressed, and a camera-bound
-        /// layer (gfx#303) adds a full-window camera with no viewport at all;
-        /// neither is a layout pane. Only `recalculateViewports` writes
-        /// `pane_mask`, so this answers "did the LAYOUT put a view here?"
-        /// rather than inferring it from state a game can set for its own
-        /// reasons (labelle-gfx#320).
-        pub fn isSplitPane(self: *const Self, index: u2) bool {
-            if (self.current_layout == .single) return false;
-            return self.isActive(index) and (self.pane_mask & (@as(u4, 1) << index)) != 0;
         }
 
         pub fn setupSplitScreen(self: *Self, layout: SplitScreenLayout) void {
@@ -630,24 +599,20 @@ pub fn CameraManagerWith(comptime BackendImpl: type, comptime y_axis: YAxis) typ
             switch (self.current_layout) {
                 .single => {
                     self.active_mask = 0b0001;
-                    self.pane_mask = 0b0001;
                     self.cameras[0].screen_viewport = null;
                 },
                 .vertical_split => {
                     self.active_mask = 0b0011;
-                    self.pane_mask = 0b0011;
                     self.cameras[0].screen_viewport = ScreenViewport.leftHalf(sw, sh);
                     self.cameras[1].screen_viewport = ScreenViewport.rightHalf(sw, sh);
                 },
                 .horizontal_split => {
                     self.active_mask = 0b0011;
-                    self.pane_mask = 0b0011;
                     self.cameras[0].screen_viewport = ScreenViewport.topHalf(sw, sh);
                     self.cameras[1].screen_viewport = ScreenViewport.bottomHalf(sw, sh);
                 },
                 .quadrant => {
                     self.active_mask = 0b1111;
-                    self.pane_mask = 0b1111;
                     for (0..4) |i| {
                         self.cameras[i].screen_viewport = ScreenViewport.quadrant(sw, sh, @intCast(i));
                     }

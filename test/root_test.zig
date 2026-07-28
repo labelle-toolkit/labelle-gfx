@@ -2494,10 +2494,11 @@ test "GfxRenderer: a secondary full-window camera does not duplicate world gizmo
     try testing.expectEqual(@as(f32, 100), MockBackend.getCameraPasses()[0].target_x);
 }
 
-test "GfxRenderer: a minimap camera does not steal world gizmos from the main view" {
-    // `screen_viewport` is how a MINIMAP is expressed as well as a split-screen
-    // pane. Keying "is this a pane?" on the viewport would let the minimap claim
-    // the overlay and drop it from the full-window gameplay view entirely.
+test "GfxRenderer: a minimap does not take the overlay away from the main view" {
+    // A minimap owns its own region, so it keeps the pass it has always had —
+    // it cannot overpaint anything, and a pre-layer hook may well be drawing
+    // world content into it. What must NOT happen is the full-window gameplay
+    // view losing its overlay to the minimap.
     MockBackend.initMock(testing.allocator);
     defer MockBackend.deinitMock();
 
@@ -2516,9 +2517,14 @@ test "GfxRenderer: a minimap camera does not steal world gizmos from the main vi
     };
     renderer.renderGizmoDraws(&draws);
 
-    // The layout is still `.single`, so: one pass, through the main view.
-    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
-    try testing.expectEqual(@as(f32, 100), MockBackend.getCameraPasses()[0].target_x);
+    // Both regions draw; crucially the main view is one of them.
+    const passes = MockBackend.getCameraPasses();
+    try testing.expectEqual(@as(usize, 2), passes.len);
+    var saw_main = false;
+    for (passes) |pass| {
+        if (pass.target_x == 100) saw_main = true;
+    }
+    try testing.expect(saw_main);
 }
 
 test "GfxRenderer: split-screen skips a non-pane camera-bound camera" {
@@ -2665,11 +2671,10 @@ test "GfxRenderer: a world layer bound to a MISSING tag keeps slot 0 in the set"
     try testing.expectEqual(@as(f32, 100), MockBackend.getCameraPasses()[0].target_x);
 }
 
-test "GfxRenderer: split-screen plus a minimap draws only the layout's panes" {
-    // A minimap carries a `screen_viewport` exactly like a pane does. Pane
-    // membership therefore has to come from the LAYOUT's own record
-    // (`isSplitPane`), not from the presence of a viewport — otherwise the
-    // minimap collects a third overlay pass it was never entitled to.
+test "GfxRenderer: split-screen plus a minimap draws each distinct region once" {
+    // Panes and a minimap all own disjoint regions, so each draws exactly once
+    // and none can overpaint another. The regression guarded here is that the
+    // count stays one-per-region and never gains a full-window pass on top.
     MockBackend.initMock(testing.allocator);
     defer MockBackend.deinitMock();
 
@@ -2679,7 +2684,7 @@ test "GfxRenderer: split-screen plus a minimap draws only the layout's panes" {
 
     const mgr = renderer.getCameraManager();
     mgr.setupSplitScreen(.vertical_split); // panes: slots 0 and 1
-    mgr.setActive(2, true); // minimap — its OWN viewport, not a layout pane
+    mgr.setActive(2, true);
     mgr.getCamera(2).screen_viewport = .{ .x = 0, .y = 0, .width = 160, .height = 120 };
 
     const draws = [_]core.GizmoDraw{
@@ -2687,8 +2692,8 @@ test "GfxRenderer: split-screen plus a minimap draws only the layout's panes" {
     };
     renderer.renderGizmoDraws(&draws);
 
-    try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
-    try testing.expectEqual(@as(usize, 2), MockBackend.getLineCallCount());
+    try testing.expectEqual(@as(usize, 3), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(usize, 3), MockBackend.getLineCallCount());
 }
 
 test "GfxRenderer: split-screen keeps a minimap that a world layer is bound to" {
@@ -2766,34 +2771,6 @@ test "GfxRenderer: split-screen still excludes a full-window camera-bound camera
     renderer.renderGizmoDraws(&draws);
 
     try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
-}
-
-test "CameraManager: isSplitPane tracks the layout, not stray viewports" {
-    MockBackend.initMock(testing.allocator);
-    defer MockBackend.deinitMock();
-
-    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
-    var renderer = Renderer.init(testing.allocator);
-    defer renderer.deinit();
-    const mgr = renderer.getCameraManager();
-
-    // `.single`: no panes at all, even for the one full-window view.
-    try testing.expect(!mgr.isSplitPane(0));
-
-    mgr.setupSplitScreen(.vertical_split);
-    try testing.expect(mgr.isSplitPane(0));
-    try testing.expect(mgr.isSplitPane(1));
-    try testing.expect(!mgr.isSplitPane(2));
-
-    // A hand-assigned viewport on a non-layout slot is NOT a pane.
-    mgr.setActive(2, true);
-    mgr.getCamera(2).screen_viewport = .{ .x = 0, .y = 0, .width = 160, .height = 120 };
-    try testing.expect(!mgr.isSplitPane(2));
-
-    // Back to single: panes go away, and slot 0's stale viewport is cleared.
-    mgr.resetSecondary();
-    try testing.expect(!mgr.isSplitPane(0));
-    try testing.expect(!mgr.isSplitPane(1));
 }
 
 test "GfxRenderer: world gizmos ignore selectCamera and follow the 'main' binding" {
