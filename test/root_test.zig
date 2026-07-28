@@ -2476,8 +2476,9 @@ test "GfxRenderer: a secondary full-window camera does not duplicate world gizmo
     var renderer = Renderer.init(testing.allocator);
     defer renderer.deinit();
 
-    // Active, but no `screen_viewport` — not a pane.
     const mgr = renderer.getCameraManager();
+    mgr.getCamera(0).setPosition(100, 100); // the "main" world view
+    // Active, but no `screen_viewport` and no split-screen layout — not a pane.
     mgr.setActive(1, true);
     mgr.getCamera(1).setPosition(512, 384);
 
@@ -2486,9 +2487,65 @@ test "GfxRenderer: a secondary full-window camera does not duplicate world gizmo
     };
     renderer.renderGizmoDraws(&draws);
 
-    // Once, through the selected camera — not once per active camera.
+    // Once, through the "main" camera — not once per active camera.
     try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
     try testing.expectEqual(@as(usize, 1), MockBackend.getLineCallCount());
+    // ...and it is slot 0's transform, not the parallax camera's.
+    try testing.expectEqual(@as(f32, 100), MockBackend.getCameraPasses()[0].target_x);
+}
+
+test "GfxRenderer: a minimap camera does not steal world gizmos from the main view" {
+    // `screen_viewport` is how a MINIMAP is expressed as well as a split-screen
+    // pane. Keying "is this a pane?" on the viewport would let the minimap claim
+    // the overlay and drop it from the full-window gameplay view entirely.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.getCamera(0).setPosition(100, 100); // full-window "main" view
+    mgr.setActive(1, true);
+    mgr.getCamera(1).setPosition(900, 900);
+    mgr.getCamera(1).screen_viewport = .{ .x = 0, .y = 0, .width = 200, .height = 150 };
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    // The layout is still `.single`, so: one pass, through the main view.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(f32, 100), MockBackend.getCameraPasses()[0].target_x);
+}
+
+test "GfxRenderer: world gizmos ignore selectCamera and follow the 'main' binding" {
+    // `selectCamera` only chooses the target of high-level setters — a game may
+    // point it at a secondary camera purely to configure that camera. It does
+    // not designate the view the world renders through, so the overlay must not
+    // follow it.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.getCamera(0).setPosition(100, 100); // the "main" world view
+    mgr.setActive(1, true);
+    mgr.getCamera(1).setPosition(900, 900); // full-window secondary (parallax)
+    mgr.selectCamera(1); // configure it — NOT a statement about what renders
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(f32, 100), MockBackend.getCameraPasses()[0].target_x);
 }
 
 // ── Components ─────────────────────────────────────────────
