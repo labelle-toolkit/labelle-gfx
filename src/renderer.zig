@@ -834,24 +834,23 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             // cameras' position delta and tracking at the parallax rate instead
             // of the main camera's.
             //
-            // Two things this deliberately does NOT key on:
-            //   - `screen_viewport`, because that is also how a MINIMAP camera is
-            //     expressed. Treating "has a viewport" as "is a pane" would let a
-            //     minimap claim the overlay and drop it from the main gameplay
-            //     view entirely.
-            //   - `getCamera()`, because that resolves to the SELECTED camera —
-            //     the target of high-level setters (`selectCamera`). A game may
-            //     point that at a secondary camera purely to configure it; it does
-            //     not designate the view the world renders through.
-            if (self.camera_mgr.current_layout != .single) {
-                var it = self.camera_mgr.activeIterator();
-                while (it.next()) |camera| drawWorldGizmos(draws, camera, sh);
-            } else {
-                // Default-camera invariant (camera/src/root.zig): slot 0 is
-                // always active, so it is a sound fallback target.
+            // See `showsWorldContent` for the per-camera rule.
+            var drew = false;
+            var it = self.camera_mgr.activeIterator();
+            while (it.next()) |camera| {
+                if (!self.showsWorldContent(camera)) continue;
+                drawWorldGizmos(draws, camera, sh);
+                drew = true;
+            }
+            if (!drew) {
+                // Nothing resolved — a `.world` layer bound to a tag no active
+                // camera carries, or a project with no world layer at all. The
+                // layer loop falls back to slot 0 in exactly this case, so the
+                // overlay follows it. Default-camera invariant
+                // (camera/src/root.zig): slot 0 is always active, so it is a
+                // sound target.
                 std.debug.assert(self.camera_mgr.isActive(0));
-                const cam = self.camera_mgr.findByTag("main") orelse self.camera_mgr.getCamera(0);
-                drawWorldGizmos(draws, cam, sh);
+                drawWorldGizmos(draws, self.camera_mgr.getCamera(0), sh);
             }
             clearViewport();
 
@@ -860,6 +859,44 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                 if (d.space != .screen) continue;
                 drawGizmoPrimitive(d, 0);
             }
+        }
+
+        /// Does `cam`'s view show world content, and therefore need the world
+        /// gizmo overlay drawn through its transform?
+        ///
+        /// Two ways to qualify:
+        ///
+        ///  1. It is a SPLIT-SCREEN PANE. Each pane is its own view of the world
+        ///     and each gets the overlay (labelle-gfx#226). A pane is a camera the
+        ///     *layout* gave a `screen_viewport` — being active is not enough,
+        ///     because a camera-bound layer adds a camera via `setActive` with no
+        ///     viewport, and drawing through that would restore the full window
+        ///     and paint the whole overlay a second time.
+        ///
+        ///  2. A `.world` LAYER RENDERS THROUGH IT. Resolved with the same rule
+        ///     the layer loop uses — an explicit `.camera` tag wins, else `.world`
+        ///     implies the implicit "main" — so a world layer explicitly bound to
+        ///     e.g. a "hero" camera gets its gizmos on that camera, and the
+        ///     overlay always shares a transform with the entities it annotates.
+        ///
+        /// Deliberately NOT keyed on:
+        ///   - `screen_viewport` alone, because that is also how a MINIMAP camera
+        ///     is expressed. Treating "has a viewport" as "is a pane" lets a
+        ///     minimap claim the overlay and drop it from the main gameplay view.
+        ///   - `getCamera()` / `selectCamera`, which choose the target of
+        ///     high-level setters. A game may point that at a secondary camera
+        ///     purely to configure it; it does not designate what renders.
+        fn showsWorldContent(self: *Self, cam: *const CameraT) bool {
+            if (self.camera_mgr.current_layout != .single and cam.screen_viewport != null) return true;
+
+            inline for (sorted_layers) |layer| {
+                const cfg = comptime layer.config();
+                if (comptime cfg.space == .world) {
+                    const tag: []const u8 = comptime cfg.camera orelse "main";
+                    if (cam.hasTag(tag)) return true;
+                }
+            }
+            return false;
         }
 
         /// Draw every world-space gizmo once through `cam`, inside its viewport.

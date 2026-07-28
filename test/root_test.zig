@@ -1455,6 +1455,68 @@ test "GfxRenderer: a minimap camera does not steal world gizmos from the main vi
     try testing.expectEqual(@as(f32, 100), MockBackend.getCameraPasses()[0].target_x);
 }
 
+test "GfxRenderer: split-screen skips a non-pane camera-bound camera" {
+    // A split-screen scene may ALSO activate a camera for a camera-bound layer.
+    // `current_layout` stays non-`.single`, but that extra camera is not a pane:
+    // it has no `screen_viewport`, so drawing through it restores the full window
+    // and repaints the whole overlay — the exact ghost this change removes.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.setupSplitScreen(.vertical_split); // panes: slots 0 and 1
+    mgr.setActive(2, true); // camera-bound layer's camera — full-window, no pane
+    mgr.getCamera(2).setPosition(900, 900);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    // Two panes, not three active cameras.
+    try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(usize, 2), MockBackend.getLineCallCount());
+}
+
+test "GfxRenderer: world gizmos follow an explicitly bound world layer's camera" {
+    // A `.world` layer bound to "hero" renders its entities through that camera,
+    // so the overlay must go there too — not through the implicit "main"/slot 0,
+    // which would annotate the entities from a different transform entirely.
+    const HeroLayers = enum {
+        hero_world,
+
+        pub fn config(_: @This()) LayerConfig {
+            return .{ .space = .world, .order = 0, .camera = "hero" };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, HeroLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.getCamera(0).setPosition(100, 100); // "main", carries no world layer
+    mgr.setActive(1, true);
+    mgr.setTag(1, "hero");
+    mgr.getCamera(1).setPosition(555, 0);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    // Once, through "hero" — the camera the world layer actually renders through.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(f32, 555), MockBackend.getCameraPasses()[0].target_x);
+}
+
 test "GfxRenderer: world gizmos ignore selectCamera and follow the 'main' binding" {
     // `selectCamera` only chooses the target of high-level setters — a game may
     // point it at a secondary camera purely to configure that camera. It does
