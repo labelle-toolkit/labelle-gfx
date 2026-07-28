@@ -718,8 +718,7 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                 const explicit_tag: ?[]const u8 = comptime cfg.camera;
                 // Resolved binding: explicit tag wins; else `.world` implies
                 // the implicit "main" camera; else (screen) is pinned (null).
-                const binding: ?[]const u8 = comptime explicit_tag orelse
-                    (if (space == .world) "main" else null);
+                const binding: ?[]const u8 = comptime layerCameraTag(cfg);
 
                 var rendered = false;
                 if (binding) |tag| {
@@ -812,19 +811,62 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
 
             const sh = self.screen_height;
 
-            // World-space gizmos (Y-flipped, through camera). Drawn once
-            // per active camera so split-screen views each get the debug
-            // overlay (labelle-gfx#226 — previously only the primary
-            // camera's view showed gizmos).
+            // World-space gizmos (Y-flipped, through camera).
+            //
+            // This used to draw through every ACTIVE camera, which was right
+            // while `setupSplitScreen` was the only way to get a second one:
+            // panes own disjoint `screen_viewport`s, so the copies land in their
+            // own regions (labelle-gfx#226). Camera-bound layers (gfx#303) broke
+            // that — the engine activates a secondary FULL-WINDOW camera for a
+            // tagged layer (a parallax sky, say), so the overlay was painted a
+            // second time over the same pixels through that camera's transform.
+            // Every world gizmo appeared twice, the ghost copy offset by the two
+            // cameras' position delta and tracking at the parallax rate.
+            //
+            // The distinction that matters is therefore OWNS-A-REGION versus
+            // COVERS-EVERYTHING, not which camera is "the" world camera:
+            //
+            //  - A camera with its own `screen_viewport` — a split pane, a
+            //    minimap — is clipped to its own region and can never overpaint
+            //    another view. It keeps the pass it has always had. That also
+            //    sidesteps a question this method cannot answer: a pre-layer
+            //    hook (`renderWithLayerHooks`) runs against every active camera
+            //    and may draw world content into a camera no `.world` layer
+            //    binds, and `renderGizmoDraws` cannot see the hook.
+            //
+            //  - FULL-WINDOW cameras are the ones that overlap, so at most one
+            //    draws: the first, in slot order, that a `.world` layer actually
+            //    renders through (the layer loop's own binding rule, with its
+            //    slot-0 fallback). `GizmoDraw` carries no camera association —
+            //    the list is global — so when several full-window cameras show
+            //    world content there is no per-draw answer, and lowest-slot is a
+            //    deterministic choice rather than a derived one.
+            //
+            //    Under an active split-screen layout no full-window camera draws
+            //    at all: the panes already tile the screen, so a full-window pass
+            //    would repaint the overlay across every one of them.
+            const split = self.camera_mgr.current_layout != .single;
+            const fallback = self.worldFallsBackToSlot0();
+            // Same assertion the layer loop's fallback makes: slot 0 is always
+            // active (the default-camera invariant), so it is a sound target.
+            if (fallback) std.debug.assert(self.camera_mgr.isActive(0));
+            var drew_full_window = false;
             var it = self.camera_mgr.activeIterator();
             while (it.next()) |camera| {
-                applyViewport(camera);
-                camera.begin();
-                for (draws) |d| {
-                    if (d.space != .world) continue;
-                    drawGizmoPrimitive(d, sh);
+                if (camera.screen_viewport != null) {
+                    drawWorldGizmos(draws, camera, sh);
+                    continue;
                 }
-                camera.end();
+                if (split or drew_full_window) continue;
+                // Identify the fallback camera by SLOT, not by tag. The layer
+                // loop's unresolved-binding fallback is literally
+                // `getCamera(0)`, and `setTag(0, ...)` is public — a scene that
+                // retags slot 0 would leave the world rendering there while a
+                // `hasTag("main")` test rejected it, dropping the overlay
+                // entirely.
+                if (!rendersWorldContent(camera) and !(fallback and it.index() == 0)) continue;
+                drawWorldGizmos(draws, camera, sh);
+                drew_full_window = true;
             }
             clearViewport();
 
@@ -833,6 +875,62 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                 if (d.space != .screen) continue;
                 drawGizmoPrimitive(d, 0);
             }
+        }
+
+        /// The camera tag a layer's content renders through, or `null` when the
+        /// layer is pinned to the screen: an explicit `.camera` tag wins, else
+        /// `.world` implies the implicit "main" camera.
+        ///
+        /// THE one definition of this rule. The layer loop and the world-gizmo
+        /// overlay must agree on it or debug shapes drift away from the entities
+        /// they annotate — which is exactly how they drifted apart before, so
+        /// keep both callers on this helper rather than re-deriving it.
+        fn layerCameraTag(comptime cfg: anytype) ?[]const u8 {
+            return cfg.camera orelse (if (cfg.space == .world) "main" else null);
+        }
+
+        /// Does a `.world` layer render through `cam`? Resolved with the layer
+        /// loop's own rule: an explicit `.camera` tag wins, else `.world`
+        /// implies the implicit "main".
+        fn rendersWorldContent(cam: *const CameraT) bool {
+            inline for (sorted_layers) |layer| {
+                const cfg = comptime layer.config();
+                if (comptime cfg.space == .world) {
+                    const tag: []const u8 = comptime layerCameraTag(cfg).?;
+                    if (cam.hasTag(tag)) return true;
+                }
+            }
+            return false;
+        }
+
+        /// True when the layer loop's slot-0 world fallback is in play: some
+        /// `.world` layer's binding is carried by no active camera (the loop
+        /// renders those through slot 0 *by index*, so the overlay belongs there
+        /// too), or
+        /// the project declares no `.world` layer at all and the overlay still
+        /// has to land somewhere.
+        fn worldFallsBackToSlot0(self: *Self) bool {
+            comptime var any_world = false;
+            inline for (sorted_layers) |layer| {
+                const cfg = comptime layer.config();
+                if (comptime cfg.space == .world) {
+                    any_world = true;
+                    const tag: []const u8 = comptime layerCameraTag(cfg).?;
+                    if (self.camera_mgr.findByTag(tag) == null) return true;
+                }
+            }
+            return comptime !any_world;
+        }
+
+        /// Draw every world-space gizmo once through `cam`, inside its viewport.
+        fn drawWorldGizmos(draws: []const GizmoDraw, cam: *const CameraT, sh: f32) void {
+            applyViewport(cam);
+            cam.begin();
+            for (draws) |d| {
+                if (d.space != .world) continue;
+                drawGizmoPrimitive(d, sh);
+            }
+            cam.end();
         }
 
         fn drawGizmoPrimitive(d: GizmoDraw, screen_height: f32) void {
@@ -851,9 +949,31 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             const y1 = if (screen_height > 0) core.toScreenY(y_axis, d.y1, screen_height) else d.y1;
             const y2 = if (screen_height > 0) core.toScreenY(y_axis, d.y2, screen_height) else d.y2;
 
+
             switch (d.kind) {
                 .line => B.drawLine(d.x1, y1, d.x2, y2, 2, c),
-                .rect => B.drawRectangleRec(.{ .x = d.x1, .y = y1, .width = d.x2, .height = d.y2 }, c),
+                .rect => {
+                    // A rect is corner `(x1, y1)` + size (`x2` = width, `y2` =
+                    // height). Flipping only `.y` while passing `.height` raw
+                    // (the old bug) drew the corner correctly but extended the
+                    // rect the WRONG way — under `.up` it covered world
+                    // [y1 - h, y1] instead of [y1, y1 + h], so a slot-sized
+                    // outline landed a full cell off and did not scale with the
+                    // camera (labelle-gfx#314). Map BOTH world corners through
+                    // the same `toScreenY` flip the entity/sprite path uses,
+                    // then take the min corner + |delta| so the rect lands (and
+                    // scales, once the camera transform is applied on top) on the
+                    // exact pixels a sprite at those world coords would — for
+                    // either y-axis and any camera pan/zoom.
+                    const ry0 = if (screen_height > 0) core.toScreenY(y_axis, d.y1, screen_height) else d.y1;
+                    const ry1 = if (screen_height > 0) core.toScreenY(y_axis, d.y1 + d.y2, screen_height) else d.y1 + d.y2;
+                    B.drawRectangleRec(.{
+                        .x = d.x1,
+                        .y = @min(ry0, ry1),
+                        .width = d.x2,
+                        .height = @abs(ry1 - ry0),
+                    }, c);
+                },
                 .circle => B.drawCircle(d.x1, y1, d.x2, c),
                 .arrow => {
                     B.drawLine(d.x1, y1, d.x2, y2, 2, c);

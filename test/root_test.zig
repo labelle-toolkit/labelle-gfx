@@ -1397,6 +1397,427 @@ test "GfxRenderer: renderGizmoDraws draws into every active camera" {
     try testing.expectEqual(@as(usize, 2), MockBackend.getLineCallCount());
 }
 
+test "GfxRenderer: a secondary full-window camera does not duplicate world gizmos" {
+    // Camera-bound layers (gfx#303) make it normal for a scene to activate a
+    // secondary FULL-WINDOW camera that is not a split-screen pane — e.g. a
+    // parallax sky. Drawing the overlay once per ACTIVE camera painted it twice
+    // over the same pixels, the ghost copy offset by the cameras' position delta
+    // and tracking at the parallax rate instead of the main camera's.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.getCamera(0).setPosition(100, 100); // the "main" world view
+    // Active, but no `screen_viewport` and no split-screen layout — not a pane.
+    mgr.setActive(1, true);
+    mgr.getCamera(1).setPosition(512, 384);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    // Once, through the "main" camera — not once per active camera.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(usize, 1), MockBackend.getLineCallCount());
+    // ...and it is slot 0's transform, not the parallax camera's.
+    try testing.expectEqual(@as(f32, 100), MockBackend.getCameraPasses()[0].target_x);
+}
+
+test "GfxRenderer: a minimap does not take the overlay away from the main view" {
+    // A minimap owns its own region, so it keeps the pass it has always had —
+    // it cannot overpaint anything, and a pre-layer hook may well be drawing
+    // world content into it. What must NOT happen is the full-window gameplay
+    // view losing its overlay to the minimap.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.getCamera(0).setPosition(100, 100); // full-window "main" view
+    mgr.setActive(1, true);
+    mgr.getCamera(1).setPosition(900, 900);
+    mgr.getCamera(1).screen_viewport = .{ .x = 0, .y = 0, .width = 200, .height = 150 };
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    // Both regions draw; crucially the main view is one of them.
+    const passes = MockBackend.getCameraPasses();
+    try testing.expectEqual(@as(usize, 2), passes.len);
+    var saw_main = false;
+    for (passes) |pass| {
+        if (pass.target_x == 100) saw_main = true;
+    }
+    try testing.expect(saw_main);
+}
+
+test "GfxRenderer: split-screen skips a non-pane camera-bound camera" {
+    // A split-screen scene may ALSO activate a camera for a camera-bound layer.
+    // `current_layout` stays non-`.single`, but that extra camera is not a pane:
+    // it has no `screen_viewport`, so drawing through it restores the full window
+    // and repaints the whole overlay — the exact ghost this change removes.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.setupSplitScreen(.vertical_split); // panes: slots 0 and 1
+    mgr.setActive(2, true); // camera-bound layer's camera — full-window, no pane
+    mgr.getCamera(2).setPosition(900, 900);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    // Two panes, not three active cameras.
+    try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(usize, 2), MockBackend.getLineCallCount());
+}
+
+test "GfxRenderer: world gizmos follow an explicitly bound world layer's camera" {
+    // A `.world` layer bound to "hero" renders its entities through that camera,
+    // so the overlay must go there too — not through the implicit "main"/slot 0,
+    // which would annotate the entities from a different transform entirely.
+    const HeroLayers = enum {
+        hero_world,
+
+        pub fn config(_: @This()) LayerConfig {
+            return .{ .space = .world, .order = 0, .camera = "hero" };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, HeroLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.getCamera(0).setPosition(100, 100); // "main", carries no world layer
+    mgr.setActive(1, true);
+    mgr.setTag(1, "hero");
+    mgr.getCamera(1).setPosition(555, 0);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    // Once, through "hero" — the camera the world layer actually renders through.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(f32, 555), MockBackend.getCameraPasses()[0].target_x);
+}
+
+test "GfxRenderer: two full-window world cameras get ONE overlay pass, not two" {
+    // `GizmoDraw` carries no camera association — the list is global — so a
+    // project with an implicit-"main" world layer AND a full-window world layer
+    // bound to a secondary camera would replay the entire overlay through both
+    // overlapping transforms: the duplicate, offset ghost all over again.
+    // Lowest slot wins.
+    const TwoWorldLayers = enum {
+        main_world,
+        sky_world,
+
+        pub fn config(self: @This()) LayerConfig {
+            return switch (self) {
+                .main_world => .{ .space = .world, .order = 0 }, // implicit "main"
+                .sky_world => .{ .space = .world, .order = -10, .camera = "sky" },
+            };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, TwoWorldLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.getCamera(0).setPosition(100, 100); // "main", full-window
+    mgr.setActive(1, true);
+    mgr.setTag(1, "sky");
+    mgr.getCamera(1).setPosition(900, 900); // ALSO full-window
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(f32, 100), MockBackend.getCameraPasses()[0].target_x);
+}
+
+test "GfxRenderer: a world layer bound to a MISSING tag keeps slot 0 in the set" {
+    // One world layer resolves ("hero"), another does not ("villain"). The layer
+    // loop renders the unresolved one through slot 0, so the overlay has to be
+    // on slot 0 as well — a global "something already drew" flag would skip it
+    // and leave villain's entities annotated from hero's transform.
+    //
+    // Both cameras are full-window, so the one-full-window-pass rule keeps the
+    // LOWEST slot: 0, the camera the unresolved layer actually renders through.
+    const MixedLayers = enum {
+        hero_world,
+        villain_world,
+
+        pub fn config(self: @This()) LayerConfig {
+            return switch (self) {
+                .hero_world => .{ .space = .world, .order = 0, .camera = "hero" },
+                .villain_world => .{ .space = .world, .order = 10, .camera = "villain" },
+            };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, MixedLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.getCamera(0).setPosition(100, 100); // slot 0 — the unresolved fallback
+    mgr.setActive(1, true);
+    mgr.setTag(1, "hero"); // "villain" is carried by nobody
+    mgr.getCamera(1).setPosition(555, 0);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(f32, 100), MockBackend.getCameraPasses()[0].target_x);
+}
+
+test "GfxRenderer: split-screen plus a minimap draws each distinct region once" {
+    // Panes and a minimap all own disjoint regions, so each draws exactly once
+    // and none can overpaint another. The regression guarded here is that the
+    // count stays one-per-region and never gains a full-window pass on top.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.setupSplitScreen(.vertical_split); // panes: slots 0 and 1
+    mgr.setActive(2, true);
+    mgr.getCamera(2).screen_viewport = .{ .x = 0, .y = 0, .width = 160, .height = 120 };
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    try testing.expectEqual(@as(usize, 3), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(usize, 3), MockBackend.getLineCallCount());
+}
+
+test "GfxRenderer: split-screen keeps a minimap that a world layer is bound to" {
+    // A minimap bound to a `.world` layer HAS world content rendered through it
+    // by the layer loop, so it needs the overlay — even in split-screen, where
+    // the pane set alone would exclude it and its annotations would vanish.
+    // Its own viewport means it can never overpaint the panes.
+    const MiniLayers = enum {
+        main_world,
+        map_world,
+
+        pub fn config(self: @This()) LayerConfig {
+            return switch (self) {
+                .main_world => .{ .space = .world, .order = 0 }, // implicit "main"
+                .map_world => .{ .space = .world, .order = 5, .camera = "minimap" },
+            };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, MiniLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.setupSplitScreen(.vertical_split); // panes: slots 0 and 1
+    mgr.setActive(2, true);
+    mgr.setTag(2, "minimap");
+    mgr.getCamera(2).screen_viewport = .{ .x = 0, .y = 0, .width = 160, .height = 120 };
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    // Two panes + the world-bound minimap. All three occupy distinct regions.
+    try testing.expectEqual(@as(usize, 3), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(usize, 3), MockBackend.getLineCallCount());
+}
+
+test "GfxRenderer: split-screen still excludes a full-window camera-bound camera" {
+    // The companion to the test above: a non-pane camera bound to a `.world`
+    // layer but FULL-WINDOW must stay excluded under split-screen. It would
+    // repaint the overlay across both panes — the original ghost.
+    const SkyLayers = enum {
+        main_world,
+        sky_world,
+
+        pub fn config(self: @This()) LayerConfig {
+            return switch (self) {
+                .main_world => .{ .space = .world, .order = 0 },
+                .sky_world => .{ .space = .world, .order = -5, .camera = "sky" },
+            };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, SkyLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.setupSplitScreen(.vertical_split);
+    mgr.setActive(2, true);
+    mgr.setTag(2, "sky"); // world-bound, but no viewport → full-window
+    mgr.getCamera(2).setPosition(900, 900);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
+}
+
+test "GfxRenderer: the slot-0 world fallback is found by slot, not by tag" {
+    // `setTag(0, ...)` is public, and the layer loop's unresolved-binding
+    // fallback is literally `getCamera(0)` — by INDEX. A scene that retags slot
+    // 0 therefore still has its world rendered there, so identifying the
+    // fallback camera by `hasTag("main")` would reject it and drop the overlay
+    // entirely.
+    const GhostLayers = enum {
+        ghost_world,
+
+        pub fn config(_: @This()) LayerConfig {
+            // Bound to a tag no active camera carries -> layer loop uses slot 0.
+            return .{ .space = .world, .order = 0, .camera = "ghost" };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, GhostLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.setTag(0, "hero"); // slot 0 is no longer tagged "main"
+    mgr.getCamera(0).setPosition(100, 100);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    // Still drawn, through slot 0 — where the layer loop puts the world.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(f32, 100), MockBackend.getCameraPasses()[0].target_x);
+}
+
+test "GfxRenderer: world gizmos ignore selectCamera and follow the 'main' binding" {
+    // `selectCamera` only chooses the target of high-level setters — a game may
+    // point it at a secondary camera purely to configure that camera. It does
+    // not designate the view the world renders through, so the overlay must not
+    // follow it.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.getCamera(0).setPosition(100, 100); // the "main" world view
+    mgr.setActive(1, true);
+    mgr.getCamera(1).setPosition(900, 900); // full-window secondary (parallax)
+    mgr.selectCamera(1); // configure it — NOT a statement about what renders
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(f32, 100), MockBackend.getCameraPasses()[0].target_x);
+}
+
+test "GfxRenderer: world-space rect gizmo flips its top edge, not its bottom" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    // A `.rect` packs width/height into x2/y2. Anchored at logical bottom-left
+    // (100, 100) and 30x40, it spans logical Y [100, 140] — so under `.up` the
+    // Y-down top-left corner `drawRectangleRec` wants is 600 - 140 = 460.
+    // Flipping y1 alone would put it at 600 - 100 = 500, a full height too low.
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .rect, .x1 = 100, .y1 = 100, .x2 = 30, .y2 = 40, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    const shapes = MockBackend.getShapeCalls();
+    try testing.expectEqual(@as(usize, 1), shapes.len);
+    try testing.expectEqual(@as(f32, 100), shapes[0].rect.x);
+    try testing.expectEqual(@as(f32, 460), shapes[0].rect.y);
+    try testing.expectEqual(@as(f32, 30), shapes[0].rect.width);
+    try testing.expectEqual(@as(f32, 40), shapes[0].rect.height);
+}
+
+test "GfxRenderer: screen-space rect gizmo keeps the caller's top-left anchor" {
+    // The flip is world-space only; screen-space callers already author in
+    // Y-down top-left coords (HUD overlays), so they must pass through untouched.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .rect, .x1 = 10, .y1 = 20, .x2 = 30, .y2 = 40, .space = .screen },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    const shapes = MockBackend.getShapeCalls();
+    try testing.expectEqual(@as(usize, 1), shapes.len);
+    try testing.expectEqual(@as(f32, 10), shapes[0].rect.x);
+    try testing.expectEqual(@as(f32, 20), shapes[0].rect.y);
+}
+
 // ── Components ─────────────────────────────────────────────
 
 test "SpriteComponent.toVisual produces correct SpriteVisual" {
