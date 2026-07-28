@@ -2773,6 +2773,42 @@ test "GfxRenderer: split-screen still excludes a full-window camera-bound camera
     try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
 }
 
+test "GfxRenderer: the slot-0 world fallback is found by slot, not by tag" {
+    // `setTag(0, ...)` is public, and the layer loop's unresolved-binding
+    // fallback is literally `getCamera(0)` — by INDEX. A scene that retags slot
+    // 0 therefore still has its world rendered there, so identifying the
+    // fallback camera by `hasTag("main")` would reject it and drop the overlay
+    // entirely.
+    const GhostLayers = enum {
+        ghost_world,
+
+        pub fn config(_: @This()) LayerConfig {
+            // Bound to a tag no active camera carries -> layer loop uses slot 0.
+            return .{ .space = .world, .order = 0, .camera = "ghost" };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, GhostLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.setTag(0, "hero"); // slot 0 is no longer tagged "main"
+    mgr.getCamera(0).setPosition(100, 100);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    // Still drawn, through slot 0 — where the layer loop puts the world.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(f32, 100), MockBackend.getCameraPasses()[0].target_x);
+}
+
 test "GfxRenderer: world gizmos ignore selectCamera and follow the 'main' binding" {
     // `selectCamera` only chooses the target of high-level setters — a game may
     // point it at a secondary camera purely to configure that camera. It does
