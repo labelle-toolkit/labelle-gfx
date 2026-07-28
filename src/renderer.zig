@@ -812,33 +812,47 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
 
             const sh = self.screen_height;
 
-            // World-space gizmos (Y-flipped, through camera). Drawn once per
-            // split-screen PANE so each view gets the debug overlay
-            // (labelle-gfx#226 — before that, only the primary camera's view
-            // showed gizmos).
+            // World-space gizmos (Y-flipped, through camera). Which views show
+            // world content, and therefore need the overlay?
             //
-            // A pane is exactly an active camera carrying a `screen_viewport`.
-            // This used to iterate every ACTIVE camera, which broke once
-            // camera-bound layers (gfx#303) made it normal for a scene to
-            // activate a secondary FULL-WINDOW camera that is not a split-screen
-            // view — e.g. a parallax sky camera. The overlay was then drawn a
-            // second time through that camera's transform, over the same pixels:
-            // every world gizmo appeared twice, the ghost copy offset by the two
+            // SPLIT-SCREEN: every active camera is a pane and each pane's view
+            // gets its own copy (labelle-gfx#226 — before that, only the primary
+            // camera's view showed gizmos).
+            //
+            // OTHERWISE the scene is single-view, and the overlay is drawn once
+            // through the camera the world LAYERS resolve to: the active camera
+            // tagged "main", falling back to slot 0. That mirrors the layer
+            // loop's binding/fallback rule, so gizmos always land on the same
+            // transform as the entities they annotate.
+            //
+            // This used to iterate every ACTIVE camera unconditionally, which
+            // broke once camera-bound layers (gfx#303) made it normal for a scene
+            // to activate a secondary FULL-WINDOW camera that is not a pane —
+            // e.g. a parallax sky camera. The overlay was then drawn a second
+            // time through that camera's transform, over the same pixels: every
+            // world gizmo appeared twice, the ghost copy offset by the two
             // cameras' position delta and tracking at the parallax rate instead
             // of the main camera's.
             //
-            // When no active camera has a viewport the scene is single-view, and
-            // the overlay is drawn once through the selected camera — the same
-            // one `getCamera()` hands to gameplay code, so gizmos land on the
-            // camera the player is actually looking through.
-            var drew_pane = false;
-            var it = self.camera_mgr.activeIterator();
-            while (it.next()) |camera| {
-                if (camera.screen_viewport == null) continue;
-                drew_pane = true;
-                drawWorldGizmos(draws, camera, sh);
+            // Two things this deliberately does NOT key on:
+            //   - `screen_viewport`, because that is also how a MINIMAP camera is
+            //     expressed. Treating "has a viewport" as "is a pane" would let a
+            //     minimap claim the overlay and drop it from the main gameplay
+            //     view entirely.
+            //   - `getCamera()`, because that resolves to the SELECTED camera —
+            //     the target of high-level setters (`selectCamera`). A game may
+            //     point that at a secondary camera purely to configure it; it does
+            //     not designate the view the world renders through.
+            if (self.camera_mgr.current_layout != .single) {
+                var it = self.camera_mgr.activeIterator();
+                while (it.next()) |camera| drawWorldGizmos(draws, camera, sh);
+            } else {
+                // Default-camera invariant (camera/src/root.zig): slot 0 is
+                // always active, so it is a sound fallback target.
+                std.debug.assert(self.camera_mgr.isActive(0));
+                const cam = self.camera_mgr.findByTag("main") orelse self.camera_mgr.getCamera(0);
+                drawWorldGizmos(draws, cam, sh);
             }
-            if (!drew_pane) drawWorldGizmos(draws, self.getCamera(), sh);
             clearViewport();
 
             // Screen-space gizmos (no camera, no flip)
