@@ -112,6 +112,17 @@ pub fn CameraWith(comptime BackendImpl: type, comptime y_axis: YAxis) type {
         tag_buf: [16:0]u8 = [_:0]u8{0} ** 16,
         tag_len: u8 = 0,
 
+        /// Per-camera opt-in for midgame resolution changes (labelle-gfx#249).
+        /// When true, `onFramebufferResize` (and the manager-level fan-out)
+        /// re-runs `centerOnDesign()` for this camera after the framebuffer
+        /// resolution changes — Android orientation flip, multi-window resize,
+        /// foldable unfold — so a camera initialised at design-center follows
+        /// the re-fitted design canvas instead of drifting off the visible
+        /// area. Off by default so cameras the game positions manually are
+        /// never stomped on resize. This is the v1 "flag on the camera struct"
+        /// the issue calls for (per-camera *handlers* are an explicit non-goal).
+        auto_recenter: bool = false,
+
         pub fn init() Self {
             return .{};
         }
@@ -166,6 +177,34 @@ pub fn CameraWith(comptime BackendImpl: type, comptime y_axis: YAxis) type {
                 self.y = @as(f32, @floatFromInt(BackendImpl.getDesignHeight())) / 2.0;
             } else {
                 self.centerOnScreen();
+            }
+        }
+
+        /// Opt this camera in/out of auto-recenter on a midgame resolution
+        /// change (labelle-gfx#249). See the `auto_recenter` field.
+        pub fn setAutoRecenter(self: *Self, on: bool) void {
+            self.auto_recenter = on;
+        }
+
+        /// React to a midgame framebuffer resolution change (labelle-gfx#249).
+        ///
+        /// Recomputes what `centerOnDesign()` does at init — but now against
+        /// the backend's *current* design size, which the backend/engine may
+        /// have re-fitted to the new physical aspect first (the
+        /// "design-follows-physical" path). No-op unless this camera opted in
+        /// via `auto_recenter`, so a manually positioned camera keeps its
+        /// position across a resize. The engine's `framebuffer_resized` handler
+        /// calls this (via the manager) after each backend `onResize`.
+        pub fn onFramebufferResize(self: *Self) void {
+            if (self.auto_recenter) {
+                self.centerOnDesign();
+                // `centerOnDesign` writes x/y directly (like the design
+                // center is unconstrained), so re-apply the same bounds
+                // clamp every other mutator uses — otherwise a bounded
+                // camera can land outside its bounds after a resize. No-op
+                // when bounds are disabled, so unbounded cameras are
+                // unchanged (labelle-gfx#249 review).
+                self.clampToBounds();
             }
         }
 
@@ -402,10 +441,10 @@ pub fn CameraManager(comptime BackendImpl: type) type {
 /// it manages flips through the same core transform as the no-camera path.
 pub fn CameraManagerWith(comptime BackendImpl: type, comptime y_axis: YAxis) type {
     const CameraT = CameraWith(BackendImpl, y_axis);
-    const MAX_CAMERAS: usize = 4;
 
     return struct {
         const Self = @This();
+        pub const MAX_CAMERAS: usize = 4;
 
         cameras: [MAX_CAMERAS]CameraT = [_]CameraT{CameraT.init()} ** MAX_CAMERAS,
         active_mask: u4 = 0b0001,
@@ -418,6 +457,15 @@ pub fn CameraManagerWith(comptime BackendImpl: type, comptime y_axis: YAxis) typ
         /// so split-screen games could not move cameras 1-3.
         selected_index: u2 = 0,
         current_layout: SplitScreenLayout = .single,
+        /// Slots the CURRENT split-screen layout owns as views.
+        /// `recalculateViewports` / `resetSecondary` are the only writers.
+        ///
+        /// Distinct from "carries a `screen_viewport`": a MINIMAP is also
+        /// expressed as a camera with a viewport, and a camera-bound layer adds
+        /// a full-window camera with none. Neither is a layout pane, so
+        /// consumers that need "is this one of the split views?" must ask
+        /// `isSplitPane` rather than inspecting viewports (labelle-gfx#320).
+        pane_mask: u4 = 0b0001,
 
         pub fn init() Self {
             var mgr = Self{};
@@ -537,10 +585,32 @@ pub fn CameraManagerWith(comptime BackendImpl: type, comptime y_axis: YAxis) typ
             // `current_layout` consistent with that (`.single`).
             self.cameras[0].screen_viewport = null;
             self.current_layout = .single;
+            self.pane_mask = 0b0001;
         }
 
         pub fn activeCount(self: *const Self) u3 {
             return @popCount(self.active_mask);
+        }
+
+        pub fn currentLayout(self: *const Self) SplitScreenLayout {
+            return self.current_layout;
+        }
+
+        /// Is `index` one of the views an active SPLIT-SCREEN layout owns?
+        ///
+        /// False under `.single` — there are no panes then, just the one
+        /// full-window view.
+        ///
+        /// Deliberately NOT "does this camera have a `screen_viewport`".
+        /// A viewport is also how a MINIMAP is expressed, and a camera-bound
+        /// layer (gfx#303) adds a full-window camera with no viewport at all;
+        /// neither is a layout pane. Only `recalculateViewports` writes
+        /// `pane_mask`, so this answers "did the LAYOUT put a view here?"
+        /// rather than inferring it from state a game can set for its own
+        /// reasons (labelle-gfx#320).
+        pub fn isSplitPane(self: *const Self, index: u2) bool {
+            if (self.current_layout == .single) return false;
+            return self.isActive(index) and (self.pane_mask & (@as(u4, 1) << index)) != 0;
         }
 
         pub fn setupSplitScreen(self: *Self, layout: SplitScreenLayout) void {
@@ -560,25 +630,55 @@ pub fn CameraManagerWith(comptime BackendImpl: type, comptime y_axis: YAxis) typ
             switch (self.current_layout) {
                 .single => {
                     self.active_mask = 0b0001;
+                    self.pane_mask = 0b0001;
                     self.cameras[0].screen_viewport = null;
                 },
                 .vertical_split => {
                     self.active_mask = 0b0011;
+                    self.pane_mask = 0b0011;
                     self.cameras[0].screen_viewport = ScreenViewport.leftHalf(sw, sh);
                     self.cameras[1].screen_viewport = ScreenViewport.rightHalf(sw, sh);
                 },
                 .horizontal_split => {
                     self.active_mask = 0b0011;
+                    self.pane_mask = 0b0011;
                     self.cameras[0].screen_viewport = ScreenViewport.topHalf(sw, sh);
                     self.cameras[1].screen_viewport = ScreenViewport.bottomHalf(sw, sh);
                 },
                 .quadrant => {
                     self.active_mask = 0b1111;
+                    self.pane_mask = 0b1111;
                     for (0..4) |i| {
                         self.cameras[i].screen_viewport = ScreenViewport.quadrant(sw, sh, @intCast(i));
                     }
                 },
             }
+        }
+
+        /// React to a midgame framebuffer resolution change (labelle-gfx#249).
+        ///
+        /// The single global resize reaction the issue describes — call it from
+        /// the engine's `framebuffer_resized` handler after the backend's
+        /// `onResize` (and any design-canvas re-fit) has run:
+        ///
+        ///  1. Re-fit split-screen viewports to the new screen size. They were
+        ///     sized from `getScreenWidth/Height` in `recalculateViewports`, so
+        ///     a resize leaves them clipping to the old dimensions (a portrait
+        ///     flip on a `.vertical_split` layout would otherwise keep the
+        ///     halves at the old landscape widths).
+        ///  2. Re-run `centerOnDesign()` for every camera that opted into
+        ///     `auto_recenter`, so cameras initialised at design-center follow
+        ///     the re-fitted design canvas instead of drifting off-screen.
+        ///
+        /// v1 non-goals hold: one global event (no per-camera handler), a snap
+        /// (no tween), and the backend keeps its own clear color for the bars.
+        pub fn onFramebufferResize(self: *Self) void {
+            // Split-screen viewports are derived from the screen dimensions, so
+            // a resize invalidates them; recompute against the new size. This
+            // preserves the current layout (`.single` clears viewports, which
+            // is the correct no-op for a single-camera game).
+            self.recalculateViewports();
+            for (&self.cameras) |*cam| cam.onFramebufferResize();
         }
 
         /// Iterate active cameras.
