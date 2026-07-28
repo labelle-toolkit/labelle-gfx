@@ -884,17 +884,15 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
         /// (a world-bound minimap) and are all kept.
         fn worldCameraMask(self: *Self) u4 {
             const mgr = &self.camera_mgr;
-            var mask: u4 = 0;
+            const split = mgr.currentLayout() != .single;
 
-            if (mgr.currentLayout() != .single) {
-                var i: u3 = 0;
-                while (i < CameraManagerT.MAX_CAMERAS) : (i += 1) {
-                    const idx: u2 = @intCast(i);
-                    if (mgr.isSplitPane(idx)) mask |= slotBit(idx);
-                }
-                return mask;
-            }
-
+            // The cameras the `.world` LAYERS resolve to, under the layer loop's
+            // own rule: explicit `.camera` tag wins, else `.world` implies the
+            // implicit "main". A binding no active camera carries is rendered by
+            // the layer loop through slot 0, so slot 0 joins the set in that case
+            // too — per unresolved binding, not once globally, or a layer that
+            // DID resolve would suppress the fallback another layer still needs.
+            var world: u4 = 0;
             var needs_fallback = false;
             inline for (sorted_layers) |layer| {
                 const cfg = comptime layer.config();
@@ -905,7 +903,7 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                     while (i < CameraManagerT.MAX_CAMERAS) : (i += 1) {
                         const idx: u2 = @intCast(i);
                         if (mgr.isActive(idx) and mgr.getCameraConst(idx).hasTag(tag)) {
-                            mask |= slotBit(idx);
+                            world |= slotBit(idx);
                             resolved = true;
                         }
                     }
@@ -914,20 +912,53 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             }
             // Default-camera invariant (camera/src/root.zig): slot 0 is always
             // active, so it is a sound fallback target — the same assertion the
-            // layer fallback makes. `mask == 0` covers a project with no `.world`
-            // layer at all, which still wants its overlay somewhere.
-            if (needs_fallback or mask == 0) {
+            // layer fallback makes. `world == 0` covers a project with no
+            // `.world` layer at all, which still wants its overlay somewhere.
+            if (needs_fallback or world == 0) {
                 std.debug.assert(mgr.isActive(0));
-                mask |= slotBit(0);
+                world |= slotBit(0);
             }
 
-            var seen_full_window = false;
+            var mask: u4 = 0;
             var i: u3 = 0;
             while (i < CameraManagerT.MAX_CAMERAS) : (i += 1) {
                 const idx: u2 = @intCast(i);
-                if (mask & slotBit(idx) == 0) continue;
-                if (mgr.getCameraConst(idx).screen_viewport != null) continue;
-                if (seen_full_window) mask &= ~slotBit(idx) else seen_full_window = true;
+                // A view the split-screen LAYOUT owns. Membership comes from the
+                // layout's own record, never from "carries a `screen_viewport`"
+                // (a minimap carries one) or "is active" (a camera-bound layer
+                // activates a full-window camera that is no view of its own).
+                if (mgr.isSplitPane(idx)) {
+                    mask |= slotBit(idx);
+                    continue;
+                }
+                if (world & slotBit(idx) == 0) continue;
+                // A world camera with its OWN viewport — a minimap explicitly
+                // bound to a `.world` layer — occupies a distinct region of the
+                // screen, so it can never overpaint another view. Always kept,
+                // split-screen or not; without this its world renders but its
+                // annotations do not.
+                if (mgr.getCameraConst(idx).screen_viewport != null) mask |= slotBit(idx);
+            }
+
+            // Full-window world cameras.
+            //
+            // Under split-screen: none. The panes already tile the screen, so a
+            // full-window pass would repaint the whole overlay across every one
+            // of them — the ghost this all started from.
+            //
+            // Otherwise: at most ONE. Several full-window cameras showing world
+            // content overlap, and `GizmoDraw` carries no camera association —
+            // the list is global — so there is no per-draw answer. Lowest slot
+            // wins: deterministic, and slot 0 in the ordinary case.
+            if (!split) {
+                var j: u3 = 0;
+                while (j < CameraManagerT.MAX_CAMERAS) : (j += 1) {
+                    const idx: u2 = @intCast(j);
+                    if (world & slotBit(idx) == 0) continue;
+                    if (mgr.getCameraConst(idx).screen_viewport != null) continue;
+                    mask |= slotBit(idx);
+                    break;
+                }
             }
             return mask;
         }
