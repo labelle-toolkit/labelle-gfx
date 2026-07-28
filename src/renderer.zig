@@ -847,7 +847,10 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             //    at all: the panes already tile the screen, so a full-window pass
             //    would repaint the overlay across every one of them.
             const split = self.camera_mgr.current_layout != .single;
-            const fallback = self.worldFallsBackToDefaultCamera();
+            const fallback = self.worldFallsBackToSlot0();
+            // Same assertion the layer loop's fallback makes: slot 0 is always
+            // active (the default-camera invariant), so it is a sound target.
+            if (fallback) std.debug.assert(self.camera_mgr.isActive(0));
             var drew_full_window = false;
             var it = self.camera_mgr.activeIterator();
             while (it.next()) |camera| {
@@ -856,10 +859,13 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                     continue;
                 }
                 if (split or drew_full_window) continue;
-                // The slot-0 fallback target is the "main" camera: slot 0 is
-                // always active and always carries that tag (the default-camera
-                // invariant in camera/src/root.zig).
-                if (!rendersWorldContent(camera) and !(fallback and camera.hasTag("main"))) continue;
+                // Identify the fallback camera by SLOT, not by tag. The layer
+                // loop's unresolved-binding fallback is literally
+                // `getCamera(0)`, and `setTag(0, ...)` is public — a scene that
+                // retags slot 0 would leave the world rendering there while a
+                // `hasTag("main")` test rejected it, dropping the overlay
+                // entirely.
+                if (!rendersWorldContent(camera) and !(fallback and it.index() == 0)) continue;
                 drawWorldGizmos(draws, camera, sh);
                 drew_full_window = true;
             }
@@ -888,10 +894,11 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
 
         /// True when the layer loop's slot-0 world fallback is in play: some
         /// `.world` layer's binding is carried by no active camera (the loop
-        /// renders those through slot 0, so the overlay belongs there too), or
+        /// renders those through slot 0 *by index*, so the overlay belongs there
+        /// too), or
         /// the project declares no `.world` layer at all and the overlay still
         /// has to land somewhere.
-        fn worldFallsBackToDefaultCamera(self: *Self) bool {
+        fn worldFallsBackToSlot0(self: *Self) bool {
             comptime var any_world = false;
             inline for (sorted_layers) |layer| {
                 const cfg = comptime layer.config();
