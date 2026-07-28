@@ -2463,6 +2463,34 @@ test "GfxRenderer: renderGizmoDraws draws into every active camera" {
     try testing.expectEqual(@as(usize, 2), MockBackend.getLineCallCount());
 }
 
+test "GfxRenderer: a secondary full-window camera does not duplicate world gizmos" {
+    // Camera-bound layers (gfx#303) make it normal for a scene to activate a
+    // secondary FULL-WINDOW camera that is not a split-screen pane — e.g. a
+    // parallax sky. Drawing the overlay once per ACTIVE camera painted it twice
+    // over the same pixels, the ghost copy offset by the cameras' position delta
+    // and tracking at the parallax rate instead of the main camera's.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    // Active, but no `screen_viewport` — not a pane.
+    const mgr = renderer.getCameraManager();
+    mgr.setActive(1, true);
+    mgr.getCamera(1).setPosition(512, 384);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    // Once, through the selected camera — not once per active camera.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(usize, 1), MockBackend.getLineCallCount());
+}
+
 // ── Components ─────────────────────────────────────────────
 
 test "SpriteComponent.toVisual produces correct SpriteVisual" {

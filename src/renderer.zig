@@ -926,16 +926,32 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                 BackendImpl.setApplyFit(true);
             }
 
+            // Drawn once per split-screen PANE so each view gets the debug
+            // overlay (#226 — before that, only the primary camera's view showed
+            // gizmos).
+            //
+            // A pane is exactly an active camera carrying a `screen_viewport`.
+            // This used to iterate every ACTIVE camera, which broke once
+            // camera-bound layers (#303) made it normal for a scene to activate a
+            // secondary FULL-WINDOW camera that is not a split-screen view — e.g.
+            // a parallax sky. `applyViewport` then cleared to full screen for
+            // both, so the overlay was drawn a second time through that camera's
+            // transform, over the same pixels: every world gizmo appeared twice,
+            // the ghost copy offset by the two cameras' position delta and
+            // tracking at the parallax rate instead of the main camera's.
+            //
+            // When no active camera has a viewport the scene is single-view, and
+            // the overlay is drawn once through the selected camera — the same
+            // one `getCamera()` hands to gameplay code, so gizmos land on the
+            // camera the player is actually looking through.
+            var drew_pane = false;
             var it = self.camera_mgr.activeIterator();
             while (it.next()) |camera| {
-                applyViewport(camera);
-                camera.begin();
-                for (draws) |d| {
-                    if (d.space != .world) continue;
-                    drawGizmoPrimitive(d, sh);
-                }
-                camera.end();
+                if (camera.screen_viewport == null) continue;
+                drew_pane = true;
+                drawWorldGizmos(draws, camera, sh);
             }
+            if (!drew_pane) drawWorldGizmos(draws, self.getCamera(), sh);
             clearViewport();
 
             // Screen-space gizmos (no camera, no flip)
@@ -943,6 +959,17 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                 if (d.space != .screen) continue;
                 drawGizmoPrimitive(d, 0);
             }
+        }
+
+        /// Draw every world-space gizmo once through `cam`, inside its viewport.
+        fn drawWorldGizmos(draws: []const GizmoDraw, cam: *const CameraT, sh: f32) void {
+            applyViewport(cam);
+            cam.begin();
+            for (draws) |d| {
+                if (d.space != .world) continue;
+                drawGizmoPrimitive(d, sh);
+            }
+            cam.end();
         }
 
         fn drawGizmoPrimitive(d: GizmoDraw, screen_height: f32) void {
