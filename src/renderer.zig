@@ -948,23 +948,13 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             // the ghost copy offset by the two cameras' position delta and
             // tracking at the parallax rate instead of the main camera's.
             //
-            // See `showsWorldContent` for the per-camera rule.
-            var drew = false;
-            var it = self.camera_mgr.activeIterator();
-            while (it.next()) |camera| {
-                if (!self.showsWorldContent(camera)) continue;
-                drawWorldGizmos(draws, camera, sh);
-                drew = true;
-            }
-            if (!drew) {
-                // Nothing resolved — a `.world` layer bound to a tag no active
-                // camera carries, or a project with no world layer at all. The
-                // layer loop falls back to slot 0 in exactly this case, so the
-                // overlay follows it. Default-camera invariant
-                // (camera/src/root.zig): slot 0 is always active, so it is a
-                // sound target — the same assertion the layer fallback makes.
-                std.debug.assert(self.camera_mgr.isActive(0));
-                drawWorldGizmos(draws, self.camera_mgr.getCamera(0), sh);
+            // See `worldCameraMask` for which views qualify and why.
+            const world_cameras = self.worldCameraMask();
+            var i: u3 = 0;
+            while (i < CameraManagerT.MAX_CAMERAS) : (i += 1) {
+                const idx: u2 = @intCast(i);
+                if (world_cameras & slotBit(idx) == 0) continue;
+                drawWorldGizmos(draws, self.camera_mgr.getCamera(idx), sh);
             }
             clearViewport();
 
@@ -975,42 +965,85 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             }
         }
 
-        /// Does `cam`'s view show world content, and therefore need the world
-        /// gizmo overlay drawn through its transform?
-        ///
-        /// Two ways to qualify:
-        ///
-        ///  1. It is a SPLIT-SCREEN PANE. Each pane is its own view of the world
-        ///     and each gets the overlay (#226). A pane is a camera the *layout*
-        ///     gave a `screen_viewport` — being active is not enough, because a
-        ///     camera-bound layer adds a camera via `setActive` with no viewport,
-        ///     and drawing through that would restore the full window and paint
-        ///     the whole overlay a second time (the bug this all started from).
-        ///
-        ///  2. A `.world` LAYER RENDERS THROUGH IT. Resolved with the same rule
-        ///     the layer loop uses — an explicit `.camera` tag wins, else `.world`
-        ///     implies the implicit "main" — so a world layer explicitly bound to
-        ///     e.g. a "hero" camera gets its gizmos on that camera, and the
-        ///     overlay always shares a transform with the entities it annotates.
-        ///
-        /// Deliberately NOT keyed on:
-        ///   - `screen_viewport` alone, because that is also how a MINIMAP camera
-        ///     is expressed. Treating "has a viewport" as "is a pane" lets a
-        ///     minimap claim the overlay and drop it from the main gameplay view.
-        ///   - `getCamera()` / `selectCamera`, which choose the target of
-        ///     high-level setters. A game may point that at a secondary camera
-        ///     purely to configure it; it does not designate what renders.
-        fn showsWorldContent(self: *Self, cam: *const CameraT) bool {
-            if (self.camera_mgr.current_layout != .single and cam.screen_viewport != null) return true;
+        fn slotBit(index: u2) u4 {
+            return @as(u4, 1) << index;
+        }
 
+        /// Camera slots whose view shows world content, and therefore need the
+        /// world gizmo overlay drawn through their transform.
+        ///
+        /// SPLIT-SCREEN. The panes *are* the views and they tile the screen, so
+        /// each gets the overlay (#226) and nothing else does. Membership comes
+        /// from `isSplitPane` — the layout's own record — not from "carries a
+        /// `screen_viewport`", because a minimap carries one too, and not from
+        /// "is active", because a camera-bound layer (#303) activates a
+        /// full-window camera that is not a view of its own. Either mistake puts
+        /// a full-window pass over the tiled panes: the ghost overlay again.
+        ///
+        /// SINGLE VIEW. Every camera a `.world` layer renders through, resolved
+        /// with the layer loop's own rule — an explicit `.camera` tag wins, else
+        /// `.world` implies the implicit "main" — so the overlay shares a
+        /// transform with the entities it annotates. A world layer whose tag no
+        /// active camera carries is rendered by the layer loop through slot 0, so
+        /// slot 0 joins the set in that case too, even if a *different* world
+        /// layer resolved (otherwise the unresolved layer's entities get no
+        /// overlay, or one from the wrong camera).
+        ///
+        /// At most ONE full-window camera is kept. Several full-window cameras
+        /// showing world content overlap on screen, and `GizmoDraw` carries no
+        /// camera association — the list is global — so replaying it through each
+        /// is exactly the duplicate, offset overlay this all set out to fix.
+        /// Lowest slot wins: deterministic, and slot 0 in the ordinary case.
+        /// Cameras with their own `screen_viewport` occupy a distinct region
+        /// (a world-bound minimap) and are all kept.
+        fn worldCameraMask(self: *Self) u4 {
+            const mgr = &self.camera_mgr;
+            var mask: u4 = 0;
+
+            if (mgr.currentLayout() != .single) {
+                var i: u3 = 0;
+                while (i < CameraManagerT.MAX_CAMERAS) : (i += 1) {
+                    const idx: u2 = @intCast(i);
+                    if (mgr.isSplitPane(idx)) mask |= slotBit(idx);
+                }
+                return mask;
+            }
+
+            var needs_fallback = false;
             inline for (sorted_layers) |layer| {
                 const cfg = comptime layer.config();
                 if (comptime cfg.space == .world) {
                     const tag: []const u8 = comptime cfg.camera orelse "main";
-                    if (cam.hasTag(tag)) return true;
+                    var resolved = false;
+                    var i: u3 = 0;
+                    while (i < CameraManagerT.MAX_CAMERAS) : (i += 1) {
+                        const idx: u2 = @intCast(i);
+                        if (mgr.isActive(idx) and mgr.getCameraConst(idx).hasTag(tag)) {
+                            mask |= slotBit(idx);
+                            resolved = true;
+                        }
+                    }
+                    if (!resolved) needs_fallback = true;
                 }
             }
-            return false;
+            // Default-camera invariant (camera/src/root.zig): slot 0 is always
+            // active, so it is a sound fallback target — the same assertion the
+            // layer fallback makes. `mask == 0` covers a project with no `.world`
+            // layer at all, which still wants its overlay somewhere.
+            if (needs_fallback or mask == 0) {
+                std.debug.assert(mgr.isActive(0));
+                mask |= slotBit(0);
+            }
+
+            var seen_full_window = false;
+            var i: u3 = 0;
+            while (i < CameraManagerT.MAX_CAMERAS) : (i += 1) {
+                const idx: u2 = @intCast(i);
+                if (mask & slotBit(idx) == 0) continue;
+                if (mgr.getCameraConst(idx).screen_viewport != null) continue;
+                if (seen_full_window) mask &= ~slotBit(idx) else seen_full_window = true;
+            }
+            return mask;
         }
 
         /// Draw every world-space gizmo once through `cam`, inside its viewport.
