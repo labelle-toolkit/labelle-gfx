@@ -2691,6 +2691,83 @@ test "GfxRenderer: split-screen plus a minimap draws only the layout's panes" {
     try testing.expectEqual(@as(usize, 2), MockBackend.getLineCallCount());
 }
 
+test "GfxRenderer: split-screen keeps a minimap that a world layer is bound to" {
+    // A minimap bound to a `.world` layer HAS world content rendered through it
+    // by the layer loop, so it needs the overlay — even in split-screen, where
+    // the pane set alone would exclude it and its annotations would vanish.
+    // Its own viewport means it can never overpaint the panes.
+    const MiniLayers = enum {
+        main_world,
+        map_world,
+
+        pub fn config(self: @This()) LayerConfig {
+            return switch (self) {
+                .main_world => .{ .space = .world, .order = 0 }, // implicit "main"
+                .map_world => .{ .space = .world, .order = 5, .camera = "minimap" },
+            };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, MiniLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.setupSplitScreen(.vertical_split); // panes: slots 0 and 1
+    mgr.setActive(2, true);
+    mgr.setTag(2, "minimap");
+    mgr.getCamera(2).screen_viewport = .{ .x = 0, .y = 0, .width = 160, .height = 120 };
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    // Two panes + the world-bound minimap. All three occupy distinct regions.
+    try testing.expectEqual(@as(usize, 3), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(usize, 3), MockBackend.getLineCallCount());
+}
+
+test "GfxRenderer: split-screen still excludes a full-window camera-bound camera" {
+    // The companion to the test above: a non-pane camera bound to a `.world`
+    // layer but FULL-WINDOW must stay excluded under split-screen. It would
+    // repaint the overlay across both panes — the original ghost.
+    const SkyLayers = enum {
+        main_world,
+        sky_world,
+
+        pub fn config(self: @This()) LayerConfig {
+            return switch (self) {
+                .main_world => .{ .space = .world, .order = 0 },
+                .sky_world => .{ .space = .world, .order = -5, .camera = "sky" },
+            };
+        }
+    };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, SkyLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const mgr = renderer.getCameraManager();
+    mgr.setupSplitScreen(.vertical_split);
+    mgr.setActive(2, true);
+    mgr.setTag(2, "sky"); // world-bound, but no viewport → full-window
+    mgr.getCamera(2).setPosition(900, 900);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
+}
+
 test "CameraManager: isSplitPane tracks the layout, not stray viewports" {
     MockBackend.initMock(testing.allocator);
     defer MockBackend.deinitMock();
