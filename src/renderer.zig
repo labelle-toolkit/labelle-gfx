@@ -718,8 +718,7 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                 const explicit_tag: ?[]const u8 = comptime cfg.camera;
                 // Resolved binding: explicit tag wins; else `.world` implies
                 // the implicit "main" camera; else (screen) is pinned (null).
-                const binding: ?[]const u8 = comptime explicit_tag orelse
-                    (if (space == .world) "main" else null);
+                const binding: ?[]const u8 = comptime layerCameraTag(cfg);
 
                 var rendered = false;
                 if (binding) |tag| {
@@ -878,6 +877,18 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             }
         }
 
+        /// The camera tag a layer's content renders through, or `null` when the
+        /// layer is pinned to the screen: an explicit `.camera` tag wins, else
+        /// `.world` implies the implicit "main" camera.
+        ///
+        /// THE one definition of this rule. The layer loop and the world-gizmo
+        /// overlay must agree on it or debug shapes drift away from the entities
+        /// they annotate — which is exactly how they drifted apart before, so
+        /// keep both callers on this helper rather than re-deriving it.
+        fn layerCameraTag(comptime cfg: anytype) ?[]const u8 {
+            return cfg.camera orelse (if (cfg.space == .world) "main" else null);
+        }
+
         /// Does a `.world` layer render through `cam`? Resolved with the layer
         /// loop's own rule: an explicit `.camera` tag wins, else `.world`
         /// implies the implicit "main".
@@ -885,7 +896,7 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             inline for (sorted_layers) |layer| {
                 const cfg = comptime layer.config();
                 if (comptime cfg.space == .world) {
-                    const tag: []const u8 = comptime cfg.camera orelse "main";
+                    const tag: []const u8 = comptime layerCameraTag(cfg).?;
                     if (cam.hasTag(tag)) return true;
                 }
             }
@@ -904,7 +915,7 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                 const cfg = comptime layer.config();
                 if (comptime cfg.space == .world) {
                     any_world = true;
-                    const tag: []const u8 = comptime cfg.camera orelse "main";
+                    const tag: []const u8 = comptime layerCameraTag(cfg).?;
                     if (self.camera_mgr.findByTag(tag) == null) return true;
                 }
             }
