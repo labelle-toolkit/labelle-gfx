@@ -1397,6 +1397,82 @@ test "GfxRenderer: renderGizmoDraws draws into every active camera" {
     try testing.expectEqual(@as(usize, 2), MockBackend.getLineCallCount());
 }
 
+test "GfxRenderer: a secondary full-window camera does not duplicate world gizmos" {
+    // Camera-bound layers (gfx#303) make it normal for a scene to activate a
+    // secondary FULL-WINDOW camera that is not a split-screen pane — e.g. a
+    // parallax sky. Drawing the overlay once per ACTIVE camera painted it twice
+    // over the same pixels, the ghost copy offset by the cameras' position delta
+    // and tracking at the parallax rate instead of the main camera's.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    // Active, but no `screen_viewport` — not a pane.
+    const mgr = renderer.getCameraManager();
+    mgr.setActive(1, true);
+    mgr.getCamera(1).setPosition(512, 384);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    // Once, through the selected camera — not once per active camera.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(usize, 1), MockBackend.getLineCallCount());
+}
+
+test "GfxRenderer: world-space rect gizmo flips its top edge, not its bottom" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    // A `.rect` packs width/height into x2/y2. Anchored at logical bottom-left
+    // (100, 100) and 30x40, it spans logical Y [100, 140] — so under `.up` the
+    // Y-down top-left corner `drawRectangleRec` wants is 600 - 140 = 460.
+    // Flipping y1 alone would put it at 600 - 100 = 500, a full height too low.
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .rect, .x1 = 100, .y1 = 100, .x2 = 30, .y2 = 40, .space = .world },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    const shapes = MockBackend.getShapeCalls();
+    try testing.expectEqual(@as(usize, 1), shapes.len);
+    try testing.expectEqual(@as(f32, 100), shapes[0].rect.x);
+    try testing.expectEqual(@as(f32, 460), shapes[0].rect.y);
+    try testing.expectEqual(@as(f32, 30), shapes[0].rect.width);
+    try testing.expectEqual(@as(f32, 40), shapes[0].rect.height);
+}
+
+test "GfxRenderer: screen-space rect gizmo keeps the caller's top-left anchor" {
+    // The flip is world-space only; screen-space callers already author in
+    // Y-down top-left coords (HUD overlays), so they must pass through untouched.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .rect, .x1 = 10, .y1 = 20, .x2 = 30, .y2 = 40, .space = .screen },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    const shapes = MockBackend.getShapeCalls();
+    try testing.expectEqual(@as(usize, 1), shapes.len);
+    try testing.expectEqual(@as(f32, 10), shapes[0].rect.x);
+    try testing.expectEqual(@as(f32, 20), shapes[0].rect.y);
+}
+
 // ── Components ─────────────────────────────────────────────
 
 test "SpriteComponent.toVisual produces correct SpriteVisual" {
