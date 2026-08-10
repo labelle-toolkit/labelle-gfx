@@ -99,11 +99,39 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             bounds: CullRect,
         };
 
+        /// First key `mintTextureKey` hands out, and the boundary that
+        /// splits `textures` into two non-overlapping halves:
+        ///
+        ///   - `>= TEXTURE_KEY_BASE` — minted here, by `loadTexture`,
+        ///     `loadTextureFromMemory` and `createDynamicTexture`.
+        ///   - `<  TEXTURE_KEY_BASE` — chosen by the caller and handed to
+        ///     `registerCatalogTexture` (the asset catalog's image slots,
+        ///     via the assembler-emitted `ImageBackendAdapter`).
+        ///
+        /// `textures` is ONE map with those two writers, so the halves must
+        /// stay disjoint. They used to overlap: the load paths keyed by the
+        /// *backend* texture id (`TextureId.from(tex.id)`), a value gfx does
+        /// not allocate and cannot bound — bgfx hands out small pool ids
+        /// (1, 2, …), which collided head-on with the catalog's 0-based slot
+        /// handles, and whichever registration lost sampled the other's
+        /// pixels (labelle-toolkit/labelle-engine#813).
+        ///
+        /// Minting our own key is what actually makes them disjoint. An
+        /// offset applied to the *catalog* side can't: sokol's `sg.Image.id`
+        /// is `(gen_ctr << 16) | slot`, so with enough slot recycling it
+        /// reaches any offset you pick (labelle-assembler#664 narrowed that
+        /// to `gen_ctr == 256` but could not close it). Backend ids are no
+        /// longer keys at all — they live only in `TextureInfo`.
+        pub const TEXTURE_KEY_BASE: u32 = 1 << 31;
+
         allocator: std.mem.Allocator,
         sprites: std.AutoHashMap(u32, SpriteEntry),
         shapes: std.AutoHashMap(u32, ShapeEntry),
         texts: std.AutoHashMap(u32, TextEntry),
         textures: std.AutoHashMap(u32, TextureInfo),
+        /// Next key `mintTextureKey` returns. Monotonic; never 0, so a
+        /// minted id is never `TextureId.invalid`.
+        next_texture_key: u32,
         screen_width: f32,
         screen_height: f32,
         clear_color: Color,
@@ -145,6 +173,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 .shapes = std.AutoHashMap(u32, ShapeEntry).init(allocator),
                 .texts = std.AutoHashMap(u32, TextEntry).init(allocator),
                 .textures = std.AutoHashMap(u32, TextureInfo).init(allocator),
+                .next_texture_key = TEXTURE_KEY_BASE,
                 .screen_width = config.screen_width,
                 .screen_height = config.screen_height,
                 .clear_color = config.clear_color,
@@ -392,9 +421,22 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
 
         // -- Texture registry --
 
+        /// Allocate the next gfx-owned key for `textures`. See
+        /// `TEXTURE_KEY_BASE` for why the load paths mint instead of
+        /// reusing the backend's texture id.
+        ///
+        /// Wraps back to the base rather than past `maxInt(u32)`: 2^31
+        /// mints is unreachable in practice, but rolling over to 0 would
+        /// alias `TextureId.invalid`.
+        fn mintTextureKey(self: *Self) TextureId {
+            const key = self.next_texture_key;
+            self.next_texture_key = if (key == std.math.maxInt(u32)) TEXTURE_KEY_BASE else key + 1;
+            return TextureId.from(key);
+        }
+
         pub fn loadTexture(self: *Self, path: [:0]const u8) !TextureId {
             const tex = try B.loadTexture(path);
-            const id = TextureId.from(tex.id);
+            const id = self.mintTextureKey();
             self.textures.put(id.toInt(), .{
                 .backend_texture = tex,
                 .width = @floatFromInt(tex.width),
@@ -409,7 +451,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
 
         pub fn loadTextureFromMemory(self: *Self, file_type: [:0]const u8, data: []const u8) !TextureId {
             const tex = try B.loadTextureFromMemory(file_type, data);
-            const id = TextureId.from(tex.id);
+            const id = self.mintTextureKey();
             self.textures.put(id.toInt(), .{
                 .backend_texture = tex,
                 .width = @floatFromInt(tex.width),
@@ -440,7 +482,18 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         /// overwrites — the catalog already prevents double-uploads
         /// via refcount, so a re-register is only possible after an
         /// `unloadTexture` and re-acquire, which is fine.
+        ///
+        /// `handle` must be below `TEXTURE_KEY_BASE` — that is the
+        /// caller-owned half of the keyspace. Every handle the catalog
+        /// actually mints is a small slot index (optionally offset by
+        /// `1 << 24`, labelle-assembler#664), leaving over two billion
+        /// handles of headroom — so this is not a real constraint on the
+        /// catalog, and the assert is here instead to
+        /// catch a caller that starts deriving handles from something
+        /// unbounded — a backend texture id, say — which is the shape of
+        /// the bug this split fixed (engine#813). Debug/ReleaseSafe only.
         pub fn registerCatalogTexture(self: *Self, handle: u32, backend_tex: BackendImpl.Texture) void {
+            std.debug.assert(handle < TEXTURE_KEY_BASE);
             self.textures.put(handle, .{
                 .backend_texture = backend_tex,
                 .width = @floatFromInt(backend_tex.width),
@@ -471,7 +524,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         pub fn createDynamicTexture(self: *Self, width: u32, height: u32) !TextureId {
             if (comptime @hasDecl(BackendImpl, "createDynamicTexture")) {
                 const tex = try BackendImpl.createDynamicTexture(width, height);
-                const id = TextureId.from(tex.id);
+                const id = self.mintTextureKey();
                 self.textures.put(id.toInt(), .{
                     .backend_texture = tex,
                     .width = @floatFromInt(tex.width),

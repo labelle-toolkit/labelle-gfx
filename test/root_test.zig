@@ -190,7 +190,12 @@ test "RetainedEngine: drawMesh resolves TextureId and reaches the backend with t
 
     const mesh_calls = MockBackend.getMeshCalls();
     try testing.expectEqual(@as(usize, 1), mesh_calls.len);
-    try testing.expectEqual(tex_id.toInt(), mesh_calls[0].texture_id);
+    // The backend is handed the resolved BACKEND texture, not the engine
+    // key — two different numbers now that gfx mints its own keys
+    // (engine#813). Asserting `tex_id.toInt()` here would only be
+    // re-testing that the two happen to be equal, which is the very
+    // conflation that caused the collision.
+    try testing.expectEqual(engine.getTextureInfo(tex_id).?.backend_texture.id, mesh_calls[0].texture_id);
     try testing.expectEqual(@as(usize, 4), mesh_calls[0].vertex_count);
     try testing.expectEqual(@as(usize, 6), mesh_calls[0].index_count);
     try testing.expectEqual(MockBackend.BlendMode.additive, mesh_calls[0].blend);
@@ -231,7 +236,9 @@ test "GfxRenderer: drawMesh forwards through the wrapper to the backend (gfx#291
     // `GfxRenderer.drawMesh` were missing/a no-op this stays 0 — the bug.
     const mesh_calls = MockBackend.getMeshCalls();
     try testing.expectEqual(@as(usize, 1), mesh_calls.len);
-    try testing.expectEqual(tex_id.toInt(), mesh_calls[0].texture_id);
+    // Same as above: the wrapper resolves the engine key to a backend
+    // texture before submitting, so compare against the backend id.
+    try testing.expectEqual(renderer.getTextureInfo(tex_id).?.backend_texture.id, mesh_calls[0].texture_id);
     try testing.expectEqual(@as(usize, 4), mesh_calls[0].vertex_count);
     try testing.expectEqual(@as(usize, 6), mesh_calls[0].index_count);
     try testing.expectEqual(MockBackend.BlendMode.additive, mesh_calls[0].blend);
@@ -2060,9 +2067,11 @@ test "culling: loadTexture reindexes sprites sized from texture dimensions" {
     var engine = CullEngine.init(testing.allocator, .{});
     defer engine.deinit();
 
-    // MockBackend.loadTexture hands out ids from an incrementing
-    // counter starting at 1 — the first load returns id 1.
-    const tex_id = gfx.TextureId.from(1);
+    // Keys are minted by the engine, not taken from the backend id
+    // (engine#813), so the first load on a fresh engine returns
+    // exactly `TEXTURE_KEY_BASE` — which is what lets this test
+    // reference the texture *before* it is loaded.
+    const tex_id = gfx.TextureId.from(CullEngine.TEXTURE_KEY_BASE);
     engine.createSprite(
         EntityId.from(1),
         .{ .sprite_name = "s", .texture = tex_id, .layer = .world },
@@ -2081,6 +2090,88 @@ test "culling: loadTexture reindexes sprites sized from texture dimensions" {
     MockBackend.resetMock();
     engine.render();
     try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
+// ── Texture keyspace ownership (engine#813) ──────────────────────────────
+//
+// `textures` has two writers: the load paths and `registerCatalogTexture`.
+// They used to draw from different allocators into one map — the load paths
+// keyed by the BACKEND texture id, the catalog by its own slot index — so
+// equal values overwrote each other and the loser sampled the other's
+// pixels. gfx now mints the load half itself, above `TEXTURE_KEY_BASE`.
+
+test "textures: a catalog handle and a minted key never collide (engine#813)" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // The catalog registers small slot handles; MockBackend hands out
+    // backend ids from 1 upward. This is the exact collision from the
+    // bug report — handle 1 against the first standalone upload.
+    const catalog_handle: u32 = 1;
+    engine.registerCatalogTexture(catalog_handle, .{ .id = catalog_handle, .width = 600, .height = 600 });
+
+    const loaded = try engine.loadTexture("standalone.png");
+
+    // Two live entries under two distinct keys — pre-fix the load
+    // overwrote the catalog's entry and this map held one.
+    try testing.expect(loaded.toInt() != catalog_handle);
+    try testing.expectEqual(@as(u32, 2), engine.textures.count());
+
+    // Each key still resolves to its OWN texture. The dimensions are the
+    // discriminator: pre-fix the catalog handle resolved to the 256x256
+    // standalone upload instead of its own 600x600 atlas.
+    const catalog_info = engine.getTextureInfo(gfx.TextureId.from(catalog_handle)).?;
+    try testing.expectEqual(@as(f32, 600), catalog_info.width);
+    try testing.expectEqual(@as(f32, 600), catalog_info.height);
+
+    const loaded_info = engine.getTextureInfo(loaded).?;
+    try testing.expectEqual(@as(f32, 256), loaded_info.width);
+}
+
+test "textures: minted keys are engine-owned, monotonic, and never invalid" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // All three load paths mint from the same counter.
+    const a = try engine.loadTexture("a.png");
+    const b = try engine.loadTextureFromMemory("png", &[_]u8{});
+    const c = try engine.createDynamicTexture(8, 8);
+
+    for ([_]gfx.TextureId{ a, b, c }) |id| {
+        try testing.expect(id != .invalid);
+        try testing.expect(id.toInt() >= Engine.TEXTURE_KEY_BASE);
+    }
+    try testing.expectEqual(Engine.TEXTURE_KEY_BASE, a.toInt());
+    try testing.expectEqual(Engine.TEXTURE_KEY_BASE + 1, b.toInt());
+    try testing.expectEqual(Engine.TEXTURE_KEY_BASE + 2, c.toInt());
+}
+
+test "textures: unloading a minted texture leaves the catalog half untouched" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const loaded = try engine.loadTexture("x.png");
+    engine.registerCatalogTexture(1, .{ .id = 1, .width = 600, .height = 600 });
+
+    engine.unloadTexture(loaded);
+
+    try testing.expect(engine.getTextureInfo(loaded) == null);
+    try testing.expect(engine.getTextureInfo(gfx.TextureId.from(1)) != null);
 }
 
 test "culling: non-centred sprite pivot is not prematurely culled" {
