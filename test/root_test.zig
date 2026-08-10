@@ -2156,6 +2156,29 @@ test "textures: minted keys are engine-owned, monotonic, and never invalid" {
     try testing.expectEqual(Engine.TEXTURE_KEY_BASE + 2, c.toInt());
 }
 
+test "textures: a failed registration fails the load, not returns a dangling id" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    // Fail the first allocation the engine asks for, which is the
+    // `textures` insert.
+    var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+    var engine = Engine.init(failing.allocator(), .{});
+    defer engine.deinit();
+
+    // The backend upload succeeds and recording it does not. Returning the
+    // minted id anyway would hand back an id that resolves to nothing —
+    // and `drawSpriteEntry` would then fabricate a backend texture from
+    // it (`B.Texture{ .id = <the minted key> }`), a number no backend ever
+    // issued, while `unloadTexture` could never free the real upload.
+    try testing.expectError(error.OutOfMemory, engine.loadTexture("oom.png"));
+
+    // No phantom entry, and no id handed out that maps to nothing.
+    try testing.expectEqual(@as(u32, 0), engine.textures.count());
+}
+
 test "textures: unloading a minted texture leaves the catalog half untouched" {
     const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
 
