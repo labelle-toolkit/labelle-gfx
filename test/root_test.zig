@@ -3623,6 +3623,57 @@ test "textures: a failed registration fails the load, not returns a dangling id"
     try testing.expectEqual(@as(u32, 0), engine.textures.count());
 }
 
+test "draw: an unregistered minted key draws nothing rather than garbage (gfx#324)" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // A key in the minted half that resolves to nothing — what a sprite
+    // holds after its texture is unloaded. The draw path used to
+    // fabricate `B.Texture{ .id = 0x80000000 }` from it, a number no
+    // backend ever issued.
+    engine.createSprite(
+        EntityId.from(1),
+        .{ .sprite_name = "gone", .texture = gfx.TextureId.from(Engine.TEXTURE_KEY_BASE), .layer = .world },
+        .{ .x = 100, .y = 100 },
+    );
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 0), MockBackend.getDrawCallCount());
+}
+
+test "draw: the degraded fallback still covers the sub-base cases it exists for" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Both legitimate reasons to reach an unregistered id live BELOW
+    // the base and must keep drawing: a catalog handle referenced
+    // before the catalog finished uploading it (gfx#248), and a
+    // texture-less sprite (`texture` left at `.invalid`).
+    engine.createSprite(
+        EntityId.from(1),
+        .{ .sprite_name = "pending", .texture = gfx.TextureId.from(7), .layer = .world },
+        .{ .x = 100, .y = 100 },
+    );
+    engine.createSprite(
+        EntityId.from(2),
+        .{ .sprite_name = "untextured", .layer = .world },
+        .{ .x = 200, .y = 200 },
+    );
+    engine.render();
+
+    try testing.expectEqual(@as(usize, 2), MockBackend.getDrawCallCount());
+}
+
 test "textures: unloading a minted texture leaves the catalog half untouched" {
     const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
 

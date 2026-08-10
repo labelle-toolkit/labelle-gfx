@@ -62,6 +62,25 @@ pub fn DrawHelpers(comptime Self: type) type {
                 src_h = display_h;
             }
 
+            // Unregistered id: fabricate a backend texture from the id
+            // itself. This is a DEGRADED path, not a second way to
+            // reference a texture — the fabricated value carries no
+            // backend-side fields (raylib's `mipmaps`/`format`, sokol's
+            // view/sampler), so it renders white or garbage. It exists
+            // because two legitimate cases reach it:
+            //
+            //   - a texture-less sprite (`texture` left at `.invalid`),
+            //   - a catalog handle referenced before the catalog has
+            //     finished uploading it (labelle-gfx#248) — the window
+            //     `registerCatalogTexture`'s reindex closes.
+            //
+            // Both live BELOW `TEXTURE_KEY_BASE`. An unregistered id at
+            // or above the base cannot be either: keys up there are
+            // minted by this engine and are only absent once the
+            // texture has been unloaded, so fabricating from one can
+            // only ever produce garbage. Draw nothing instead
+            // (labelle-gfx#324).
+            if (tex_info == null and tex_id >= Self.TEXTURE_KEY_BASE) return;
             const backend_tex: B.Texture = if (tex_info) |t| t.backend_texture else .{
                 .id = tex_id,
                 .width = @intFromFloat(display_w),
