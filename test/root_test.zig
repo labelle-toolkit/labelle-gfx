@@ -232,7 +232,7 @@ test "RetainedEngine: drawMesh resolves TextureId and reaches the backend with t
     try testing.expectEqual(MockBackend.BlendMode.additive, mesh_calls[0].blend);
 
     // An unknown TextureId is a no-op — no extra mesh submission.
-    engine.drawMesh(gfx.TextureId.from(9999), &positions, &uvs, &colors, &indices, .normal);
+    engine.drawMesh(@as(gfx.TextureId, @enumFromInt(9999)), &positions, &uvs, &colors, &indices, .normal);
     try testing.expectEqual(@as(usize, 1), MockBackend.getMeshCallCount());
 }
 
@@ -3472,7 +3472,7 @@ test "culling: registering a catalog texture reindexes its sprites" {
     defer engine.deinit();
 
     const handle: u32 = 4242;
-    const tex_id = gfx.TextureId.from(handle);
+    const tex_id = @as(gfx.TextureId, @enumFromInt(handle));
 
     // Sprite at (500,500) with no source_rect: its cull box derives
     // from the texture dimensions. The texture is not registered yet,
@@ -3515,7 +3515,7 @@ test "culling: loadTexture reindexes sprites sized from texture dimensions" {
     // (engine#813), so the first load on a fresh engine returns
     // exactly `TEXTURE_KEY_BASE` — which is what lets this test
     // reference the texture *before* it is loaded.
-    const tex_id = gfx.TextureId.from(CullEngine.TEXTURE_KEY_BASE);
+    const tex_id = @as(gfx.TextureId, @enumFromInt(CullEngine.TEXTURE_KEY_BASE));
     engine.createSprite(
         EntityId.from(1),
         .{ .sprite_name = "s", .texture = tex_id, .layer = .world },
@@ -3569,12 +3569,57 @@ test "textures: a catalog handle and a minted key never collide (engine#813)" {
     // Each key still resolves to its OWN texture. The dimensions are the
     // discriminator: pre-fix the catalog handle resolved to the 256x256
     // standalone upload instead of its own 600x600 atlas.
-    const catalog_info = engine.getTextureInfo(gfx.TextureId.from(catalog_handle)).?;
+    const catalog_info = engine.getTextureInfo(@as(gfx.TextureId, @enumFromInt(catalog_handle))).?;
     try testing.expectEqual(@as(f32, 600), catalog_info.width);
     try testing.expectEqual(@as(f32, 600), catalog_info.height);
 
     const loaded_info = engine.getTextureInfo(loaded).?;
     try testing.expectEqual(@as(f32, 256), loaded_info.width);
+}
+
+test "nativeTextureId: resolves an engine handle to the backend's own id (#328)" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const handle = try engine.loadTexture("atlas.png");
+
+    // The engine handle is minted (>= 1 << 31); the backend id is the
+    // backend's own small counter. They are deliberately different numbers,
+    // which is the whole reason handing one to a backend accessor broke a
+    // downstream UI kit (#326).
+    const backend_id = engine.nativeTextureId(handle).?;
+    try testing.expect(handle.toInt() >= Engine.TEXTURE_KEY_BASE);
+    try testing.expect(backend_id.toInt() < Engine.TEXTURE_KEY_BASE);
+    try testing.expectEqual(engine.getTextureInfo(handle).?.backend_texture.id, backend_id.toInt());
+
+    // The two id spaces are different TYPES, so a backend accessor cannot be
+    // handed an engine handle by accident.
+    try testing.expect(@TypeOf(handle) != @TypeOf(backend_id));
+
+    // Unregistered resolves to null rather than a fabricated value.
+    try testing.expect(engine.nativeTextureId(@enumFromInt(12345)) == null);
+}
+
+test "nativeTextureId: reachable through GfxRenderer, the wrapper the engine holds" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    // Exercised through the wrapper on purpose: `RetainedEngine` is not what
+    // the engine holds, and a forwarder that exists only on the inner type is
+    // a no-op in practice (the gfx#291 lesson).
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const handle = try renderer.loadTexture("atlas.png");
+    const backend_id = renderer.nativeTextureId(handle).?;
+
+    try testing.expectEqual(renderer.getTextureInfo(handle).?.backend_texture.id, backend_id.toInt());
 }
 
 test "textures: createTextureFromPixels mints a key too (engine#813 gap)" {
@@ -3600,9 +3645,9 @@ test "textures: createTextureFromPixels mints a key too (engine#813 gap)" {
     try testing.expect(font_atlas != catalog_handle);
 
     // Both still resolve to their own texture — dimensions are the tell.
-    const catalog_info = engine.getTextureInfo(gfx.TextureId.from(catalog_handle)).?;
+    const catalog_info = engine.getTextureInfo(@as(gfx.TextureId, @enumFromInt(catalog_handle))).?;
     try testing.expectEqual(@as(f32, 600), catalog_info.width);
-    const font_info = engine.getTextureInfo(gfx.TextureId.from(font_atlas)).?;
+    const font_info = engine.getTextureInfo(@as(gfx.TextureId, @enumFromInt(font_atlas))).?;
     try testing.expectEqual(@as(f32, 2), font_info.width);
 }
 
@@ -3667,7 +3712,7 @@ test "draw: an unregistered minted key draws nothing rather than garbage (gfx#32
     // backend ever issued.
     engine.createSprite(
         EntityId.from(1),
-        .{ .sprite_name = "gone", .texture = gfx.TextureId.from(Engine.TEXTURE_KEY_BASE), .layer = .world },
+        .{ .sprite_name = "gone", .texture = @as(gfx.TextureId, @enumFromInt(Engine.TEXTURE_KEY_BASE)), .layer = .world },
         .{ .x = 100, .y = 100 },
     );
     engine.render();
@@ -3690,7 +3735,7 @@ test "draw: the degraded fallback still covers the sub-base cases it exists for"
     // texture-less sprite (`texture` left at `.invalid`).
     engine.createSprite(
         EntityId.from(1),
-        .{ .sprite_name = "pending", .texture = gfx.TextureId.from(7), .layer = .world },
+        .{ .sprite_name = "pending", .texture = @as(gfx.TextureId, @enumFromInt(7)), .layer = .world },
         .{ .x = 100, .y = 100 },
     );
     engine.createSprite(
@@ -3718,7 +3763,7 @@ test "textures: unloading a minted texture leaves the catalog half untouched" {
     engine.unloadTexture(loaded);
 
     try testing.expect(engine.getTextureInfo(loaded) == null);
-    try testing.expect(engine.getTextureInfo(gfx.TextureId.from(1)) != null);
+    try testing.expect(engine.getTextureInfo(@as(gfx.TextureId, @enumFromInt(1))) != null);
 }
 
 test "culling: non-centred sprite pivot is not prematurely culled" {

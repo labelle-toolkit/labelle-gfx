@@ -74,7 +74,7 @@ pub fn CullBounds(comptime Self: type) type {
             if (v.source_rect) |sr| {
                 display_w = if (sr.display_width > 0) sr.display_width else @abs(sr.width);
                 display_h = if (sr.display_height > 0) sr.display_height else @abs(sr.height);
-            } else if (self.textures.get(v.texture.toInt())) |t| {
+            } else if (self.textures.get(v.texture)) |t| {
                 display_w = t.width;
                 display_h = t.height;
             }

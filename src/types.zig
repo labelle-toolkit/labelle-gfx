@@ -24,19 +24,26 @@ pub const EntityId = enum(u32) {
     }
 };
 
-/// Texture identifier - returned by loadTexture
-pub const TextureId = enum(u32) {
-    invalid = 0,
-    _,
+/// Texture identifier — returned by `loadTexture` and friends, and the key
+/// this engine's texture registry is built on.
+///
+/// Re-exported from labelle-core (RFC-TEXTURE-ID-TYPING, #328) rather than
+/// declared here, so gfx, the backends, the engine and games all reference
+/// ONE nominal type. A texture id previously meant either this or a
+/// backend's own identifier depending on which side of a boundary you stood
+/// on, both spelled `u32` — which is how v1.29.0 silently broke a
+/// downstream UI kit (#326).
+///
+/// Note there is deliberately no `from(u32)` on core's type: minting one out
+/// of an arbitrary integer is the hole the type exists to close. The
+/// registry writes `@enumFromInt` explicitly at the one place it allocates;
+/// everyone else resolves through `getTextureInfo` / `nativeTextureId`.
+pub const TextureId = core.TextureId;
 
-    pub fn from(id: u32) TextureId {
-        return @enumFromInt(id);
-    }
-
-    pub fn toInt(self: TextureId) u32 {
-        return @intFromEnum(self);
-    }
-};
+/// A backend's OWN texture identifier — what that backend's internal tables
+/// are keyed by. Obtainable only by resolving a `TextureId` through
+/// `RetainedEngine.nativeTextureId`. Re-exported from labelle-core (#328).
+pub const BackendTextureId = core.BackendTextureId;
 
 /// Font identifier - returned by loadFont
 pub const FontId = enum(u32) {
