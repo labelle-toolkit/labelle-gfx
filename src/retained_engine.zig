@@ -612,10 +612,16 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         /// Null when the id is not registered.
         pub fn nativeTextureId(self: *const Self, id: TextureId) ?BackendTextureId {
             const info = self.textures.get(id) orelse return null;
-            // SCAFFOLDING (#328 phase 3): backends still declare
-            // `Texture.id: u32`. Once they carry `BackendTextureId`, this
-            // retag goes away and the field is returned directly.
-            return @enumFromInt(info.backend_texture.id);
+            // Backends migrate to `Texture.id: BackendTextureId` ONE AT A TIME
+            // (#328 phase 3), and gfx compiles against whichever backend a game
+            // picks — so this has to accept both spellings for the duration.
+            //
+            // Without the comptime branch the migration deadlocks: a backend
+            // that types its field breaks `@enumFromInt` here, but gfx cannot
+            // drop the cast until every backend has moved. The branch is free
+            // at runtime and deletable once the last backend lands.
+            const raw = info.backend_texture.id;
+            return if (comptime @typeInfo(@TypeOf(raw)) == .@"enum") raw else @enumFromInt(raw);
         }
 
         pub fn getTextureInfo(self: *const Self, id: TextureId) ?TextureInfo {

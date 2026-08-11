@@ -3577,6 +3577,27 @@ test "textures: a catalog handle and a minted key never collide (engine#813)" {
     try testing.expectEqual(@as(f32, 256), loaded_info.width);
 }
 
+test "nativeTextureId: accepts a backend that has already typed Texture.id (#328 P3)" {
+    // Backends adopt `BackendTextureId` one at a time, and gfx compiles
+    // against whichever one a game picks — so both spellings must work for
+    // the duration of the migration. This stands in for a migrated backend.
+    const TypedBackend = struct {
+        pub const Texture = struct {
+            id: gfx.BackendTextureId,
+            width: i32,
+            height: i32,
+        };
+    };
+    const info: struct { backend_texture: TypedBackend.Texture } =
+        .{ .backend_texture = .{ .id = @enumFromInt(7), .width = 1, .height = 1 } };
+
+    const raw = info.backend_texture.id;
+    const resolved = if (comptime @typeInfo(@TypeOf(raw)) == .@"enum") raw else @as(gfx.BackendTextureId, @enumFromInt(raw));
+
+    try testing.expectEqual(@as(u32, 7), resolved.toInt());
+    try testing.expect(@TypeOf(resolved) == gfx.BackendTextureId);
+}
+
 test "nativeTextureId: resolves an engine handle to the backend's own id (#328)" {
     const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
 
