@@ -56,6 +56,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         pub const Position = types.Position;
         pub const Pivot = types.Pivot;
         pub const TextureId = types.TextureId;
+        pub const BackendTextureId = types.BackendTextureId;
 
         // World-space layers are camera-transformed and therefore
         // cullable; screen-space layers are pinned and always drawn.
@@ -134,7 +135,12 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         sprites: std.AutoHashMap(u32, SpriteEntry),
         shapes: std.AutoHashMap(u32, ShapeEntry),
         texts: std.AutoHashMap(u32, TextEntry),
-        textures: std.AutoHashMap(u32, TextureInfo),
+        /// Keyed by `TextureId` itself, not by a bare `u32` (#328). The two
+        /// numbering spaces that share this map — gfx-minted keys and
+        /// caller-registered catalog handles — are both `TextureId`s; a
+        /// BACKEND id is a different type and cannot be used as a key by
+        /// accident.
+        textures: std.AutoHashMap(TextureId, TextureInfo),
         /// Next key `mintTextureKey` returns. Monotonic; never 0, so a
         /// minted id is never `TextureId.invalid`.
         next_texture_key: u32,
@@ -194,7 +200,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 .sprites = std.AutoHashMap(u32, SpriteEntry).init(allocator),
                 .shapes = std.AutoHashMap(u32, ShapeEntry).init(allocator),
                 .texts = std.AutoHashMap(u32, TextEntry).init(allocator),
-                .textures = std.AutoHashMap(u32, TextureInfo).init(allocator),
+                .textures = std.AutoHashMap(TextureId, TextureInfo).init(allocator),
                 .next_texture_key = TEXTURE_KEY_BASE,
                 .screen_width = config.screen_width,
                 .screen_height = config.screen_height,
@@ -434,12 +440,12 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         // changes their footprint — without this, a sprite created
         // before its texture loads keeps a stale 64x64 fallback box and
         // is wrongly culled once the real (larger) texture arrives.
-        fn reindexSpritesUsingTexture(self: *Self, tex_id: u32) void {
+        fn reindexSpritesUsingTexture(self: *Self, tex_id: TextureId) void {
             var it = self.sprites.iterator();
             while (it.next()) |entry| {
                 const v = entry.value_ptr.visual;
                 if (v.source_rect != null) continue;
-                if (v.texture.toInt() != tex_id) continue;
+                if (v.texture != tex_id) continue;
                 self.reindexEntity(entry.key_ptr.*);
             }
         }
@@ -482,7 +488,10 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         fn mintTextureKey(self: *Self) TextureId {
             const key = self.next_texture_key;
             self.next_texture_key = if (key == std.math.maxInt(u32)) TEXTURE_KEY_BASE else key + 1;
-            return TextureId.from(key);
+            // The ONE place gfx mints an id. Explicit `@enumFromInt` because
+            // core deliberately ships no `from(u32)` — this cast is meant to
+            // be greppable, and this is the only place it should appear.
+            return @enumFromInt(key);
         }
 
         /// Record a freshly uploaded backend texture under a newly minted
@@ -499,7 +508,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         /// report a load that did not happen.
         fn recordTexture(self: *Self, tex: B.Texture) !TextureId {
             const id = self.mintTextureKey();
-            self.textures.put(id.toInt(), .{
+            self.textures.put(id, .{
                 .backend_texture = tex,
                 .width = @floatFromInt(tex.width),
                 .height = @floatFromInt(tex.height),
@@ -516,19 +525,19 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // Sprites already referencing this id sized their cull box
             // from a fallback dimension — refresh them now the real
             // texture dimensions are known.
-            self.reindexSpritesUsingTexture(id.toInt());
+            self.reindexSpritesUsingTexture(id);
             return id;
         }
 
         pub fn loadTextureFromMemory(self: *Self, file_type: [:0]const u8, data: []const u8) !TextureId {
             const tex = try B.loadTextureFromMemory(file_type, data);
             const id = try self.recordTexture(tex);
-            self.reindexSpritesUsingTexture(id.toInt());
+            self.reindexSpritesUsingTexture(id);
             return id;
         }
 
         pub fn unloadTexture(self: *Self, id: TextureId) void {
-            if (self.textures.fetchRemove(id.toInt())) |kv| {
+            if (self.textures.fetchRemove(id)) |kv| {
                 B.unloadTexture(kv.value.backend_texture);
             }
         }
@@ -560,7 +569,12 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         /// the bug this split fixed (engine#813). Debug/ReleaseSafe only.
         pub fn registerCatalogTexture(self: *Self, handle: u32, backend_tex: BackendImpl.Texture) void {
             std.debug.assert(handle < TEXTURE_KEY_BASE);
-            self.textures.put(handle, .{
+            // The assembler-emitted `ImageBackendAdapter` passes a bare `u32`
+            // slot handle across this seam, so the retag is explicit here.
+            // It is a caller-OWNED key in the sub-base half, never a backend
+            // id — the assert above is what enforces that.
+            const id: TextureId = @enumFromInt(handle);
+            self.textures.put(id, .{
                 .backend_texture = backend_tex,
                 .width = @floatFromInt(backend_tex.width),
                 .height = @floatFromInt(backend_tex.height),
@@ -580,11 +594,32 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // A sprite may be created (referencing this handle) before
             // the catalog finishes uploading its texture; reindex so the
             // cull box reflects the now-known dimensions.
-            self.reindexSpritesUsingTexture(handle);
+            self.reindexSpritesUsingTexture(id);
+        }
+
+        /// Resolve an engine-facing `TextureId` to the BACKEND's own texture
+        /// id — the value a backend-native accessor is keyed by
+        /// (labelle-bgfx's `nativeTextureHandle`, and anything else reaching
+        /// past the renderer into backend state).
+        ///
+        /// This is the ONE legal conversion between the two id spaces, and it
+        /// lives here because the registry is the only thing that knows the
+        /// mapping. Before it existed, callers passed a `TextureId` straight
+        /// to a backend accessor and it compiled — the two were both `u32` —
+        /// which silently broke a downstream UI kit when gfx started minting
+        /// its own keys (#326).
+        ///
+        /// Null when the id is not registered.
+        pub fn nativeTextureId(self: *const Self, id: TextureId) ?BackendTextureId {
+            const info = self.textures.get(id) orelse return null;
+            // SCAFFOLDING (#328 phase 3): backends still declare
+            // `Texture.id: u32`. Once they carry `BackendTextureId`, this
+            // retag goes away and the field is returned directly.
+            return @enumFromInt(info.backend_texture.id);
         }
 
         pub fn getTextureInfo(self: *const Self, id: TextureId) ?TextureInfo {
-            return self.textures.get(id.toInt());
+            return self.textures.get(id);
         }
 
         // -- Dynamic textures (runtime-updated pixels) --
@@ -613,7 +648,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         /// backend lacks support or the id is unknown.
         pub fn updateTexture(self: *Self, id: TextureId, pixels: []const u8) void {
             if (comptime @hasDecl(BackendImpl, "updateTexture")) {
-                const info = self.textures.get(id.toInt()) orelse return;
+                const info = self.textures.get(id) orelse return;
                 BackendImpl.updateTexture(info.backend_texture, pixels);
             }
         }
@@ -654,7 +689,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             blend: backend_mod.BlendMode,
         ) void {
             if (comptime @hasDecl(BackendImpl, "drawMesh")) {
-                const info = self.textures.get(texture_id.toInt()) orelse return;
+                const info = self.textures.get(texture_id) orelse return;
                 B.drawMesh(info.backend_texture, positions, uvs, colors, indices, blend);
             }
         }
@@ -698,7 +733,11 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             b: u8,
             a: u8,
         ) void {
-            const info = self.textures.get(texture_id) orelse return;
+            // Engine-facing seam: `game.drawScreenTexture` passes the bare
+            // `u32` it got back from `loadTextureFromMemory`. Typing these
+            // seams is phase 4 of #328; the retag is explicit until then.
+            const id: TextureId = @enumFromInt(texture_id);
+            const info = self.textures.get(id) orelse return;
             B.drawTexturePro(
                 info.backend_texture,
                 .{ .x = src_x, .y = src_y, .width = src_w, .height = src_h },

@@ -30,7 +30,7 @@ pub fn DrawHelpers(comptime Self: type) type {
         pub fn drawSpriteEntry(self: *const Self, entry: *const SpriteEntry) void {
             const sprite = &entry.visual;
             const pos = entry.position;
-            const tex_id = sprite.texture.toInt();
+            const tex_id = sprite.texture;
 
             // Resolve source rect and display dimensions
             const tex_info = self.textures.get(tex_id);
@@ -80,9 +80,9 @@ pub fn DrawHelpers(comptime Self: type) type {
             // texture has been unloaded, so fabricating from one can
             // only ever produce garbage. Draw nothing instead
             // (labelle-gfx#324).
-            if (tex_info == null and tex_id >= Self.TEXTURE_KEY_BASE) return;
+            if (tex_info == null and tex_id.toInt() >= Self.TEXTURE_KEY_BASE) return;
             const backend_tex: B.Texture = if (tex_info) |t| t.backend_texture else .{
-                .id = tex_id,
+                .id = tex_id.toInt(),
                 .width = @intFromFloat(display_w),
                 .height = @intFromFloat(display_h),
             };

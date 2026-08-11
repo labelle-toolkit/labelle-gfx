@@ -66,6 +66,7 @@ pub const GizmoVisibility = components_mod.GizmoVisibility;
 // Types
 pub const EntityId = types_mod.EntityId;
 pub const TextureId = types_mod.TextureId;
+pub const BackendTextureId = types_mod.BackendTextureId;
 pub const FontId = types_mod.FontId;
 pub const Color = types_mod.Color;
 pub const Pivot = types_mod.Pivot;

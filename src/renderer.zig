@@ -216,7 +216,11 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             indices: []const u16,
             blend: backend_mod.BlendMode,
         ) void {
-            self.inner.drawMesh(types_mod.TextureId.from(texture_id), positions, uvs, colors, indices, blend);
+            // Boundary cast: `game.drawMesh` hands us a bare `u32` — the value
+            // `loadTextureFromMemory` returned. Typing that seam is phase 4 of
+            // #328; until then the retag is explicit here.
+            const id: types_mod.TextureId = @enumFromInt(texture_id);
+            self.inner.drawMesh(id, positions, uvs, colors, indices, blend);
         }
 
         // -- Offscreen render targets (transport mirror + headless capture,
@@ -332,6 +336,15 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
         /// Atlas loaders need this to derive a `texture_scale` against
         /// the JSON's `meta.size` when the user ships a downscaled PNG
         /// without re-running TexturePacker.
+        /// Forward `RetainedEngine.nativeTextureId` — the one legal way to
+        /// turn an engine texture handle into the backend's own id. Game code
+        /// that needs a backend-native handle goes through here rather than
+        /// handing a `TextureId` to a backend accessor, which is how #326
+        /// silently blanked a menu.
+        pub fn nativeTextureId(self: *const Self, id: types_mod.TextureId) ?types_mod.BackendTextureId {
+            return self.inner.nativeTextureId(id);
+        }
+
         pub fn getTextureInfo(self: *const Self, id: types_mod.TextureId) ?@TypeOf(self.inner).TextureInfo {
             return self.inner.getTextureInfo(id);
         }
