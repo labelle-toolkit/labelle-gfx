@@ -81,8 +81,20 @@ pub fn DrawHelpers(comptime Self: type) type {
             // only ever produce garbage. Draw nothing instead
             // (labelle-gfx#324).
             if (tex_info == null and tex_id.toInt() >= Self.TEXTURE_KEY_BASE) return;
+            // The fabricated id has to match whatever spelling the ACTIVE
+            // backend uses for `Texture.id`: backends adopt `BackendTextureId`
+            // one at a time (#328 phase 3), and gfx compiles against whichever
+            // one a game picks. Without the comptime branch, gfx and a migrated
+            // backend do not compile together at all — and neither repo's CI
+            // sees it, because gfx tests against the mock backend and a backend
+            // tests against a released gfx.
+            const IdType = @FieldType(B.Texture, "id");
+            const fabricated_id = if (comptime @typeInfo(IdType) == .@"enum")
+                @as(IdType, @enumFromInt(tex_id.toInt()))
+            else
+                tex_id.toInt();
             const backend_tex: B.Texture = if (tex_info) |t| t.backend_texture else .{
-                .id = tex_id.toInt(),
+                .id = fabricated_id,
                 .width = @intFromFloat(display_w),
                 .height = @intFromFloat(display_h),
             };
