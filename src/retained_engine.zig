@@ -744,17 +744,16 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 .width = width,
                 .height = height,
             });
-            // Destroy the just-uploaded GPU texture if we can't register it —
-            // otherwise an OOM on the map insert leaks it (it can never be
-            // found for `unloadTexture` / `deinit`) and we'd return a handle
-            // that silently resolves to nothing on every draw.
-            errdefer BackendImpl.unloadTexture(tex);
-            const id = TextureId.from(tex.id);
-            try self.textures.put(id.toInt(), .{
-                .backend_texture = tex,
-                .width = @floatFromInt(width),
-                .height = @floatFromInt(height),
-            });
+            // Mint a gfx-owned key like every other load path — this one was
+            // missed when the registry stopped keying by the backend texture
+            // id (labelle-toolkit/labelle-engine#813), so a font atlas
+            // uploaded here could still collide with an asset-catalog handle
+            // and one of the two would sample the other's pixels.
+            //
+            // `recordTexture` also owns the failure path: it destroys the
+            // just-uploaded GPU texture if the registry insert fails, rather
+            // than leaking it and returning a handle that resolves to nothing.
+            const id = try self.recordTexture(tex);
             return id.toInt();
         }
 

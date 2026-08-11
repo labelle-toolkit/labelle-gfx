@@ -3577,6 +3577,35 @@ test "textures: a catalog handle and a minted key never collide (engine#813)" {
     try testing.expectEqual(@as(f32, 256), loaded_info.width);
 }
 
+test "textures: createTextureFromPixels mints a key too (engine#813 gap)" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // The engine's `bakeUiFont` uploads its expanded font atlas through this
+    // path. It was missed when the registry stopped keying by the backend
+    // texture id, so a font atlas could still land on a catalog handle and
+    // one of the two would sample the other's pixels.
+    const catalog_handle: u32 = 1;
+    engine.registerCatalogTexture(catalog_handle, .{ .id = catalog_handle, .width = 600, .height = 600 });
+
+    var pixels = [_]u8{0} ** (2 * 2 * 4);
+    const font_atlas = try engine.createTextureFromPixels(2, 2, &pixels);
+
+    try testing.expect(font_atlas >= Engine.TEXTURE_KEY_BASE);
+    try testing.expect(font_atlas != catalog_handle);
+
+    // Both still resolve to their own texture — dimensions are the tell.
+    const catalog_info = engine.getTextureInfo(gfx.TextureId.from(catalog_handle)).?;
+    try testing.expectEqual(@as(f32, 600), catalog_info.width);
+    const font_info = engine.getTextureInfo(gfx.TextureId.from(font_atlas)).?;
+    try testing.expectEqual(@as(f32, 2), font_info.width);
+}
+
 test "textures: minted keys are engine-owned, monotonic, and never invalid" {
     const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
 
