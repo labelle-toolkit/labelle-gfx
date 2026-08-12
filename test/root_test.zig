@@ -1392,6 +1392,222 @@ test "RetainedEngine: source_rect display_width/height override frame size" {
     try testing.expectEqual(80.0, calls[0].dest.height);
 }
 
+// ── Trim offsets (pivot on the authored canvas) ─────────────
+//
+// A packer that trims a frame crops its transparent margin, so the
+// stored sub-rect is smaller than the canvas the art was drawn on. The
+// renderer used to pivot on that cropped rect, re-centring every frame
+// on its own silhouette — and since each frame trims differently, the
+// subject shifted from frame to frame. `SourceRect.trim_offset_*` +
+// `canvas_*` restore the authored geometry.
+
+/// `MockBackend` with the draw ORIGIN recorded — the core recorder keeps
+/// only texture/dest/tint, which is precisely why nothing caught the
+/// pivot bug. Everything but `drawTexturePro` forwards, so this stays a
+/// spy on the real backend rather than a second implementation of it.
+const OriginSpyBackend = struct {
+    pub const Texture = MockBackend.Texture;
+    pub const Color = MockBackend.Color;
+    pub const Rectangle = MockBackend.Rectangle;
+    pub const Vector2 = MockBackend.Vector2;
+    pub const Camera2D = MockBackend.Camera2D;
+
+    pub const white = MockBackend.white;
+    pub const black = MockBackend.black;
+    pub const red = MockBackend.red;
+    pub const green = MockBackend.green;
+    pub const blue = MockBackend.blue;
+    pub const transparent = MockBackend.transparent;
+
+    pub var last_origin: Vector2 = .{ .x = 0, .y = 0 };
+    pub var last_src: Rectangle = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+
+    pub fn drawTexturePro(t: Texture, src: Rectangle, dest: Rectangle, origin: Vector2, rot: f32, tint: Color) void {
+        last_origin = origin;
+        last_src = src;
+        MockBackend.drawTexturePro(t, src, dest, origin, rot, tint);
+    }
+
+    pub fn drawRectangleRec(r: Rectangle, c: Color) void {
+        MockBackend.drawRectangleRec(r, c);
+    }
+    pub fn drawCircle(x: f32, y: f32, radius: f32, c: Color) void {
+        MockBackend.drawCircle(x, y, radius, c);
+    }
+    pub fn drawTriangle(a: Vector2, b: Vector2, c: Vector2, col: Color) void {
+        MockBackend.drawTriangle(a, b, c, col);
+    }
+    pub fn drawPolygon(pts: []const Vector2, c: Color) void {
+        MockBackend.drawPolygon(pts, c);
+    }
+    pub fn drawLine(x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, c: Color) void {
+        MockBackend.drawLine(x1, y1, x2, y2, thickness, c);
+    }
+    pub fn drawText(txt: [:0]const u8, x: f32, y: f32, size: f32, c: Color) void {
+        MockBackend.drawText(txt, x, y, size, c);
+    }
+    pub fn loadTexture(path: [:0]const u8) !Texture {
+        return MockBackend.loadTexture(path);
+    }
+    pub fn decodeImage(path: [:0]const u8, bytes: []const u8, allocator: std.mem.Allocator) !core.DecodedImage {
+        return MockBackend.decodeImage(path, bytes, allocator);
+    }
+    pub fn uploadTexture(img: core.DecodedImage) !Texture {
+        return MockBackend.uploadTexture(img);
+    }
+    pub fn unloadTexture(t: Texture) void {
+        MockBackend.unloadTexture(t);
+    }
+    pub fn beginMode2D(cam: Camera2D) void {
+        MockBackend.beginMode2D(cam);
+    }
+    pub fn endMode2D() void {
+        MockBackend.endMode2D();
+    }
+    pub fn getScreenWidth() i32 {
+        return MockBackend.getScreenWidth();
+    }
+    pub fn getScreenHeight() i32 {
+        return MockBackend.getScreenHeight();
+    }
+    pub fn screenToWorld(pos: Vector2, cam: Camera2D) Vector2 {
+        return MockBackend.screenToWorld(pos, cam);
+    }
+    pub fn worldToScreen(pos: Vector2, cam: Camera2D) Vector2 {
+        return MockBackend.worldToScreen(pos, cam);
+    }
+    pub fn setDesignSize(w: i32, h: i32) void {
+        MockBackend.setDesignSize(w, h);
+    }
+};
+
+/// A worker-shaped trimmed frame: authored on a 60x69 canvas, the packer
+/// kept a 40x60 window starting 12px in from the left and 9px down.
+const trimmed_frame: gfx.SourceRect = .{
+    .x = 0,
+    .y = 0,
+    .width = 40,
+    .height = 60,
+    .canvas_width = 60,
+    .canvas_height = 69,
+    .trim_offset_x = 12,
+    .trim_offset_y = 9,
+};
+
+test "trim offsets: an untrimmed frame keeps the plain dest*pivot origin" {
+    // The regression guard — every caller that leaves the trim fields at
+    // their defaults must get byte-identical geometry to before the fix.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Engine = RetainedEngineWith(OriginSpyBackend, DefaultLayers);
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{
+        .sprite_name = "a",
+        .pivot = .bottom_center,
+        .source_rect = .{ .x = 0, .y = 0, .width = 40, .height = 60 },
+    }, .{ .x = 100, .y = 100 });
+    engine.render();
+
+    try testing.expectEqual(@as(f32, 20), OriginSpyBackend.last_origin.x);
+    try testing.expectEqual(@as(f32, 60), OriginSpyBackend.last_origin.y);
+}
+
+test "trim offsets: a trimmed frame pivots on the canvas, not the silhouette" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Engine = RetainedEngineWith(OriginSpyBackend, DefaultLayers);
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{
+        .sprite_name = "a",
+        .pivot = .bottom_center,
+        .source_rect = trimmed_frame,
+    }, .{ .x = 100, .y = 100 });
+    engine.render();
+
+    // bottom_center of the 60x69 canvas is (30, 69); the quad's top-left
+    // sits at (12, 9) in that canvas, so the origin measured from the
+    // quad is (18, 60) — NOT the (20, 60) that pivoting on the 40x60
+    // silhouette gives, which is the 2px displacement this fixes.
+    try testing.expectEqual(@as(f32, 18), OriginSpyBackend.last_origin.x);
+    try testing.expectEqual(@as(f32, 60), OriginSpyBackend.last_origin.y);
+}
+
+test "trim offsets: a horizontal flip mirrors the trim offset" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Engine = RetainedEngineWith(OriginSpyBackend, DefaultLayers);
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{
+        .sprite_name = "a",
+        .pivot = .bottom_center,
+        .flip_x = true,
+        .source_rect = trimmed_frame,
+    }, .{ .x = 100, .y = 100 });
+    engine.render();
+
+    // The flip mirrors the sub-image inside a quad that does not move, so
+    // the quad itself has to move to where the mirrored canvas puts it:
+    // the 12px left margin becomes 60-12-40 = 8px, so the origin is
+    // 30-8 = 22. Leaving it at 18 would double the error for a worker
+    // walking left.
+    try testing.expectEqual(@as(f32, 22), OriginSpyBackend.last_origin.x);
+    try testing.expectEqual(@as(f32, 60), OriginSpyBackend.last_origin.y);
+    // The source width still comes back negated — the flip itself is
+    // unchanged by the pivot correction.
+    try testing.expectEqual(@as(f32, -40), OriginSpyBackend.last_src.width);
+}
+
+test "trim offsets: scale is applied last and stays signed" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Engine = RetainedEngineWith(OriginSpyBackend, DefaultLayers);
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{
+        .sprite_name = "a",
+        .pivot = .bottom_center,
+        .scale_x = 2,
+        .scale_y = 2,
+        .source_rect = trimmed_frame,
+    }, .{ .x = 100, .y = 100 });
+    engine.render();
+
+    try testing.expectEqual(@as(f32, 36), OriginSpyBackend.last_origin.x);
+    try testing.expectEqual(@as(f32, 120), OriginSpyBackend.last_origin.y);
+}
+
+test "trim offsets: a populated offset with no canvas falls back to the display size" {
+    // Defensive: a loader that fills the offset but not the canvas must
+    // not pivot against a zero-width canvas.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Engine = RetainedEngineWith(OriginSpyBackend, DefaultLayers);
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{
+        .sprite_name = "a",
+        .pivot = .bottom_center,
+        .source_rect = .{ .x = 0, .y = 0, .width = 40, .height = 60, .trim_offset_x = 12 },
+    }, .{ .x = 100, .y = 100 });
+    engine.render();
+
+    try testing.expectEqual(@as(f32, 8), OriginSpyBackend.last_origin.x);
+    try testing.expectEqual(@as(f32, 60), OriginSpyBackend.last_origin.y);
+}
+
 test "RetainedEngine: invisible sprites not rendered" {
     MockBackend.initMock(testing.allocator);
     defer MockBackend.deinitMock();
