@@ -12,6 +12,10 @@ const std = @import("std");
 /// table's index + tag name. Re-exported from labelle-core via `types.zig`.
 const MaterialEffect = @import("../types.zig").MaterialEffect;
 
+/// Atlas sub-rect + trim metadata. `pivotOrigin` owns the pivot geometry
+/// this module shares with the cull-bounds helpers.
+const SourceRect = @import("../types.zig").SourceRect;
+
 /// Returns the draw helpers for a concrete `RetainedEngine` type.
 ///
 /// `Self` must expose `BackendType` (the resolved `Backend(...)`),
@@ -102,8 +106,22 @@ pub fn DrawHelpers(comptime Self: type) type {
             const pivot_norm = sprite.pivot.getNormalized(sprite.pivot_x, sprite.pivot_y);
             const dest_w = display_w * sprite.scale_x;
             const dest_h = display_h * sprite.scale_y;
-            const origin_x = dest_w * pivot_norm.x;
-            const origin_y = dest_h * pivot_norm.y;
+            // Pivot on the authored canvas, not on the trimmed silhouette
+            // (see `SourceRect.pivotOrigin`). A sprite with no source rect
+            // is drawn whole, so the zero-default rect is the right stand-in.
+            const trim: SourceRect = sprite.source_rect orelse .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+            const origin_xy = trim.pivotOrigin(
+                display_w,
+                display_h,
+                sprite.scale_x,
+                sprite.scale_y,
+                pivot_norm.x,
+                pivot_norm.y,
+                sprite.flip_x,
+                sprite.flip_y,
+            );
+            const origin_x = origin_xy.x;
+            const origin_y = origin_xy.y;
 
             var final_src_w = src_w;
             var final_src_h = src_h;

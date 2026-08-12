@@ -131,6 +131,18 @@ pub const ScreenPoint = struct {
 /// these from the *un-scaled* per-sprite frame dimensions so trimmed and
 /// un-trimmed sprites alike keep their on-screen size when the texture
 /// shrinks.
+///
+/// `trim_offset_*` / `canvas_*` describe a **trimmed** frame: the packer
+/// cropped the transparent margin away, so the stored sub-rect is smaller
+/// than the canvas the art was authored on. `canvas_*` is that authored
+/// size (TexturePacker's `sourceSize`) and `trim_offset_*` is where the
+/// kept pixels sit inside it (`spriteSourceSize.x/y`), both in design
+/// units. Without them the renderer can only pivot on the cropped
+/// silhouette, which re-centres every frame on its own outline and
+/// cancels whatever lean or reach the artist encoded by *where* the
+/// subject sits in the canvas — a per-frame positional error, since each
+/// frame trims differently. All default to `0`, which reproduces the
+/// untrimmed geometry exactly.
 pub const SourceRect = struct {
     x: f32,
     y: f32,
@@ -138,6 +150,49 @@ pub const SourceRect = struct {
     height: f32,
     display_width: f32 = 0,
     display_height: f32 = 0,
+    trim_offset_x: f32 = 0,
+    trim_offset_y: f32 = 0,
+    canvas_width: f32 = 0,
+    canvas_height: f32 = 0,
+
+    /// The `drawTexturePro` origin for this frame: the pivot point
+    /// measured from the top-left of the *drawn* (trimmed) quad.
+    ///
+    /// The pivot belongs to the authored canvas, not to the cropped
+    /// sub-image, so it is taken as a fraction of `canvas_*` and then
+    /// rebased onto the quad by subtracting the trim offset. `scale_*`
+    /// is applied last and stays **signed** — the renderer feeds a
+    /// signed `dest_w`/`dest_h` to the backend, so a negative scale must
+    /// move the origin with the mirrored quad.
+    ///
+    /// Both draw and cull-bounds geometry go through here; they must
+    /// agree or sprites get culled while still on screen.
+    pub fn pivotOrigin(
+        self: SourceRect,
+        display_w: f32,
+        display_h: f32,
+        scale_x: f32,
+        scale_y: f32,
+        pivot_norm_x: f32,
+        pivot_norm_y: f32,
+        flip_x: bool,
+        flip_y: bool,
+    ) struct { x: f32, y: f32 } {
+        // Untrimmed (or a caller that doesn't populate the trim fields):
+        // the canvas *is* the quad and the offset is zero, collapsing
+        // this to the plain `dest * pivot`.
+        const canvas_w = if (self.canvas_width > 0) self.canvas_width else display_w;
+        const canvas_h = if (self.canvas_height > 0) self.canvas_height else display_h;
+        // A flip mirrors the sub-image inside an unmoved quad, so the
+        // quad itself has to move to where the mirrored canvas puts it:
+        // the margin that was on the left is now on the right.
+        const off_x = if (flip_x) canvas_w - self.trim_offset_x - display_w else self.trim_offset_x;
+        const off_y = if (flip_y) canvas_h - self.trim_offset_y - display_h else self.trim_offset_y;
+        return .{
+            .x = (canvas_w * pivot_norm_x - off_x) * scale_x,
+            .y = (canvas_h * pivot_norm_y - off_y) * scale_y,
+        };
+    }
 };
 
 /// Sizing mode for sprites relative to a container

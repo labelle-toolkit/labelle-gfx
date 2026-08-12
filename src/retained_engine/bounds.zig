@@ -9,6 +9,10 @@
 const std = @import("std");
 const spatial_grid = @import("spatial_grid");
 
+/// Atlas sub-rect + trim metadata; `pivotOrigin` is the geometry shared
+/// with the draw helpers.
+const SourceRect = @import("../types.zig").SourceRect;
+
 /// Returns the cull-bounds helpers for a concrete `RetainedEngine` type.
 ///
 /// `Self` must expose `Position`, `SpriteEntry`, `ShapeEntry`, `TextEntry`,
@@ -88,8 +92,22 @@ pub fn CullBounds(comptime Self: type) type {
             const dest_w = display_w * v.scale_x;
             const dest_h = display_h * v.scale_y;
             const pivot_norm = v.pivot.getNormalized(v.pivot_x, v.pivot_y);
-            const origin_x = dest_w * pivot_norm.x;
-            const origin_y = dest_h * pivot_norm.y;
+            // Same pivot geometry the draw path uses, trim offsets and all
+            // — a trimmed frame's quad is displaced inside its canvas, so
+            // computing the box any other way would cull a visible sprite.
+            const trim: SourceRect = v.source_rect orelse .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+            const origin_xy = trim.pivotOrigin(
+                display_w,
+                display_h,
+                v.scale_x,
+                v.scale_y,
+                pivot_norm.x,
+                pivot_norm.y,
+                v.flip_x,
+                v.flip_y,
+            );
+            const origin_x = origin_xy.x;
+            const origin_y = origin_xy.y;
             // Quad corners relative to `pos`: top-left is at `-origin`.
             const corners = [_]Position{
                 .{ .x = -origin_x, .y = -origin_y },
