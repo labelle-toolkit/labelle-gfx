@@ -1587,6 +1587,61 @@ test "trim offsets: scale is applied last and stays signed" {
     try testing.expectEqual(@as(f32, 120), OriginSpyBackend.last_origin.y);
 }
 
+test "trim offsets: a negative scale carries the origin's sign" {
+    // The renderer feeds a signed `dest_w`/`dest_h` to the backend, so a
+    // mirrored quad needs a mirrored origin or it lands on the wrong side
+    // of the pivot. `@abs`-ing the scale here would keep the magnitudes
+    // below passing while putting the sprite in the wrong place.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Engine = RetainedEngineWith(OriginSpyBackend, DefaultLayers);
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{
+        .sprite_name = "a",
+        .pivot = .bottom_center,
+        .scale_x = -2,
+        .scale_y = 1,
+        .source_rect = trimmed_frame,
+    }, .{ .x = 100, .y = 100 });
+    engine.render();
+
+    // 18 (canvas pivot minus trim offset) x -2.
+    try testing.expectEqual(@as(f32, -36), OriginSpyBackend.last_origin.x);
+    try testing.expectEqual(@as(f32, 60), OriginSpyBackend.last_origin.y);
+}
+
+test "trim offsets: culling uses the canvas pivot, not the silhouette" {
+    // The draw path and the cull-bounds path each compute the pivot
+    // origin, and nothing but agreement keeps them honest: if bounds
+    // ignored the trim offsets it would place the box 2px off here and
+    // cull a sprite that is genuinely on screen.
+    //
+    // The quad's top-left sits at `pos - origin`. With the trim applied,
+    // origin.x is 18, so the quad spans x = 82..122. Pivoting on the
+    // silhouette instead gives origin.x = 20 and a span of 80..120. The
+    // viewport below starts at x = 120.5 — inside the true quad, past the
+    // end of the silhouette-derived one.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = CullEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    engine.createSprite(EntityId.from(1), .{
+        .sprite_name = "trimmed",
+        .layer = .world,
+        .pivot = .bottom_center,
+        .source_rect = trimmed_frame,
+    }, .{ .x = 100, .y = 100 });
+
+    engine.setCullViewport(.{ .x = 120.5, .y = 41, .w = 8, .h = 8 });
+    engine.render();
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+}
+
 test "trim offsets: a populated offset with no canvas falls back to the display size" {
     // Defensive: a loader that fills the offset but not the canvas must
     // not pivot against a zero-width canvas.
