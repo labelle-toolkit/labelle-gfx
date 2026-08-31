@@ -574,6 +574,17 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // It is a caller-OWNED key in the sub-base half, never a backend
             // id — the assert above is what enforces that.
             const id: TextureId = @enumFromInt(handle);
+            // engine#821 probe: a repeated register on a live key is the
+            // catalog-slot recycle in action — whoever still references the
+            // old key now samples this NEW texture. Benign once the atlas
+            // manager re-arms bindings on scene unload; loud so a future
+            // stale-binding regression is visible in one logcat capture.
+            if (self.textures.contains(id)) {
+                std.log.warn(
+                    "registerCatalogTexture: overwriting live key {d} — catalog slot recycled",
+                    .{handle},
+                );
+            }
             self.textures.put(id, .{
                 .backend_texture = backend_tex,
                 .width = @floatFromInt(backend_tex.width),
