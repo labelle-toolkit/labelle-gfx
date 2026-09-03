@@ -187,6 +187,18 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
             errdefer self.deinit();
 
             for (map.tilesets, 0..) |*tileset, i| {
+                // A Tiled "collection of images" tileset (one `<image>` per
+                // `<tile>`) parses with `columns = 0` and has no sheet grid
+                // to slice, so every tile from it draws nothing. Say so once
+                // here rather than per tile per frame (labelle-gfx#339).
+                if (tileset.columns == 0) {
+                    std.log.scoped(.labelle_gfx).warn(
+                        "tilemap: tileset '{s}' declares columns=0 (a Tiled collection-of-images tileset, one image per tile). " ++
+                            "Per-tile images are not supported — its tiles draw nothing. Re-export it as a single tileset image to render it.",
+                        .{tileset.name},
+                    );
+                }
+
                 if (options.resolver) |resolver| {
                     if (resolver.resolve(i, tileset)) |texture| {
                         try self.textures.put(i, .{ .texture = texture, .owned = false });
@@ -282,6 +294,11 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
 
                     const local_id = gid - tileset.firstgid;
                     const src_rect = tileset.getTileRect(local_id);
+                    // A collection-of-images tileset has no sheet grid and
+                    // yields an empty rect (labelle-gfx#339); skip rather
+                    // than submit a degenerate zero-sized draw. `init`
+                    // already warned once for this tileset.
+                    if (src_rect.width == 0 or src_rect.height == 0) continue;
 
                     const dest_x = @as(f32, @floatFromInt(x)) * tile_w + off_x - camera_x;
                     const dest_y = @as(f32, @floatFromInt(y)) * tile_h + off_y - camera_y;

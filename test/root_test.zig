@@ -3308,6 +3308,26 @@ test "Tileset getTileRect" {
     try testing.expect(rect10.x == 0 and rect10.y == 16);
 }
 
+test "Tileset getTileRect on a collection-of-images tileset (columns=0)" {
+    // labelle-gfx#339: `columns = 0` used to divide by zero on the first
+    // draw. It now yields an empty rect, which the draw pass skips.
+    const tileset = gfx.Tileset{
+        .firstgid = 1,
+        .name = "props",
+        .tile_width = 16,
+        .tile_height = 16,
+        .columns = 0,
+        .tile_count = 4,
+        .image_source = "",
+        .image_width = 0,
+        .image_height = 0,
+    };
+
+    const rect = tileset.getTileRect(3);
+    try testing.expect(rect.x == 0 and rect.y == 0);
+    try testing.expect(rect.width == 0 and rect.height == 0);
+}
+
 test "TileLayer getTile" {
     const data = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9 };
     const layer = gfx.TileLayer{

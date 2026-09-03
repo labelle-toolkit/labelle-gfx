@@ -44,6 +44,47 @@ const multi_tileset_tmx =
     \\</map>
 ;
 
+// A Tiled "collection of images" tileset (labelle-gfx#339): one <image>
+// per <tile> instead of one sheet, so Tiled writes columns="0" and no
+// tileset-level <image>. Parses fine today; `getTileRect` then divides
+// the local id by `columns`.
+const collection_of_images_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="2" height="1" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="props" tilewidth="16" tileheight="16" tilecount="2" columns="0">
+    \\  <tile id="0">
+    \\   <image source="bush.png" width="16" height="16"/>
+    \\  </tile>
+    \\  <tile id="1">
+    \\   <image source="rock.png" width="16" height="16"/>
+    \\  </tile>
+    \\ </tileset>
+    \\ <layer name="props" width="2" height="1">
+    \\  <data encoding="csv">1,2</data>
+    \\ </layer>
+    \\</map>
+;
+
+// A map mixing a collection-of-images tileset (gids 1..4) with a normal
+// sheet tileset (gids 5+): the sheet must keep drawing when the
+// collection tileset is skipped.
+const mixed_collection_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="2" height="1" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="props" tilewidth="16" tileheight="16" tilecount="4" columns="0">
+    \\  <tile id="0">
+    \\   <image source="bush.png" width="16" height="16"/>
+    \\  </tile>
+    \\ </tileset>
+    \\ <tileset firstgid="5" name="terrain" tilewidth="16" tileheight="16" columns="2" tilecount="4">
+    \\  <image source="terrain.png" width="32" height="32"/>
+    \\ </tileset>
+    \\ <layer name="mixed" width="2" height="1">
+    \\  <data encoding="csv">1,5</data>
+    \\ </layer>
+    \\</map>
+;
+
 // GIDs carrying flip flags: 0x80000001 (H), 0x40000001 (V), 0x20000001 (D),
 // plus a clean gid 1.
 const flipped_tmx =
@@ -860,6 +901,64 @@ pub const TILESET = struct {
         const rect = ts.getTileRect(4);
         try std.testing.expectEqual(@as(u32, 0), rect.x);
         try std.testing.expectEqual(@as(u32, 16), rect.y);
+    }
+};
+
+// ── Collection-of-images tilesets (labelle-gfx#339) ──────────────────
+
+pub const COLLECTION_OF_IMAGES = struct {
+    test "an inline collection-of-images tileset still loads" {
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, collection_of_images_tmx);
+        defer map.deinit();
+
+        try std.testing.expectEqual(@as(usize, 1), map.tilesets.len);
+        try std.testing.expectEqual(@as(u32, 0), map.tilesets[0].columns);
+    }
+
+    test "getTileRect on a zero-column tileset yields an empty rect, not a panic" {
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, collection_of_images_tmx);
+        defer map.deinit();
+
+        const ts = &map.tilesets[0];
+        inline for (.{ 0, 1 }) |local_id| {
+            const rect = ts.getTileRect(local_id);
+            try std.testing.expectEqual(@as(u32, 0), rect.x);
+            try std.testing.expectEqual(@as(u32, 0), rect.y);
+            try std.testing.expectEqual(@as(u32, 0), rect.width);
+            try std.testing.expectEqual(@as(u32, 0), rect.height);
+        }
+    }
+
+    test "drawing a zero-column tileset emits no draw calls instead of panicking" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, collection_of_images_tmx);
+        defer map.deinit();
+
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        renderer.drawAllLayers(0, 0, .{});
+
+        try std.testing.expectEqual(@as(usize, 0), RecordingBackend.calls.items.len);
+    }
+
+    test "a sheet tileset in the same map keeps drawing" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, mixed_collection_tmx);
+        defer map.deinit();
+
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        renderer.drawAllLayers(0, 0, .{});
+
+        // gid 1 is the collection tileset (skipped); gid 5 is the sheet.
+        try std.testing.expectEqual(@as(usize, 1), RecordingBackend.calls.items.len);
+        try std.testing.expectEqual(@as(u32, 101), RecordingBackend.calls.items[0].texture_id);
     }
 };
 

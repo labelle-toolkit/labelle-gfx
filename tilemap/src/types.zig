@@ -48,7 +48,18 @@ pub const Tileset = struct {
     image_width: u32,
     image_height: u32,
 
+    /// Source rect of `local_id` within this tileset's sheet image.
+    ///
+    /// A Tiled "collection of images" tileset has no sheet — one
+    /// `<image>` per `<tile>` — and so parses with `columns == 0`. There
+    /// is no grid to index into, and dividing by `columns` panicked
+    /// (labelle-gfx#339). Such a tileset yields an EMPTY rect at the
+    /// origin: the draw pass treats a zero-sized source as "this tile
+    /// draws nothing" and skips it, so the map loads and renders its
+    /// other tilesets instead of crashing on the first draw. Rendering
+    /// per-tile images properly is a separate feature.
     pub fn getTileRect(self: *const Tileset, local_id: u32) struct { x: u32, y: u32, width: u32, height: u32 } {
+        if (self.columns == 0) return .{ .x = 0, .y = 0, .width = 0, .height = 0 };
         const col = local_id % self.columns;
         const row = local_id / self.columns;
         return .{

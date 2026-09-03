@@ -28,6 +28,13 @@
 //!   `LoadOptions.tsx_resolver`, or use a base-path/filesystem load)
 //! - No infinite maps (`error.InfiniteMapUnsupported`)
 //!
+//! ## Loads, but draws nothing
+//! - Tiled "collection of images" tilesets (`columns="0"`, one `<image>`
+//!   per `<tile>`): there is no sheet grid to slice, so their tiles are
+//!   skipped by the draw pass with one `log.warn` per tileset at renderer
+//!   init. The map still loads and its other tilesets still render
+//!   (labelle-gfx#339).
+//!
 //! ## Module layout (labelle-gfx#297)
 //! The implementation is split into focused submodules; this root is a
 //! thin re-export of the full public API:
