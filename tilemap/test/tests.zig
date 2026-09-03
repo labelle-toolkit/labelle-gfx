@@ -116,11 +116,50 @@ const external_tsx =
     \\</tileset>
 ;
 
+// The same tileset written by something other than Tiled: the root
+// element is broken across lines (XML allows any whitespace after the
+// element name, not just SPACE) behind a prologue comment that contains
+// both a bare `>` and a decoy `<tileset>` — neither may derail the seek to
+// the real root element.
+const awkward_tsx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<!-- hand-authored: width > height, supersedes <tileset name="stale"/> -->
+    \\<tileset
+    \\  version="1.10" name="shared" tilewidth="16" tileheight="16"
+    \\  tilecount="8" columns="4">
+    \\ <image source="../art/shared.png" width="64" height="32"/>
+    \\</tileset>
+;
+
+// Tiled's collection-of-images shape: `columns="0"` and one `<image>` per
+// `<tile>` instead of a single tileset-wide image. The loader models a
+// grid, so this shape has no representation here.
+const collection_tsx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<tileset version="1.10" name="coll" tilewidth="16" tileheight="16" tilecount="2" columns="0">
+    \\ <tile id="0"><image source="a.png" width="16" height="16"/></tile>
+    \\ <tile id="1"><image source="b.png" width="16" height="16"/></tile>
+    \\</tileset>
+;
+
+/// A `.tmx` referencing `source` and nothing else — the reference is what
+/// these tests vary.
+fn tmxReferencing(comptime source: []const u8) []const u8 {
+    return "<map version=\"1.10\" width=\"2\" height=\"2\" tilewidth=\"16\" tileheight=\"16\">\n" ++
+        " <tileset firstgid=\"17\" source=\"" ++ source ++ "\"/>\n" ++
+        " <layer name=\"ground\" width=\"2\" height=\"2\">\n" ++
+        "  <data encoding=\"csv\">17,18,19,20</data>\n" ++
+        " </layer>\n" ++
+        "</map>";
+}
+
 /// A `TilesetSourceResolver` over a fixed source→bytes table — the
 /// embedded-asset catalog shape, in miniature. Returns null for anything
 /// it does not know, exercising the fall-through.
 fn tableTsxResolver(_: ?*anyopaque, source: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, source, "tilesets/shared.tsx")) return external_tsx;
+    if (std.mem.eql(u8, source, "tilesets/awkward.tsx")) return awkward_tsx;
+    if (std.mem.eql(u8, source, "tilesets/collection.tsx")) return collection_tsx;
     return null;
 }
 
@@ -489,6 +528,47 @@ pub const PARSER_REJECTIONS = struct {
                 external_tmx,
                 ".zig-cache/tmp/labelle-gfx-335-absent",
             ),
+        );
+    }
+
+    test "resolves a .tsx whose root breaks across lines behind a comment" {
+        var map = try tilemap.TileMap.loadFromMemoryWithOptions(
+            std.testing.allocator,
+            tmxReferencing("tilesets/awkward.tsx"),
+            "",
+            .{ .tsx_resolver = tsx_table_resolver },
+        );
+        defer map.deinit();
+
+        // The decoy `<tileset name="stale"/>` lives inside the prologue
+        // comment; the real root is the one that must be parsed.
+        try std.testing.expectEqualStrings("shared", map.tilesets[0].name);
+        try std.testing.expectEqual(@as(u32, 4), map.tilesets[0].columns);
+        try std.testing.expectEqual(@as(u32, 17), map.tilesets[0].firstgid);
+        try std.testing.expectEqualStrings("art/shared.png", map.tilesets[0].image_source);
+    }
+
+    test "rejects a collection-of-images .tsx rather than yielding columns=0" {
+        // `getTileRect` divides by `columns`; a tileset shape this loader
+        // cannot represent must not reach the renderer.
+        try std.testing.expectError(
+            error.ExternalTilesetUnsupported,
+            tilemap.TileMap.loadFromMemoryWithOptions(
+                std.testing.allocator,
+                tmxReferencing("tilesets/collection.tsx"),
+                "",
+                .{ .tsx_resolver = tsx_table_resolver },
+            ),
+        );
+    }
+
+    test "an empty base_path never reads the .tsx off the filesystem" {
+        // "" documents "the caller resolves everything"; joining it onto
+        // the reference would just open `tilesets/shared.tsx` relative to
+        // the PROCESS cwd, so the reference has to dead-end instead.
+        try std.testing.expectError(
+            error.ExternalTilesetUnsupported,
+            tilemap.TileMap.loadFromMemoryWithBasePath(std.testing.allocator, external_tmx, ""),
         );
     }
 

@@ -64,10 +64,12 @@ pub const LoadOptions = struct {
     tsx_resolver: ?TilesetSourceResolver = null,
     /// When true, an unresolved `source="…tsx"` is read from
     /// `base_path/source` on disk. `load` and `loadFromMemoryWithBasePath`
-    /// leave it true; `loadFromMemory` — which has no directory to
-    /// resolve against — sets it false, so a `.tsx` reference there still
-    /// fails with `error.ExternalTilesetUnsupported` unless a resolver
-    /// supplies the bytes.
+    /// leave it true; the memory entry points force it FALSE whenever
+    /// `base_path` is empty, since there would be no directory to resolve
+    /// against and the read would land wherever the process happens to be
+    /// running. A `.tsx` reference then still fails with
+    /// `error.ExternalTilesetUnsupported` unless a resolver supplies the
+    /// bytes.
     read_external_from_filesystem: bool = true,
 };
 
@@ -128,7 +130,9 @@ pub const TileMap = struct {
     /// `base_path` is duplicated and used to resolve `tileset.image_source`
     /// paths in the renderer's filesystem fallback and to resolve external
     /// `.tsx` references at load time; pass "" when tileset textures are
-    /// resolved by the caller.
+    /// resolved by the caller — an empty `base_path` also turns the
+    /// external-`.tsx` filesystem fallback off, so nothing is read from
+    /// disk relative to the process cwd.
     pub fn loadFromMemoryWithBasePath(allocator: std.mem.Allocator, content: []const u8, base_path: []const u8) !Self {
         return loadFromMemoryWithOptions(allocator, content, base_path, .{});
     }
@@ -144,8 +148,16 @@ pub const TileMap = struct {
         base_path: []const u8,
         options: LoadOptions,
     ) !Self {
+        var effective = options;
+        // An empty `base_path` is the "caller resolves everything" value,
+        // but `std.fs.path.join("", source)` is just `source` — a
+        // filesystem fallback would open whatever the map names relative to
+        // the PROCESS cwd. A memory load with no directory to resolve
+        // against never reads from disk (`loadFromMemory` says so too).
+        if (base_path.len == 0) effective.read_external_from_filesystem = false;
+
         const base_path_owned = try allocator.dupe(u8, base_path);
-        return parseXml(allocator, content, base_path_owned, options);
+        return parseXml(allocator, content, base_path_owned, effective);
     }
 
     fn parseXml(allocator: std.mem.Allocator, content: []const u8, base_path: []const u8, options: LoadOptions) !Self {
@@ -390,7 +402,12 @@ pub const TileMap = struct {
                 defer freeAttributes(allocator, img_parsed.attrs);
                 const img_attrs = img_parsed.attrs;
 
-                if (getAttr(img_attrs, "source")) |src| tileset.image_source = try allocator.dupe(u8, src);
+                if (getAttr(img_attrs, "source")) |src| {
+                    // A collection tileset carries one <image> per <tile>;
+                    // free the previous dupe rather than leaking it.
+                    if (tileset.image_source.len > 0) allocator.free(tileset.image_source);
+                    tileset.image_source = try allocator.dupe(u8, src);
+                }
                 if (getAttr(img_attrs, "width")) |w| tileset.image_width = try std.fmt.parseInt(u32, w, 10);
                 if (getAttr(img_attrs, "height")) |h| tileset.image_height = try std.fmt.parseInt(u32, h, 10);
             }
@@ -451,6 +468,14 @@ pub const TileMap = struct {
             return error.ExternalTilesetUnsupported;
         }
 
+        // A collection-of-images `.tsx` (`columns="0"`, one `<image>` per
+        // `<tile>`) is not the single-image grid this loader models: the
+        // element parser would record one arbitrary tile image and
+        // `Tileset.getTileRect` would divide by `columns`. Such a file was
+        // rejected before external references resolved at all — keep
+        // rejecting it rather than panicking on the first tile drawn.
+        if (tileset.columns == 0) return error.ExternalTilesetUnsupported;
+
         tileset.firstgid = firstgid;
 
         // `<image source>` inside a `.tsx` is relative to the `.tsx`'s OWN
@@ -468,6 +493,14 @@ pub const TileMap = struct {
         return tileset;
     }
 
+    /// True at any byte that ends an XML element name. Tiled is not the
+    /// only writer of `.tsx` files, and XML lets an element break across
+    /// lines — `<tileset\n  version="1.10" …>` — so EVERY whitespace byte
+    /// ends the name, not just SPACE.
+    fn isElementNameEnd(c: u8) bool {
+        return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '>' or c == '/';
+    }
+
     /// Advance `pos` past the `<tileset` element name of a `.tsx`
     /// document, skipping the XML declaration, comments and anything
     /// before it. False when the document has no `<tileset>` at all.
@@ -478,6 +511,18 @@ pub const TileMap = struct {
             pos.* += 1;
             if (pos.* >= content.len) return false;
 
+            // A comment ends at `-->`, not at the first `>`. Stopping at the
+            // `>` of `<!-- note > <tileset name="old"/> -->` would resume
+            // scanning INSIDE the comment and take the commented-out element
+            // for the document root.
+            if (std.mem.startsWith(u8, content[pos.*..], "!--")) {
+                pos.* = if (std.mem.indexOfPos(u8, content, pos.* + 3, "-->")) |end|
+                    end + 3
+                else
+                    content.len;
+                continue;
+            }
+
             if (content[pos.*] == '?' or content[pos.*] == '!' or content[pos.*] == '/') {
                 while (pos.* < content.len and content[pos.*] != '>') : (pos.* += 1) {}
                 pos.* += 1;
@@ -485,7 +530,7 @@ pub const TileMap = struct {
             }
 
             const elem_start = pos.*;
-            while (pos.* < content.len and content[pos.*] != ' ' and content[pos.*] != '>' and content[pos.*] != '/') : (pos.* += 1) {}
+            while (pos.* < content.len and !isElementNameEnd(content[pos.*])) : (pos.* += 1) {}
             if (std.mem.eql(u8, content[elem_start..pos.*], "tileset")) return true;
 
             while (pos.* < content.len and content[pos.*] != '>') : (pos.* += 1) {}
@@ -786,6 +831,11 @@ fn readFileOwned(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 fn joinRelative(allocator: std.mem.Allocator, dir: []const u8, rel: []const u8) ![]u8 {
     if (std.fs.path.isAbsolute(rel)) return allocator.dupe(u8, rel);
 
+    // Tokenizing drops the leading separator, so an absolute `dir` would
+    // come back RELATIVE (and be reinterpreted against the process cwd by
+    // whoever opens it). Remember the root and put it back.
+    const absolute = std.fs.path.isAbsolute(dir);
+
     var parts: std.ArrayListUnmanaged([]const u8) = .empty;
     defer parts.deinit(allocator);
 
@@ -793,18 +843,22 @@ fn joinRelative(allocator: std.mem.Allocator, dir: []const u8, rel: []const u8) 
         var it = std.mem.tokenizeAny(u8, path, "/\\");
         while (it.next()) |part| {
             if (std.mem.eql(u8, part, ".")) continue;
-            if (std.mem.eql(u8, part, "..") and
-                parts.items.len > 0 and
-                !std.mem.eql(u8, parts.items[parts.items.len - 1], ".."))
-            {
-                _ = parts.pop();
-                continue;
+            if (std.mem.eql(u8, part, "..")) {
+                if (parts.items.len > 0 and !std.mem.eql(u8, parts.items[parts.items.len - 1], "..")) {
+                    _ = parts.pop();
+                    continue;
+                }
+                // The root is its own parent: `/a/../..` stays `/`.
+                if (absolute) continue;
             }
             try parts.append(allocator, part);
         }
     }
 
-    return std.mem.join(allocator, "/", parts.items);
+    const joined = try std.mem.join(allocator, "/", parts.items);
+    if (!absolute) return joined;
+    defer allocator.free(joined);
+    return std.mem.concat(allocator, u8, &.{ "/", joined });
 }
 
 test "joinRelative rebases a .tsx image path onto the map's directory" {
@@ -829,4 +883,19 @@ test "joinRelative rebases a .tsx image path onto the map's directory" {
     const abs = try joinRelative(alloc, "tilesets", "/abs/o.png");
     defer alloc.free(abs);
     try std.testing.expectEqualStrings("/abs/o.png", abs);
+
+    // An absolute `dir` stays absolute: dropping the root would silently
+    // reinterpret the result against the process cwd.
+    const abs_dir = try joinRelative(alloc, "/tilesets", "img/o.png");
+    defer alloc.free(abs_dir);
+    try std.testing.expectEqualStrings("/tilesets/img/o.png", abs_dir);
+
+    // `..` still collapses under an absolute root, and cannot climb past it.
+    const abs_up = try joinRelative(alloc, "/a/tilesets", "../art/o.png");
+    defer alloc.free(abs_up);
+    try std.testing.expectEqualStrings("/a/art/o.png", abs_up);
+
+    const abs_root = try joinRelative(alloc, "/tilesets", "../../o.png");
+    defer alloc.free(abs_root);
+    try std.testing.expectEqualStrings("/o.png", abs_root);
 }
