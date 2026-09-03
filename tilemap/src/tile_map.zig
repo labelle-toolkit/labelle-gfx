@@ -404,9 +404,14 @@ pub const TileMap = struct {
 
                 if (getAttr(img_attrs, "source")) |src| {
                     // A collection tileset carries one <image> per <tile>;
-                    // free the previous dupe rather than leaking it.
+                    // free the previous dupe rather than leaking it — but
+                    // ALLOCATE FIRST. Freeing before a dupe that then fails
+                    // leaves `tileset.image_source` pointing at released
+                    // memory, and the errdefer above frees it a second time
+                    // on the way out with `error.OutOfMemory`.
+                    const owned = try allocator.dupe(u8, src);
                     if (tileset.image_source.len > 0) allocator.free(tileset.image_source);
-                    tileset.image_source = try allocator.dupe(u8, src);
+                    tileset.image_source = owned;
                 }
                 if (getAttr(img_attrs, "width")) |w| tileset.image_width = try std.fmt.parseInt(u32, w, 10);
                 if (getAttr(img_attrs, "height")) |h| tileset.image_height = try std.fmt.parseInt(u32, h, 10);
@@ -833,13 +838,22 @@ fn joinRelative(allocator: std.mem.Allocator, dir: []const u8, rel: []const u8) 
 
     // Tokenizing drops the leading separator, so an absolute `dir` would
     // come back RELATIVE (and be reinterpreted against the process cwd by
-    // whoever opens it). Remember the root and put it back.
+    // whoever opens it). Remember the root VERBATIM and put it back: on
+    // Windows the root is `C:\\` or `\\\\server\\share\\`, not `/`, and
+    // rebuilding it as `/` would turn `C:\\tilesets` into `/C:/tilesets`
+    // and collapse a UNC root to a single slash.
     const absolute = std.fs.path.isAbsolute(dir);
+    const root: []const u8 = if (absolute) blk: {
+        var it = std.fs.path.componentIterator(dir);
+        break :blk it.root() orelse "/";
+    } else "";
 
     var parts: std.ArrayListUnmanaged([]const u8) = .empty;
     defer parts.deinit(allocator);
 
-    for ([_][]const u8{ dir, rel }) |path| {
+    // `dir` is tokenized past its root so the root's own bytes (`C:`) are
+    // not re-emitted as an ordinary component after the prefix.
+    for ([_][]const u8{ dir[root.len..], rel }) |path| {
         var it = std.mem.tokenizeAny(u8, path, "/\\");
         while (it.next()) |part| {
             if (std.mem.eql(u8, part, ".")) continue;
@@ -858,7 +872,11 @@ fn joinRelative(allocator: std.mem.Allocator, dir: []const u8, rel: []const u8) 
     const joined = try std.mem.join(allocator, "/", parts.items);
     if (!absolute) return joined;
     defer allocator.free(joined);
-    return std.mem.concat(allocator, u8, &.{ "/", joined });
+    // A root usually carries its own trailing separator (`/`, `C:\\`), but a
+    // bare UNC share (`\\\\server\\share`, what `dirname` leaves when the
+    // `.tsx` sits at the share root) does not — supply one.
+    const sep: []const u8 = if (std.fs.path.isSep(root[root.len - 1])) "" else std.fs.path.sep_str;
+    return std.mem.concat(allocator, u8, &.{ root, sep, joined });
 }
 
 test "joinRelative rebases a .tsx image path onto the map's directory" {
@@ -898,4 +916,75 @@ test "joinRelative rebases a .tsx image path onto the map's directory" {
     const abs_root = try joinRelative(alloc, "/tilesets", "../../o.png");
     defer alloc.free(abs_root);
     try std.testing.expectEqualStrings("/o.png", abs_root);
+}
+
+test "joinRelative keeps the platform root when rebasing an absolute .tsx dir" {
+    // POSIX hosts cannot see a Windows root at all: `isAbsolute` and
+    // `componentIterator` both dispatch on the native target, so
+    // `C:\tilesets` is an ordinary relative name there.
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+
+    const alloc = std.testing.allocator;
+
+    // A drive root must survive verbatim. Rebuilding absolute paths with a
+    // leading `/` would yield `/C:/tilesets/img/o.png`, which names nothing.
+    const drive = try joinRelative(alloc, "C:\\tilesets", "img/o.png");
+    defer alloc.free(drive);
+    try std.testing.expectEqualStrings("C:\\tilesets/img/o.png", drive);
+
+    // `..` collapses under a drive root without eating the root itself.
+    const drive_up = try joinRelative(alloc, "C:\\a\\tilesets", "../art/o.png");
+    defer alloc.free(drive_up);
+    try std.testing.expectEqualStrings("C:\\a/art/o.png", drive_up);
+
+    // A UNC root is several separators wide and must not collapse to one.
+    const unc = try joinRelative(alloc, "\\\\server\\share\\tilesets", "img/o.png");
+    defer alloc.free(unc);
+    try std.testing.expectEqualStrings("\\\\server\\share\\tilesets/img/o.png", unc);
+
+    // `dirname` of a `.tsx` at the share root leaves a root with no
+    // trailing separator; one has to be supplied.
+    const unc_root = try joinRelative(alloc, "\\\\server\\share", "img/o.png");
+    defer alloc.free(unc_root);
+    try std.testing.expectEqualStrings("\\\\server\\share\\img/o.png", unc_root);
+}
+
+/// Parse a `<tileset>` element and release everything it hands back —
+/// shaped for `checkAllAllocationFailures`, which re-runs it once per
+/// allocation site with that allocation forced to fail.
+fn parseAndFreeTilesetElement(allocator: std.mem.Allocator, content: []const u8) !void {
+    var pos: usize = "<tileset".len;
+    const elem = try TileMap.parseTilesetElement(allocator, content, &pos);
+    if (elem.source) |src| allocator.free(src);
+    if (elem.tileset.name.len > 0) allocator.free(elem.tileset.name);
+    if (elem.tileset.image_source.len > 0) allocator.free(elem.tileset.image_source);
+}
+
+test "parseTilesetElement survives allocation failure on a second <image>" {
+    const multi_image =
+        \\<tileset name="multi" tilewidth="16" tileheight="16" columns="2" tilecount="2">
+        \\ <image source="first.png" width="32" height="16"/>
+        \\ <image source="second.png" width="32" height="16"/>
+        \\</tileset>
+    ;
+
+    // Last <image> wins, and the earlier dupe is not leaked.
+    {
+        var pos: usize = "<tileset".len;
+        const elem = try TileMap.parseTilesetElement(std.testing.allocator, multi_image, &pos);
+        defer std.testing.allocator.free(elem.tileset.name);
+        defer std.testing.allocator.free(elem.tileset.image_source);
+        try std.testing.expect(elem.source == null);
+        try std.testing.expectEqualStrings("second.png", elem.tileset.image_source);
+    }
+
+    // Failing the SECOND source dupe used to free the first one and leave
+    // the dangling slice on `tileset`, which the function's own errdefer
+    // then freed again on the way out with `error.OutOfMemory`. Every
+    // allocation site must instead unwind to exactly zero live bytes.
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        parseAndFreeTilesetElement,
+        .{multi_image},
+    );
 }
