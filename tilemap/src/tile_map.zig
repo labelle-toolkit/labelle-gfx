@@ -384,6 +384,18 @@ pub const TileMap = struct {
             pos.* += 1;
             if (pos.* >= content.len) break;
 
+            // A comment is not input. `seekTilesetElement` skips them
+            // ahead of the root; the body needs the same, or a
+            // commented-out `<image>` trailing the real one is parsed
+            // and overwrites `image_source` with a dead path.
+            if (std.mem.startsWith(u8, content[pos.*..], "!--")) {
+                pos.* = if (std.mem.indexOfPos(u8, content, pos.* + 3, "-->")) |end|
+                    end + 3
+                else
+                    content.len;
+                continue;
+            }
+
             if (content[pos.*] == '/') {
                 const close_start = pos.*;
                 while (pos.* < content.len and content[pos.*] != '>') : (pos.* += 1) {}
@@ -394,7 +406,7 @@ pub const TileMap = struct {
             }
 
             const img_elem_start = pos.*;
-            while (pos.* < content.len and content[pos.*] != ' ' and content[pos.*] != '>' and content[pos.*] != '/') : (pos.* += 1) {}
+            while (pos.* < content.len and !isElementNameEnd(content[pos.*])) : (pos.* += 1) {}
             const img_elem_name = content[img_elem_start..pos.*];
 
             if (std.mem.eql(u8, img_elem_name, "image")) {
@@ -507,8 +519,11 @@ pub const TileMap = struct {
     }
 
     /// Advance `pos` past the `<tileset` element name of a `.tsx`
-    /// document, skipping the XML declaration, comments and anything
-    /// before it. False when the document has no `<tileset>` at all.
+    /// document, skipping the XML declaration, doctype and comments.
+    /// False unless `<tileset>` is the document ROOT: a `.tsx` is a
+    /// tileset document, so a resolver handing back `<map><tileset …/>
+    /// </map>` is not one and must dead-end rather than have its nested
+    /// element mistaken for the root.
     fn seekTilesetElement(content: []const u8, pos: *usize) bool {
         while (pos.* < content.len) {
             while (pos.* < content.len and content[pos.*] != '<') : (pos.* += 1) {}
@@ -534,12 +549,12 @@ pub const TileMap = struct {
                 continue;
             }
 
+            // The first NORMAL start tag is the root. Anything else
+            // ends the search — scanning past it would accept a
+            // `<tileset>` nested somewhere inside another document.
             const elem_start = pos.*;
             while (pos.* < content.len and !isElementNameEnd(content[pos.*])) : (pos.* += 1) {}
-            if (std.mem.eql(u8, content[elem_start..pos.*], "tileset")) return true;
-
-            while (pos.* < content.len and content[pos.*] != '>') : (pos.* += 1) {}
-            pos.* += 1;
+            return std.mem.eql(u8, content[elem_start..pos.*], "tileset");
         }
         return false;
     }

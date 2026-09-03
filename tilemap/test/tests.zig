@@ -142,6 +142,43 @@ const collection_tsx =
     \\</tileset>
 ;
 
+// A `.tsx` whose `<image>` child breaks across lines the way the root
+// element does. Every whitespace byte ends an element name, so the child
+// scan must not stop at SPACE alone — otherwise the element is skipped,
+// the tileset resolves with an empty `image_source`, and the renderer
+// silently draws nothing (labelle-gfx#340's sibling site).
+const multiline_image_tsx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<tileset version="1.10" name="shared" tilewidth="16" tileheight="16" tilecount="8" columns="4">
+    \\ <image
+    \\   source="art/shared.png"
+    \\   width="64" height="32"/>
+    \\</tileset>
+;
+
+// A `.tsx` that keeps a superseded `<image>` commented out AFTER the live
+// one — the ordinary way a hand-edited asset records a swap. The body
+// scanner must skip the comment; parsing it would make the dead path win.
+const commented_image_tsx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<tileset version="1.10" name="shared" tilewidth="16" tileheight="16" tilecount="8" columns="4">
+    \\ <image source="art/shared.png" width="64" height="32"/>
+    \\ <!-- was: <image source="art/stale.png" width="64" height="32"/> -->
+    \\</tileset>
+;
+
+// Not a tileset document at all: a `<tileset>` nested inside a `<map>`.
+// A resolver handing this back is handing back the wrong file, and the
+// nested element must not be mistaken for the `.tsx` root.
+const nested_tileset_tsx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="2" height="2" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="inner" tilewidth="16" tileheight="16" tilecount="8" columns="4">
+    \\  <image source="art/inner.png" width="64" height="32"/>
+    \\ </tileset>
+    \\</map>
+;
+
 /// A `.tmx` referencing `source` and nothing else — the reference is what
 /// these tests vary.
 fn tmxReferencing(comptime source: []const u8) []const u8 {
@@ -160,6 +197,9 @@ fn tableTsxResolver(_: ?*anyopaque, source: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, source, "tilesets/shared.tsx")) return external_tsx;
     if (std.mem.eql(u8, source, "tilesets/awkward.tsx")) return awkward_tsx;
     if (std.mem.eql(u8, source, "tilesets/collection.tsx")) return collection_tsx;
+    if (std.mem.eql(u8, source, "tilesets/multiline.tsx")) return multiline_image_tsx;
+    if (std.mem.eql(u8, source, "tilesets/commented.tsx")) return commented_image_tsx;
+    if (std.mem.eql(u8, source, "tilesets/nested.tsx")) return nested_tileset_tsx;
     return null;
 }
 
@@ -556,6 +596,50 @@ pub const PARSER_REJECTIONS = struct {
             tilemap.TileMap.loadFromMemoryWithOptions(
                 std.testing.allocator,
                 tmxReferencing("tilesets/collection.tsx"),
+                "",
+                .{ .tsx_resolver = tsx_table_resolver },
+            ),
+        );
+    }
+
+    test "reads an <image> child that breaks across lines" {
+        // SPACE is not the only byte that ends an element name; a
+        // SPACE-only scan reads the name as "image\n" and drops the
+        // element, leaving image_source empty and the tile untextured.
+        var map = try tilemap.TileMap.loadFromMemoryWithOptions(
+            std.testing.allocator,
+            tmxReferencing("tilesets/multiline.tsx"),
+            "",
+            .{ .tsx_resolver = tsx_table_resolver },
+        );
+        defer map.deinit();
+
+        try std.testing.expectEqualStrings("tilesets/art/shared.png", map.tilesets[0].image_source);
+        try std.testing.expectEqual(@as(u32, 64), map.tilesets[0].image_width);
+    }
+
+    test "ignores an <image> commented out after the live one" {
+        var map = try tilemap.TileMap.loadFromMemoryWithOptions(
+            std.testing.allocator,
+            tmxReferencing("tilesets/commented.tsx"),
+            "",
+            .{ .tsx_resolver = tsx_table_resolver },
+        );
+        defer map.deinit();
+
+        // The trailing `<!-- was: <image source="art/stale.png"/> -->` is
+        // commentary, not a second image.
+        try std.testing.expectEqualStrings("tilesets/art/shared.png", map.tilesets[0].image_source);
+    }
+
+    test "rejects a .tsx whose root element is not <tileset>" {
+        // `<map><tileset/></map>` is a map, not a shared tileset. The
+        // nested element is not the document root and must not resolve.
+        try std.testing.expectError(
+            error.ExternalTilesetUnsupported,
+            tilemap.TileMap.loadFromMemoryWithOptions(
+                std.testing.allocator,
+                tmxReferencing("tilesets/nested.tsx"),
                 "",
                 .{ .tsx_resolver = tsx_table_resolver },
             ),
