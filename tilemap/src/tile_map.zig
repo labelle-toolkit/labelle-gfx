@@ -511,14 +511,6 @@ pub const TileMap = struct {
         return tileset;
     }
 
-    /// True at any byte that ends an XML element name. Tiled is not the
-    /// only writer of `.tsx` files, and XML lets an element break across
-    /// lines — `<tileset\n  version="1.10" …>` — so EVERY whitespace byte
-    /// ends the name, not just SPACE.
-    fn isElementNameEnd(c: u8) bool {
-        return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '>' or c == '/';
-    }
-
     /// Advance `pos` past the `<tileset` element name of a `.tsx`
     /// document, skipping the XML declaration, doctype and comments.
     /// False unless `<tileset>` is the document ROOT: a `.tsx` is a
