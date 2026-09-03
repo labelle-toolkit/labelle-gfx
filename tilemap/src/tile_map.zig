@@ -28,6 +28,7 @@ const TileFlags = types.TileFlags;
 const parseAttributes = xml.parseAttributes;
 const freeAttributes = xml.freeAttributes;
 const getAttr = xml.getAttr;
+const isElementNameEnd = xml.isElementNameEnd;
 
 // ── External tileset resolution (labelle-gfx#335) ──────────
 
@@ -225,7 +226,7 @@ pub const TileMap = struct {
             }
 
             const elem_start = pos;
-            while (pos < content.len and content[pos] != ' ' and content[pos] != '>' and content[pos] != '/') : (pos += 1) {}
+            while (pos < content.len and !isElementNameEnd(content[pos])) : (pos += 1) {}
             const elem_name = content[elem_start..pos];
 
             if (std.mem.eql(u8, elem_name, "map")) {
@@ -510,14 +511,6 @@ pub const TileMap = struct {
         return tileset;
     }
 
-    /// True at any byte that ends an XML element name. Tiled is not the
-    /// only writer of `.tsx` files, and XML lets an element break across
-    /// lines — `<tileset\n  version="1.10" …>` — so EVERY whitespace byte
-    /// ends the name, not just SPACE.
-    fn isElementNameEnd(c: u8) bool {
-        return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '>' or c == '/';
-    }
-
     /// Advance `pos` past the `<tileset` element name of a `.tsx`
     /// document, skipping the XML declaration, doctype and comments.
     /// False unless `<tileset>` is the document ROOT: a `.tsx` is a
@@ -619,7 +612,7 @@ pub const TileMap = struct {
             }
 
             const data_elem_start = pos.*;
-            while (pos.* < content.len and content[pos.*] != ' ' and content[pos.*] != '>' and content[pos.*] != '/') : (pos.* += 1) {}
+            while (pos.* < content.len and !isElementNameEnd(content[pos.*])) : (pos.* += 1) {}
             const data_elem_name = content[data_elem_start..pos.*];
 
             if (std.mem.eql(u8, data_elem_name, "data")) {
@@ -706,7 +699,7 @@ pub const TileMap = struct {
             }
 
             const obj_elem_start = pos.*;
-            while (pos.* < content.len and content[pos.*] != ' ' and content[pos.*] != '>' and content[pos.*] != '/') : (pos.* += 1) {}
+            while (pos.* < content.len and !isElementNameEnd(content[pos.*])) : (pos.* += 1) {}
             const obj_elem_name = content[obj_elem_start..pos.*];
 
             if (std.mem.eql(u8, obj_elem_name, "object")) {
