@@ -5,6 +5,13 @@
 //! (`load` / `loadFromMemory*`) and their per-element parsers, plus the
 //! read-side queries. Generic attribute scanning lives in `xml.zig`; the
 //! value types it assembles live in `types.zig`.
+//!
+//! External tilesets (labelle-gfx#335): a `<tileset firstgid="N"
+//! source="Foo.tsx"/>` reference is resolved here rather than rejected —
+//! the `.tsx` root element is the same `<tileset>` shape the inline path
+//! parses, so resolution is file lookup plus a second run of the same
+//! element parser. Bytes come from `LoadOptions.tsx_resolver` first and
+//! from `base_path/source` on disk otherwise.
 
 const std = @import("std");
 const types = @import("types.zig");
@@ -21,6 +28,48 @@ const TileFlags = types.TileFlags;
 const parseAttributes = xml.parseAttributes;
 const freeAttributes = xml.freeAttributes;
 const getAttr = xml.getAttr;
+
+// ── External tileset resolution (labelle-gfx#335) ──────────
+
+/// External-`.tsx` byte provider — the loader-side twin of the
+/// renderer's `TextureResolver`.
+///
+/// Tiled writes `<tileset firstgid="N" source="Foo.tsx"/>` for every
+/// tileset shared between maps, so the referenced file's bytes have to
+/// come from somewhere. A path-based load reads them from disk; a
+/// pure-memory load (comptime-embedded assets, no filesystem at runtime)
+/// supplies them through this seam instead.
+pub const TilesetSourceResolver = struct {
+    context: ?*anyopaque = null,
+    /// `source` is the attribute exactly as written in the `.tmx`
+    /// (e.g. "../tilesets/Overworld.tsx"), NOT joined onto `base_path` —
+    /// an embedded catalog keys off the reference, not off a filesystem
+    /// layout. Return the `.tsx` XML bytes, or null to fall through to
+    /// the filesystem read (when enabled).
+    ///
+    /// The returned bytes are BORROWED: they are parsed during the call
+    /// and never freed by the loader, so a comptime `@embedFile` (or any
+    /// buffer outliving the load) is the expected shape.
+    resolveFn: *const fn (context: ?*anyopaque, source: []const u8) ?[]const u8,
+
+    pub fn resolve(self: TilesetSourceResolver, source: []const u8) ?[]const u8 {
+        return self.resolveFn(self.context, source);
+    }
+};
+
+/// How the TMX loaders resolve external `.tsx` tileset references.
+pub const LoadOptions = struct {
+    /// Caller-supplied `.tsx` bytes (engine asset catalog / `@embedFile`).
+    /// Consulted first; a null return falls through to the filesystem.
+    tsx_resolver: ?TilesetSourceResolver = null,
+    /// When true, an unresolved `source="…tsx"` is read from
+    /// `base_path/source` on disk. `load` and `loadFromMemoryWithBasePath`
+    /// leave it true; `loadFromMemory` — which has no directory to
+    /// resolve against — sets it false, so a `.tsx` reference there still
+    /// fails with `error.ExternalTilesetUnsupported` unless a resolver
+    /// supplies the bytes.
+    read_external_from_filesystem: bool = true,
+};
 
 // ── TileMap ─────────────────────────────────────────────────
 
@@ -44,39 +93,62 @@ pub const TileMap = struct {
     const Self = @This();
 
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !Self {
-        const file = try std.fs.cwd().openFile(path, .{});
-        defer file.close();
+        return loadWithOptions(allocator, path, .{});
+    }
 
-        const file_size = try file.getEndPos();
-        const content = try allocator.alloc(u8, @intCast(file_size));
+    /// `load` with explicit external-tileset resolution options
+    /// (labelle-gfx#335). `<tileset source="…tsx"/>` references resolve
+    /// against `path`'s directory unless a `tsx_resolver` claims them.
+    pub fn loadWithOptions(allocator: std.mem.Allocator, path: []const u8, options: LoadOptions) !Self {
+        const content = try readFileOwned(allocator, path);
         defer allocator.free(content);
-
-        _ = try file.readAll(content);
 
         const base_path = std.fs.path.dirname(path) orelse "";
         const base_path_owned = try allocator.dupe(u8, base_path);
 
-        return parseXml(allocator, content, base_path_owned);
+        return parseXml(allocator, content, base_path_owned, options);
     }
 
-    /// Parse TMX from raw XML bytes with an empty `base_path`.
-    /// Prefer `loadFromMemoryWithBasePath` when the caller resolves
-    /// tileset images relative to a known directory (or supplies a
-    /// `TextureResolver` and never touches the filesystem at all).
+    /// Parse TMX from raw XML bytes with an empty `base_path` and NO
+    /// filesystem access.
+    ///
+    /// With no directory to resolve against, an external
+    /// `<tileset source="…tsx"/>` still fails with
+    /// `error.ExternalTilesetUnsupported` here — that is the documented
+    /// outcome of a pure-memory load, not an oversight. To load such a map
+    /// from memory, hand the loader the `.tsx` bytes through
+    /// `loadFromMemoryWithOptions(…, .{ .tsx_resolver = … })`; use
+    /// `loadFromMemoryWithBasePath` instead when the map's directory does
+    /// exist at runtime.
     pub fn loadFromMemory(allocator: std.mem.Allocator, content: []const u8) !Self {
-        return loadFromMemoryWithBasePath(allocator, content, "");
+        return loadFromMemoryWithOptions(allocator, content, "", .{ .read_external_from_filesystem = false });
     }
 
     /// Parse TMX from raw XML bytes (e.g. a comptime-embedded asset).
-    /// `base_path` is duplicated and used only by the renderer's
-    /// filesystem fallback to resolve `tileset.image_source` paths;
-    /// pass "" when tileset textures are resolved by the caller.
+    /// `base_path` is duplicated and used to resolve `tileset.image_source`
+    /// paths in the renderer's filesystem fallback and to resolve external
+    /// `.tsx` references at load time; pass "" when tileset textures are
+    /// resolved by the caller.
     pub fn loadFromMemoryWithBasePath(allocator: std.mem.Allocator, content: []const u8, base_path: []const u8) !Self {
-        const base_path_owned = try allocator.dupe(u8, base_path);
-        return parseXml(allocator, content, base_path_owned);
+        return loadFromMemoryWithOptions(allocator, content, base_path, .{});
     }
 
-    fn parseXml(allocator: std.mem.Allocator, content: []const u8, base_path: []const u8) !Self {
+    /// `loadFromMemoryWithBasePath` with explicit external-tileset
+    /// resolution options (labelle-gfx#335) — the entry point for an
+    /// embedded-asset build: pass a `tsx_resolver` that returns the
+    /// embedded `.tsx` bytes and leave `read_external_from_filesystem`
+    /// false.
+    pub fn loadFromMemoryWithOptions(
+        allocator: std.mem.Allocator,
+        content: []const u8,
+        base_path: []const u8,
+        options: LoadOptions,
+    ) !Self {
+        const base_path_owned = try allocator.dupe(u8, base_path);
+        return parseXml(allocator, content, base_path_owned, options);
+    }
+
+    fn parseXml(allocator: std.mem.Allocator, content: []const u8, base_path: []const u8, options: LoadOptions) !Self {
         var map = Self{
             .allocator = allocator,
             .width = 0,
@@ -163,7 +235,7 @@ pub const TileMap = struct {
                     if (std.mem.eql(u8, o, "orthogonal")) map.orientation = .orthogonal else if (std.mem.eql(u8, o, "isometric")) map.orientation = .isometric else if (std.mem.eql(u8, o, "staggered")) map.orientation = .staggered else if (std.mem.eql(u8, o, "hexagonal")) map.orientation = .hexagonal;
                 }
             } else if (std.mem.eql(u8, elem_name, "tileset")) {
-                const tileset = try parseTileset(allocator, content, &pos);
+                const tileset = try parseTileset(allocator, content, &pos, base_path, options);
                 errdefer {
                     if (tileset.name.len > 0) allocator.free(tileset.name);
                     if (tileset.image_source.len > 0) allocator.free(tileset.image_source);
@@ -214,17 +286,45 @@ pub const TileMap = struct {
         return map;
     }
 
-    fn parseTileset(allocator: std.mem.Allocator, content: []const u8, pos: *usize) !Tileset {
+    /// Parse one `<tileset>` element of a `.tmx`, resolving an external
+    /// `source="…tsx"` reference into the tileset it names.
+    fn parseTileset(
+        allocator: std.mem.Allocator,
+        content: []const u8,
+        pos: *usize,
+        base_path: []const u8,
+        options: LoadOptions,
+    ) !Tileset {
+        const elem = try parseTilesetElement(allocator, content, pos);
+        errdefer {
+            if (elem.tileset.name.len > 0) allocator.free(elem.tileset.name);
+            if (elem.tileset.image_source.len > 0) allocator.free(elem.tileset.image_source);
+        }
+
+        const source = elem.source orelse return elem.tileset;
+        defer allocator.free(source);
+
+        return resolveExternalTileset(allocator, source, elem.tileset.firstgid, base_path, options);
+    }
+
+    /// One parsed `<tileset>` element — either an inline definition or a
+    /// bare reference to an external `.tsx`.
+    const TilesetElement = struct {
+        tileset: Tileset,
+        /// The `source` attribute (owned) when this element only
+        /// REFERENCES a `.tsx`; null for an inline definition. Such an
+        /// element carries nothing but `firstgid` and this path — every
+        /// other field lives in the referenced file.
+        source: ?[]const u8,
+    };
+
+    /// The shared `<tileset>` element parser: runs over the element in a
+    /// `.tmx` AND over the root element of a `.tsx`, which is the same
+    /// shape. `pos` must sit just past the element name.
+    fn parseTilesetElement(allocator: std.mem.Allocator, content: []const u8, pos: *usize) !TilesetElement {
         const parsed = try parseAttributes(allocator, content, pos);
         defer freeAttributes(allocator, parsed.attrs);
         const attrs = parsed.attrs;
-
-        // External tilesets (`source="foo.tsx"`) carry all their metadata
-        // in a separate file this parser does not read — continuing would
-        // yield a tileset with zero columns/dimensions that silently draws
-        // nothing (or scans the rest of the document for a closing tag
-        // that never comes). Reject loudly.
-        if (getAttr(attrs, "source") != null) return error.ExternalTilesetUnsupported;
 
         var tileset = Tileset{
             .firstgid = 1,
@@ -243,6 +343,16 @@ pub const TileMap = struct {
         }
 
         if (getAttr(attrs, "firstgid")) |fg| tileset.firstgid = try std.fmt.parseInt(u32, fg, 10);
+
+        // External reference: hand the `source` back to the caller, which
+        // reads the `.tsx` and re-enters this parser on its root element.
+        if (getAttr(attrs, "source")) |src| {
+            // Tiled self-closes the reference; tolerate an explicit
+            // `</tileset>` rather than letting the map scanner trip on it.
+            if (!parsed.self_closed) skipTilesetBody(content, pos);
+            return .{ .tileset = tileset, .source = try allocator.dupe(u8, src) };
+        }
+
         if (getAttr(attrs, "name")) |n| tileset.name = try allocator.dupe(u8, n);
         if (getAttr(attrs, "tilewidth")) |tw| tileset.tile_width = try std.fmt.parseInt(u32, tw, 10);
         if (getAttr(attrs, "tileheight")) |th| tileset.tile_height = try std.fmt.parseInt(u32, th, 10);
@@ -253,7 +363,7 @@ pub const TileMap = struct {
 
         // A self-closed embedded tileset has no <image> child; do not scan
         // for a </tileset> that will never come.
-        if (parsed.self_closed) return tileset;
+        if (parsed.self_closed) return .{ .tileset = tileset, .source = null };
 
         // Parse embedded tileset — look for <image> element
         while (pos.* < content.len) {
@@ -286,7 +396,120 @@ pub const TileMap = struct {
             }
         }
 
+        return .{ .tileset = tileset, .source = null };
+    }
+
+    /// Read the `.tsx` named by `source` and parse its root `<tileset>`.
+    ///
+    /// `firstgid` is the REFERENCING element's: a shared `.tsx` is mapped
+    /// at a different gid range by every map that uses it, and Tiled does
+    /// not write `firstgid` into the `.tsx` at all.
+    fn resolveExternalTileset(
+        allocator: std.mem.Allocator,
+        source: []const u8,
+        firstgid: u32,
+        base_path: []const u8,
+        options: LoadOptions,
+    ) !Tileset {
+        const provided: ?[]const u8 = if (options.tsx_resolver) |resolver| resolver.resolve(source) else null;
+
+        // Resolver bytes are borrowed; a filesystem read is ours to free.
+        var owned_bytes: ?[]u8 = null;
+        defer if (owned_bytes) |buf| allocator.free(buf);
+
+        const bytes: []const u8 = provided orelse blk: {
+            // No resolver claimed it and there is no directory to read
+            // from — this is the one case resolution genuinely cannot
+            // handle (see `loadFromMemory`).
+            if (!options.read_external_from_filesystem) return error.ExternalTilesetUnsupported;
+
+            const full_path = try std.fs.path.join(allocator, &.{ base_path, source });
+            defer allocator.free(full_path);
+
+            // A missing/unreadable `.tsx` surfaces the filesystem error
+            // (e.g. `error.FileNotFound`) rather than the catch-all — the
+            // path it failed on is the useful diagnostic.
+            const buf = try readFileOwned(allocator, full_path);
+            owned_bytes = buf;
+            break :blk buf;
+        };
+
+        var tsx_pos: usize = 0;
+        if (!seekTilesetElement(bytes, &tsx_pos)) return error.ExternalTilesetUnsupported;
+
+        const elem = try parseTilesetElement(allocator, bytes, &tsx_pos);
+        var tileset = elem.tileset;
+        errdefer {
+            if (tileset.name.len > 0) allocator.free(tileset.name);
+            if (tileset.image_source.len > 0) allocator.free(tileset.image_source);
+        }
+
+        // A `.tsx` whose root only points at ANOTHER `.tsx` is not
+        // something Tiled writes — refuse rather than chase the chain.
+        if (elem.source) |nested| {
+            allocator.free(nested);
+            return error.ExternalTilesetUnsupported;
+        }
+
+        tileset.firstgid = firstgid;
+
+        // `<image source>` inside a `.tsx` is relative to the `.tsx`'s OWN
+        // directory, which need not be the map's. Consumers (renderer
+        // fallback, texture resolver) join `image_source` onto the MAP's
+        // base_path, so rebase it through the reference's directory.
+        if (tileset.image_source.len > 0) {
+            if (std.fs.path.dirname(source)) |tsx_dir| {
+                const rebased = try joinRelative(allocator, tsx_dir, tileset.image_source);
+                allocator.free(tileset.image_source);
+                tileset.image_source = rebased;
+            }
+        }
+
         return tileset;
+    }
+
+    /// Advance `pos` past the `<tileset` element name of a `.tsx`
+    /// document, skipping the XML declaration, comments and anything
+    /// before it. False when the document has no `<tileset>` at all.
+    fn seekTilesetElement(content: []const u8, pos: *usize) bool {
+        while (pos.* < content.len) {
+            while (pos.* < content.len and content[pos.*] != '<') : (pos.* += 1) {}
+            if (pos.* >= content.len) return false;
+            pos.* += 1;
+            if (pos.* >= content.len) return false;
+
+            if (content[pos.*] == '?' or content[pos.*] == '!' or content[pos.*] == '/') {
+                while (pos.* < content.len and content[pos.*] != '>') : (pos.* += 1) {}
+                pos.* += 1;
+                continue;
+            }
+
+            const elem_start = pos.*;
+            while (pos.* < content.len and content[pos.*] != ' ' and content[pos.*] != '>' and content[pos.*] != '/') : (pos.* += 1) {}
+            if (std.mem.eql(u8, content[elem_start..pos.*], "tileset")) return true;
+
+            while (pos.* < content.len and content[pos.*] != '>') : (pos.* += 1) {}
+            pos.* += 1;
+        }
+        return false;
+    }
+
+    /// Consume up to and including the `</tileset>` of an element whose
+    /// body this parser does not read.
+    fn skipTilesetBody(content: []const u8, pos: *usize) void {
+        while (pos.* < content.len) {
+            while (pos.* < content.len and content[pos.*] != '<') : (pos.* += 1) {}
+            if (pos.* >= content.len) return;
+            pos.* += 1;
+            if (pos.* >= content.len) return;
+
+            const is_close = content[pos.*] == '/';
+            const tag_start = pos.*;
+            while (pos.* < content.len and content[pos.*] != '>') : (pos.* += 1) {}
+            const tag = content[tag_start..pos.*];
+            pos.* += 1;
+            if (is_close and std.mem.indexOf(u8, tag, "tileset") != null) return;
+        }
     }
 
     fn parseTileLayer(allocator: std.mem.Allocator, content: []const u8, pos: *usize) !TileLayer {
@@ -531,3 +754,79 @@ pub const TileMap = struct {
         if (self.base_path.len > 0) self.allocator.free(self.base_path);
     }
 };
+
+// ── Filesystem reads ────────────────────────────────────────
+
+/// Cap on a single TMX/TSX document read from disk — a guard against a
+/// pathological file, generous next to any real Tiled document.
+const max_document_bytes = 64 << 20;
+
+/// Read a whole document into an allocator-owned buffer (caller frees).
+///
+/// Zig 0.16's filesystem API takes an `std.Io` and the loader has no
+/// ambient one, so it stands up a short-lived blocking implementation for
+/// the read — the same `std.Io.Dir` entry point the repo's tooling uses.
+fn readFileOwned(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    return std.Io.Dir.cwd().readFileAlloc(threaded.io(), path, allocator, .limited(max_document_bytes));
+}
+
+// ── Relative-path composition (labelle-gfx#335) ─────────────
+
+/// Join `dir` (a directory relative to the map's own directory — the
+/// `.tsx` reference's dirname) with `rel` (a path relative to `dir` — the
+/// `.tsx`'s `<image source>`), collapsing `.` and `..` so the result stays
+/// relative to the MAP's directory.
+///
+/// Textual, not filesystem-backed: the result is a lookup key for an asset
+/// catalog as much as a path to open, so it must not depend on the process
+/// cwd (which is what `std.fs.path.resolve` would drag in). A leading `..`
+/// survives — a `.tsx` may legitimately live above the map.
+fn joinRelative(allocator: std.mem.Allocator, dir: []const u8, rel: []const u8) ![]u8 {
+    if (std.fs.path.isAbsolute(rel)) return allocator.dupe(u8, rel);
+
+    var parts: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer parts.deinit(allocator);
+
+    for ([_][]const u8{ dir, rel }) |path| {
+        var it = std.mem.tokenizeAny(u8, path, "/\\");
+        while (it.next()) |part| {
+            if (std.mem.eql(u8, part, ".")) continue;
+            if (std.mem.eql(u8, part, "..") and
+                parts.items.len > 0 and
+                !std.mem.eql(u8, parts.items[parts.items.len - 1], ".."))
+            {
+                _ = parts.pop();
+                continue;
+            }
+            try parts.append(allocator, part);
+        }
+    }
+
+    return std.mem.join(allocator, "/", parts.items);
+}
+
+test "joinRelative rebases a .tsx image path onto the map's directory" {
+    const alloc = std.testing.allocator;
+
+    // Sibling directory: tilesets/Overworld.tsx → tilesets/img/o.png
+    const sibling = try joinRelative(alloc, "tilesets", "img/o.png");
+    defer alloc.free(sibling);
+    try std.testing.expectEqualStrings("tilesets/img/o.png", sibling);
+
+    // `..` inside the .tsx cancels the reference's own directory.
+    const up = try joinRelative(alloc, "tilesets", "../images/o.png");
+    defer alloc.free(up);
+    try std.testing.expectEqualStrings("images/o.png", up);
+
+    // A .tsx ABOVE the map keeps its leading `..` (nothing to cancel).
+    const above = try joinRelative(alloc, "../shared", "./o.png");
+    defer alloc.free(above);
+    try std.testing.expectEqualStrings("../shared/o.png", above);
+
+    // An absolute image path is left exactly as authored.
+    const abs = try joinRelative(alloc, "tilesets", "/abs/o.png");
+    defer alloc.free(abs);
+    try std.testing.expectEqualStrings("/abs/o.png", abs);
+}

@@ -22,7 +22,10 @@ pub const ParseError = error{
     UnsupportedEncoding,
     /// Layer data declares a `compression` attribute (gzip/zlib/zstd).
     UnsupportedCompression,
-    /// A tileset references an external `.tsx` file (`source=` attribute).
+    /// A `<tileset source="…tsx"/>` reference could not be resolved:
+    /// no `LoadOptions.tsx_resolver` supplied its bytes AND the load has
+    /// no directory to read it from (`TileMap.loadFromMemory`), or the
+    /// referenced document holds no usable `<tileset>` root element.
     ExternalTilesetUnsupported,
     /// The map declares `infinite="1"` (chunked layer data).
     InfiniteMapUnsupported,
