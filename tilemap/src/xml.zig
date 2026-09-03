@@ -21,6 +21,16 @@ pub const ParsedAttributes = struct {
     self_closed: bool,
 };
 
+/// True at any byte that ends an XML element name. Tiled is not the only
+/// writer of `.tmx`/`.tsx` files, and XML lets an element break across
+/// lines — `<image\n    source="tiles.png"/>` — so EVERY whitespace byte
+/// ends the name, not just SPACE. A SPACE-only scan yields the name
+/// `"image\n"`, matches nothing, and silently drops the element
+/// (labelle-gfx#340).
+pub fn isElementNameEnd(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '>' or c == '/';
+}
+
 pub fn parseAttributes(allocator: std.mem.Allocator, content: []const u8, pos: *usize) !ParsedAttributes {
     var attrs: std.ArrayListUnmanaged(Attribute) = .empty;
     errdefer {
@@ -103,4 +113,15 @@ test "parseAttributes frees a duped value when the append OOMs" {
     var pos: usize = 0;
     try std.testing.expectError(error.OutOfMemory, parseAttributes(alloc, content, &pos));
     try std.testing.expect(failing.has_induced_failure);
+}
+
+// ── Regression: every whitespace byte ends an element name (#340) ──
+
+test "isElementNameEnd accepts every XML whitespace, not just SPACE" {
+    for ([_]u8{ ' ', '\t', '\n', '\r', '>', '/' }) |c| {
+        try std.testing.expect(isElementNameEnd(c));
+    }
+    for ("imageMAP_0-:.") |c| {
+        try std.testing.expect(!isElementNameEnd(c));
+    }
 }

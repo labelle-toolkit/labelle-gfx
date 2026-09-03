@@ -436,6 +436,225 @@ pub const TILEMAP_PARSING = struct {
     }
 };
 
+// ── Line-broken element names (labelle-gfx#340) ──────────────────────
+//
+// XML permits ANY whitespace after an element name, and Tiled is not the
+// only writer of `.tmx` files. The scanners used to stop at a literal
+// SPACE only, so `<image\n source=…>` scanned the name as `"image\n"`,
+// matched nothing, and the element was silently dropped — a missing
+// image or a vanished layer, with no error. Every fixture below fails on
+// the pre-fix parser.
+
+/// Rewrite a fixture's line endings. Zig multiline string literals can
+/// only carry `\n`, but the realistic real-world case is a file authored
+/// on Windows (CRLF) — or, for the paranoid, an old-Mac-era bare CR.
+fn withLineEndings(comptime src: []const u8, comptime eol: []const u8) []const u8 {
+    comptime {
+        @setEvalBranchQuota(100_000);
+        var out: []const u8 = "";
+        for (src) |c| out = out ++ (if (c == '\n') eol else &[_]u8{c});
+        return out;
+    }
+}
+
+// Every element — root-level and child alike — broken across lines.
+// Pre-fix this parses as a completely empty map (width 0, no tilesets,
+// no layers, no object groups) without raising a single error.
+const linebroken_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map
+    \\    version="1.10" orientation="orthogonal" width="3" height="2" tilewidth="16" tileheight="16">
+    \\ <tileset
+    \\     firstgid="1" name="test_tiles" tilewidth="16" tileheight="16" columns="4" tilecount="8">
+    \\  <image
+    \\      source="tiles.png" width="640" height="608"/>
+    \\ </tileset>
+    \\ <layer
+    \\     name="ground" width="3" height="2">
+    \\  <data
+    \\      encoding="csv">
+    \\1,2,3,
+    \\4,5,6,
+    \\</data>
+    \\ </layer>
+    \\ <objectgroup
+    \\     name="objects">
+    \\  <object
+    \\      id="7" name="spawn" type="point" x="16" y="32"/>
+    \\ </objectgroup>
+    \\</map>
+;
+
+// A TAB between the element name and its first attribute — same class of
+// break, no newline involved.
+const tab_tmx =
+    "<map\twidth=\"1\" height=\"2\" tilewidth=\"16\" tileheight=\"16\">\n" ++
+    " <tileset\tfirstgid=\"1\" name=\"t\" tilewidth=\"16\" tileheight=\"16\" columns=\"1\" tilecount=\"1\">\n" ++
+    "  <image\tsource=\"t.png\" width=\"16\" height=\"16\"/>\n" ++
+    " </tileset>\n" ++
+    " <layer\tname=\"l\" width=\"1\" height=\"2\">\n" ++
+    "  <data\tencoding=\"csv\">1,2</data>\n" ++
+    " </layer>\n" ++
+    " <objectgroup\tname=\"o\">\n" ++
+    "  <object\tid=\"1\" name=\"spawn\" x=\"0\" y=\"0\"/>\n" ++
+    " </objectgroup>\n" ++
+    "</map>";
+
+/// Assert a fixture parsed exactly like the space-delimited original —
+/// used by the LF/CRLF/CR variants so the three line endings are held to
+/// one shared expectation.
+fn expectLinebrokenMapParsed(map: *const tilemap.TileMap) !void {
+    // <map> — root scan
+    try std.testing.expectEqual(@as(u32, 3), map.width);
+    try std.testing.expectEqual(@as(u32, 2), map.height);
+    try std.testing.expectEqual(@as(u32, 16), map.tile_width);
+    try std.testing.expectEqual(tilemap.Orientation.orthogonal, map.orientation);
+
+    // <tileset> — root scan; <image> — parseTileset child scan
+    try std.testing.expectEqual(@as(usize, 1), map.tilesets.len);
+    try std.testing.expectEqualStrings("test_tiles", map.tilesets[0].name);
+    try std.testing.expectEqualStrings("tiles.png", map.tilesets[0].image_source);
+    try std.testing.expectEqual(@as(u32, 640), map.tilesets[0].image_width);
+    try std.testing.expectEqual(@as(u32, 608), map.tilesets[0].image_height);
+
+    // <layer> — root scan; <data> — parseTileLayer child scan
+    try std.testing.expectEqual(@as(usize, 1), map.tile_layers.len);
+    try std.testing.expectEqualStrings("ground", map.tile_layers[0].name);
+    try std.testing.expectEqualSlices(
+        u32,
+        &[_]u32{ 1, 2, 3, 4, 5, 6 },
+        map.tile_layers[0].data,
+    );
+
+    // <objectgroup> — root scan; <object> — parseObjectLayer child scan
+    try std.testing.expectEqual(@as(usize, 1), map.object_layers.len);
+    try std.testing.expectEqualStrings("objects", map.object_layers[0].name);
+    try std.testing.expectEqual(@as(usize, 1), map.object_layers[0].objects.len);
+    try std.testing.expectEqualStrings("spawn", map.object_layers[0].objects[0].name);
+    try std.testing.expectEqual(@as(f32, 16.0), map.object_layers[0].objects[0].x);
+}
+
+pub const LINEBROKEN_ELEMENT_NAMES = struct {
+    test "LF-broken element names parse identically to space-delimited ones" {
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, linebroken_tmx);
+        defer map.deinit();
+
+        try expectLinebrokenMapParsed(&map);
+    }
+
+    test "CRLF-broken element names (a Windows-authored file) parse identically" {
+        var map = try tilemap.TileMap.loadFromMemory(
+            std.testing.allocator,
+            comptime withLineEndings(linebroken_tmx, "\r\n"),
+        );
+        defer map.deinit();
+
+        try expectLinebrokenMapParsed(&map);
+    }
+
+    test "bare-CR-broken element names parse identically" {
+        var map = try tilemap.TileMap.loadFromMemory(
+            std.testing.allocator,
+            comptime withLineEndings(linebroken_tmx, "\r"),
+        );
+        defer map.deinit();
+
+        try expectLinebrokenMapParsed(&map);
+    }
+
+    test "a TAB after the element name ends it" {
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, tab_tmx);
+        defer map.deinit();
+
+        try std.testing.expectEqual(@as(u32, 1), map.width);
+        try std.testing.expectEqual(@as(usize, 1), map.tilesets.len);
+        try std.testing.expectEqualStrings("t.png", map.tilesets[0].image_source);
+        try std.testing.expectEqualSlices(u32, &[_]u32{ 1, 2 }, map.tile_layers[0].data);
+        try std.testing.expectEqual(@as(usize, 1), map.object_layers[0].objects.len);
+    }
+
+    // ── One site at a time: everything else stays space-delimited, so
+    //    each of these pins exactly one scan.
+
+    test "root scan: only <map>/<tileset>/<layer>/<objectgroup> broken" {
+        const tmx =
+            \\<map
+            \\ width="1" height="1" tilewidth="16" tileheight="16">
+            \\ <tileset
+            \\ firstgid="1" name="t" tilewidth="16" tileheight="16" columns="1" tilecount="1">
+            \\  <image source="t.png" width="16" height="16"/>
+            \\ </tileset>
+            \\ <layer
+            \\ name="l" width="1" height="1"><data encoding="csv">1</data></layer>
+            \\ <objectgroup
+            \\ name="o"><object id="1" name="spawn" x="0" y="0"/></objectgroup>
+            \\</map>
+        ;
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, tmx);
+        defer map.deinit();
+
+        try std.testing.expectEqual(@as(u32, 1), map.width);
+        try std.testing.expectEqual(@as(usize, 1), map.tilesets.len);
+        try std.testing.expectEqual(@as(usize, 1), map.tile_layers.len);
+        try std.testing.expectEqual(@as(usize, 1), map.object_layers.len);
+    }
+
+    test "parseTileset child scan: a line-broken <image> is still found" {
+        const tmx =
+            \\<map width="1" height="1" tilewidth="16" tileheight="16">
+            \\ <tileset firstgid="1" name="t" tilewidth="16" tileheight="16" columns="1" tilecount="1">
+            \\  <image
+            \\      source="tiles.png" width="640" height="608"/>
+            \\ </tileset>
+            \\ <layer name="l" width="1" height="1"><data encoding="csv">1</data></layer>
+            \\</map>
+        ;
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, tmx);
+        defer map.deinit();
+
+        try std.testing.expectEqualStrings("tiles.png", map.tilesets[0].image_source);
+        try std.testing.expectEqual(@as(u32, 640), map.tilesets[0].image_width);
+        try std.testing.expectEqual(@as(u32, 608), map.tilesets[0].image_height);
+    }
+
+    test "parseTileLayer child scan: a line-broken <data> is still found" {
+        const tmx =
+            \\<map width="1" height="2" tilewidth="16" tileheight="16">
+            \\ <layer name="l" width="1" height="2">
+            \\  <data
+            \\      encoding="csv">1,2</data>
+            \\ </layer>
+            \\</map>
+        ;
+        // Pre-fix the <data> child is skipped, the layer ends up empty and
+        // the count check turns this into error.TileDataCountMismatch.
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, tmx);
+        defer map.deinit();
+
+        try std.testing.expectEqualSlices(u32, &[_]u32{ 1, 2 }, map.tile_layers[0].data);
+    }
+
+    test "parseObjectLayer child scan: a line-broken <object> is still found" {
+        const tmx =
+            \\<map width="1" height="1" tilewidth="16" tileheight="16">
+            \\ <layer name="l" width="1" height="1"><data encoding="csv">1</data></layer>
+            \\ <objectgroup name="objects">
+            \\  <object
+            \\      id="7" name="spawn" class="prop" x="16" y="32"/>
+            \\ </objectgroup>
+            \\</map>
+        ;
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, tmx);
+        defer map.deinit();
+
+        const layer = map.getObjectLayer("objects").?;
+        try std.testing.expectEqual(@as(usize, 1), layer.objects.len);
+        try std.testing.expectEqual(@as(u32, 7), layer.objects[0].id);
+        try std.testing.expectEqualStrings("spawn", layer.objects[0].name);
+        try std.testing.expectEqualStrings("prop", layer.objects[0].obj_type);
+    }
+};
+
 // ── Parser rejections (hardening) ────────────────────────────────────
 
 pub const PARSER_REJECTIONS = struct {

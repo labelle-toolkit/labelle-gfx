@@ -28,6 +28,7 @@ const TileFlags = types.TileFlags;
 const parseAttributes = xml.parseAttributes;
 const freeAttributes = xml.freeAttributes;
 const getAttr = xml.getAttr;
+const isElementNameEnd = xml.isElementNameEnd;
 
 // ── External tileset resolution (labelle-gfx#335) ──────────
 
@@ -225,7 +226,7 @@ pub const TileMap = struct {
             }
 
             const elem_start = pos;
-            while (pos < content.len and content[pos] != ' ' and content[pos] != '>' and content[pos] != '/') : (pos += 1) {}
+            while (pos < content.len and !isElementNameEnd(content[pos])) : (pos += 1) {}
             const elem_name = content[elem_start..pos];
 
             if (std.mem.eql(u8, elem_name, "map")) {
@@ -619,7 +620,7 @@ pub const TileMap = struct {
             }
 
             const data_elem_start = pos.*;
-            while (pos.* < content.len and content[pos.*] != ' ' and content[pos.*] != '>' and content[pos.*] != '/') : (pos.* += 1) {}
+            while (pos.* < content.len and !isElementNameEnd(content[pos.*])) : (pos.* += 1) {}
             const data_elem_name = content[data_elem_start..pos.*];
 
             if (std.mem.eql(u8, data_elem_name, "data")) {
@@ -706,7 +707,7 @@ pub const TileMap = struct {
             }
 
             const obj_elem_start = pos.*;
-            while (pos.* < content.len and content[pos.*] != ' ' and content[pos.*] != '>' and content[pos.*] != '/') : (pos.* += 1) {}
+            while (pos.* < content.len and !isElementNameEnd(content[pos.*])) : (pos.* += 1) {}
             const obj_elem_name = content[obj_elem_start..pos.*];
 
             if (std.mem.eql(u8, obj_elem_name, "object")) {
