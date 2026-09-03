@@ -190,13 +190,18 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
                 // A Tiled "collection of images" tileset (one `<image>` per
                 // `<tile>`) parses with `columns = 0` and has no sheet grid
                 // to slice, so every tile from it draws nothing. Say so once
-                // here rather than per tile per frame (labelle-gfx#339).
+                // here rather than per tile per frame (labelle-gfx#339), and
+                // skip texture resolution entirely: the draw pass drops every
+                // tile of this tileset on its empty source rect, so resolving
+                // and retaining one arbitrary per-tile image would only cost
+                // memory and IO.
                 if (tileset.columns == 0) {
                     std.log.scoped(.labelle_gfx).warn(
                         "tilemap: tileset '{s}' declares columns=0 (a Tiled collection-of-images tileset, one image per tile). " ++
                             "Per-tile images are not supported — its tiles draw nothing. Re-export it as a single tileset image to render it.",
                         .{tileset.name},
                     );
+                    continue;
                 }
 
                 if (options.resolver) |resolver| {

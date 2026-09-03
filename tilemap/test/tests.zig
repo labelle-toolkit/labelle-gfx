@@ -333,6 +333,20 @@ fn nullResolver(_: ?*anyopaque, _: usize, _: *const tilemap.Tileset) ?RecordingB
     return null;
 }
 
+/// Records which tileset indices the renderer actually asks about, so a
+/// test can assert an unsupported tileset never reaches resolution.
+const CountingResolver = struct {
+    calls: usize = 0,
+    last_index: ?usize = null,
+
+    fn resolve(context: ?*anyopaque, tileset_index: usize, _: *const tilemap.Tileset) ?RecordingBackend.Texture {
+        const self: *CountingResolver = @ptrCast(@alignCast(context.?));
+        self.calls += 1;
+        self.last_index = tileset_index;
+        return .{ .id = @intCast(100 + tileset_index), .width = 32, .height = 32 };
+    }
+};
+
 fn resolvedRenderer(alloc: std.mem.Allocator, map: *const tilemap.TileMap) !Renderer {
     return Renderer.initWithOptions(alloc, map, .{
         .resolver = .{ .resolveFn = indexResolver },
@@ -959,6 +973,28 @@ pub const COLLECTION_OF_IMAGES = struct {
         // gid 1 is the collection tileset (skipped); gid 5 is the sheet.
         try std.testing.expectEqual(@as(usize, 1), RecordingBackend.calls.items.len);
         try std.testing.expectEqual(@as(u32, 101), RecordingBackend.calls.items[0].texture_id);
+    }
+
+    test "an unsupported collection tileset never reaches texture resolution" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, mixed_collection_tmx);
+        defer map.deinit();
+
+        var counter = CountingResolver{};
+        var renderer = try Renderer.initWithOptions(std.testing.allocator, &map, .{
+            .resolver = .{ .context = &counter, .resolveFn = CountingResolver.resolve },
+            .load_unresolved_from_filesystem = false,
+        });
+        defer renderer.deinit();
+
+        // Tileset 0 is the collection tileset: `init` warns and skips it
+        // before resolution, so no texture is resolved or retained for a
+        // tileset whose every tile the draw pass drops. Tileset 1 (the
+        // sheet) still resolves normally.
+        try std.testing.expectEqual(@as(usize, 1), counter.calls);
+        try std.testing.expectEqual(@as(usize, 1), counter.last_index.?);
     }
 };
 
