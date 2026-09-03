@@ -3370,7 +3370,7 @@ test "TileMap loadFromMemory parses basic TMX" {
 
 // ── Tilemap draw pass (T2 Phase 1) ─────────────────────────
 
-test "TileMap: rejects base64 data and external tilesets through the gfx re-export" {
+test "TileMap: rejects base64 data and unresolvable external tilesets through the gfx re-export" {
     const base64_tmx =
         \\<map width="2" height="2" tilewidth="16" tileheight="16">
         \\ <layer name="l" width="2" height="2">
@@ -3393,6 +3393,41 @@ test "TileMap: rejects base64 data and external tilesets through the gfx re-expo
         error.ExternalTilesetUnsupported,
         gfx.TileMap.loadFromMemory(testing.allocator, external_tmx),
     );
+}
+
+// labelle-gfx#335: the same map loads once the caller supplies the `.tsx`
+// bytes — the embedded-asset route, driven entirely through the gfx
+// re-exports (`TileMapLoadOptions` / `TilesetSourceResolver`).
+const external_tsx_bytes =
+    \\<tileset name="shared" tilewidth="16" tileheight="16" tilecount="4" columns="2">
+    \\ <image source="shared.png" width="32" height="32"/>
+    \\</tileset>
+;
+
+fn externalTsxBytes(_: ?*anyopaque, source: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, source, "external.tsx")) return external_tsx_bytes;
+    return null;
+}
+
+test "TileMap: resolves an external .tsx from caller-supplied bytes through the gfx re-export" {
+    const external_tmx =
+        \\<map width="1" height="1" tilewidth="16" tileheight="16">
+        \\ <tileset firstgid="9" source="external.tsx"/>
+        \\ <layer name="l" width="1" height="1"><data encoding="csv">9</data></layer>
+        \\</map>
+    ;
+
+    const options: gfx.TileMapLoadOptions = .{
+        .tsx_resolver = gfx.TilesetSourceResolver{ .resolveFn = externalTsxBytes },
+    };
+    var map = try gfx.TileMap.loadFromMemoryWithOptions(testing.allocator, external_tmx, "", options);
+    defer map.deinit();
+
+    try testing.expectEqual(@as(usize, 1), map.tilesets.len);
+    try testing.expectEqualStrings("shared", map.tilesets[0].name);
+    // firstgid comes from the referencing element in the .tmx.
+    try testing.expectEqual(@as(u32, 9), map.tilesets[0].firstgid);
+    try testing.expectEqual(@as(u32, 0), map.getLocalTileId(9).?);
 }
 
 // The load-bearing T2 Phase 1 integration: the tilemap draw pass runs on

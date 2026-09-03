@@ -124,8 +124,15 @@ pub const Tileset = tilemap_mod.Tileset;
 pub const TileFlags = tilemap_mod.TileFlags;
 pub const TileMapRendererWith = tilemap_mod.TileMapRendererWith;
 pub const TileMapDrawOptions = tilemap_mod.DrawOptions;
+/// External-`.tsx` resolution knobs for the TMX loaders (labelle-gfx#335):
+/// `TileMap.loadWithOptions` / `loadFromMemoryWithOptions` take these to
+/// resolve `<tileset source="…tsx"/>` from the map's directory or from
+/// caller-supplied (embedded) bytes.
+pub const TileMapLoadOptions = tilemap_mod.LoadOptions;
+pub const TilesetSourceResolver = tilemap_mod.TilesetSourceResolver;
 /// Parse errors for TMX features the parser deliberately rejects
-/// (base64/compressed layer data, external .tsx tilesets, infinite maps).
+/// (base64/compressed layer data, infinite maps, and a `.tsx` reference
+/// a pure-memory load has no way to resolve).
 pub const TileMapParseError = tilemap_mod.ParseError;
 /// Pure tilemap draw-pass math (viewport culling / flip-flag decode),
 /// exposed for engine-side reuse and testing.

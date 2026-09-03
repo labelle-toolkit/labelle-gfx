@@ -13,14 +13,19 @@
 //! - Multiple tile layers and object layers
 //! - Embedded tilesets with caller-controlled texture resolution
 //!   (engine asset catalog) or filesystem fallback
+//! - External `.tsx` tilesets (Tiled's shared-tileset workflow),
+//!   resolved from the map's directory or from caller-supplied bytes
+//!   (`LoadOptions.tsx_resolver`)
 //! - Tile flip flags (horizontal / vertical / diagonal)
 //! - Viewport culling with world-offset support
 //!
 //! ## Deliberate limitations (rejected with a clear error)
 //! - Only CSV-encoded layer data (`error.UnsupportedEncoding` /
 //!   `error.UnsupportedCompression` for base64 / gzip / zlib)
-//! - Only embedded tilesets (`error.ExternalTilesetUnsupported`
-//!   for `.tsx` references)
+//! - No `.tsx` reference in a pure-memory load with no byte provider
+//!   (`error.ExternalTilesetUnsupported` from `loadFromMemory`, which
+//!   has no directory to resolve against — pass a
+//!   `LoadOptions.tsx_resolver`, or use a base-path/filesystem load)
 //! - No infinite maps (`error.InfiniteMapUnsupported`)
 //!
 //! ## Module layout (labelle-gfx#297)
@@ -57,6 +62,8 @@ pub const RenderOrder = types.RenderOrder;
 
 // ── TileMap loader (tile_map.zig) ───────────────────────────
 pub const TileMap = tile_map.TileMap;
+pub const LoadOptions = tile_map.LoadOptions;
+pub const TilesetSourceResolver = tile_map.TilesetSourceResolver;
 
 // ── Draw pass, options & pure math (renderer.zig) ───────────
 pub const TileRange = renderer.TileRange;
