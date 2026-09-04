@@ -5115,3 +5115,227 @@ test "CameraBinding: a .world fallback layer stays inside cam0's viewport, not f
     try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCalls().len);
     try testing.expectEqual(@as(usize, 1), MockBackend.getCameraPasses().len);
 }
+
+// ── Text gizmos (labelle-gfx#338) ──────────────────────────────────────────
+//
+// The `.text` arm was a literal `.text => {}` no-op: `game.drawGizmoText(...)`
+// compiled, stored, and rendered nothing. It now routes to the backend's
+// existing built-in font through the REQUIRED `drawText` draw-surface decl —
+// raylib's embedded default font, labelle-bgfx's embedded 8×8 atlas — so a
+// debug label costs no font asset.
+//
+// Two things the geometric arms don't do, and that these tests pin:
+//
+//   1. A `.world` label is PROJECTED through the active camera and drawn in
+//      SCREEN space, outside `beginMode2D`. It therefore pans with its subject
+//      like every other world gizmo, but its glyphs keep a constant on-screen
+//      size instead of scaling with zoom.
+//   2. An off-viewport label is CULLED rather than submitted — a far-away world
+//      label projects to an enormous coordinate, and raylib's `drawText`
+//      narrows x/y with `@intFromFloat`.
+
+const renderer_mod = gfx.renderer_mod;
+
+test "gizmoTextExtent: over-estimates width so the cull never discards a visible label" {
+    // `size` per character is exact on labelle-bgfx (glyph advance ==
+    // FONT_CHAR_W * size / FONT_CHAR_H == size) and an over-estimate on raylib
+    // (default font advances ~size/2). Over-estimating is the safe direction.
+    const e = renderer_mod.gizmoTextExtent(4, 10);
+    try testing.expectEqual(@as(f32, 40), e.w);
+    try testing.expectEqual(@as(f32, 10), e.h);
+
+    // Clamped at the truncation limit — a longer string is drawn truncated, so
+    // its box must not keep growing past what is actually submitted.
+    const clamped = renderer_mod.gizmoTextExtent(renderer_mod.gizmo_text_max_len + 500, 10);
+    const max_len_f: f32 = @floatFromInt(renderer_mod.gizmo_text_max_len);
+    try testing.expectEqual(max_len_f * 10, clamped.w);
+}
+
+test "gizmoTextVisible: keeps partly-on-screen labels, drops fully-off-screen ones" {
+    const size = renderer_mod.gizmo_text_size;
+    const vw: f32 = 800;
+    const vh: f32 = 600;
+
+    // Fully inside.
+    try testing.expect(renderer_mod.gizmoTextVisible(100, 100, 8, size, vw, vh));
+    // Exactly on the origin corner, and exactly on the far corner: both touch.
+    try testing.expect(renderer_mod.gizmoTextVisible(0, 0, 8, size, vw, vh));
+    try testing.expect(renderer_mod.gizmoTextVisible(vw, vh, 8, size, vw, vh));
+
+    // Straddling the left/top edge — the label still has glyphs on screen, so
+    // it must NOT be culled. (8 chars × 10 px = 80 px of extent.)
+    try testing.expect(renderer_mod.gizmoTextVisible(-40, 300, 8, size, vw, vh));
+    try testing.expect(renderer_mod.gizmoTextVisible(300, -5, 8, size, vw, vh));
+
+    // Entirely past an edge — culled.
+    try testing.expect(!renderer_mod.gizmoTextVisible(-81, 300, 8, size, vw, vh));
+    try testing.expect(!renderer_mod.gizmoTextVisible(300, -11, 8, size, vw, vh));
+    try testing.expect(!renderer_mod.gizmoTextVisible(vw + 1, 300, 8, size, vw, vh));
+    try testing.expect(!renderer_mod.gizmoTextVisible(300, vh + 1, 8, size, vw, vh));
+
+    // An empty string has nothing to draw.
+    try testing.expect(!renderer_mod.gizmoTextVisible(100, 100, 0, size, vw, vh));
+
+    // Non-finite coordinates fall out as "not visible" — every comparison
+    // against NaN is false. This is the guard that keeps a poisoned coordinate
+    // away from raylib's `@intFromFloat`.
+    const nan = std.math.nan(f32);
+    try testing.expect(!renderer_mod.gizmoTextVisible(nan, 100, 8, size, vw, vh));
+    try testing.expect(!renderer_mod.gizmoTextVisible(100, nan, 8, size, vw, vh));
+    // …as does a coordinate so large it could not be narrowed to i32.
+    try testing.expect(!renderer_mod.gizmoTextVisible(1e30, 100, 8, size, vw, vh));
+    try testing.expect(!renderer_mod.gizmoTextVisible(-1e30, 100, 8, size, vw, vh));
+}
+
+test "GfxRenderer: a world-space text gizmo lands on its subject's screen pixel under camera pan+zoom" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    MockBackend.setScreenSize(800, 600);
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    // Pan + zoom off the default so the world→screen transform is genuinely
+    // non-identity.
+    const cam = renderer.getCamera();
+    cam.x = 120;
+    cam.y = 75;
+    cam.zoom = 1.5;
+
+    const wx: f32 = 100;
+    const wy: f32 = 50;
+    const draws = [_]core.GizmoDraw{.{
+        .kind = .text,
+        .x1 = wx,
+        .y1 = wy,
+        .color = 0xFF3366CC,
+        .space = .world,
+        .text = "entropy 7",
+    }};
+    renderer.renderGizmoDraws(&draws);
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getTextCallCount());
+    const call = MockBackend.getTextCalls()[0];
+
+    // The recorded position is the SPRITE-FACING projection of the world coord
+    // — `camera.worldToScreen`, the same ground truth the #314 rect regression
+    // uses. Asserting the projected value (rather than the raw flipped world
+    // coord a `beginMode2D` draw would record) is exactly what pins "projected
+    // in the gizmo pass, then drawn in screen space".
+    const expected = cam.worldToScreen(wx, wy);
+    try testing.expectApproxEqAbs(expected.x, call.x, 1e-3);
+    try testing.expectApproxEqAbs(expected.y, call.y, 1e-3);
+
+    // Constant on-screen size: the 1.5× zoom must NOT scale the glyphs, which
+    // it would if the text were submitted inside the camera transform.
+    try testing.expectEqual(renderer_mod.gizmo_text_size, call.size);
+
+    // `color` is honoured, unpacked from packed ARGB like every other arm.
+    try testing.expectEqual(@as(u8, 0x33), call.color.r);
+    try testing.expectEqual(@as(u8, 0x66), call.color.g);
+    try testing.expectEqual(@as(u8, 0xCC), call.color.b);
+    try testing.expectEqual(@as(u8, 0xFF), call.color.a);
+}
+
+test "GfxRenderer: a world-space text gizmo outside the viewport is culled, not clamped" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    MockBackend.setScreenSize(800, 600);
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    // Two labels: one at the camera's centre, one far off to the left. Without
+    // the cull the second one still reaches the backend — and a character-cell
+    // debug pass would clamp its negative column to 0 and stack it in the
+    // corner on top of the first.
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .text, .x1 = 0, .y1 = 0, .space = .world, .text = "here" },
+        .{ .kind = .text, .x1 = -100_000, .y1 = 0, .space = .world, .text = "far away" },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getTextCallCount());
+    // The survivor is the on-screen one, at a sane coordinate.
+    const call = MockBackend.getTextCalls()[0];
+    try testing.expect(call.x > -100 and call.x < 800);
+}
+
+test "GfxRenderer: a screen-space text gizmo is drawn verbatim, with no camera and no flip" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    MockBackend.setScreenSize(800, 600);
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+    // Pan the camera: a `.screen` gizmo must be untouched by it.
+    renderer.getCamera().setPosition(500, 400);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .text, .x1 = 12, .y1 = 24, .space = .screen, .text = "fps 60" },
+        // Off the right edge of an 800-wide screen — culled by the same
+        // predicate the world pass uses.
+        .{ .kind = .text, .x1 = 900, .y1 = 24, .space = .screen, .text = "offscreen" },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    try testing.expectEqual(@as(usize, 1), MockBackend.getTextCallCount());
+    const call = MockBackend.getTextCalls()[0];
+    try testing.expectEqual(@as(f32, 12), call.x);
+    try testing.expectEqual(@as(f32, 24), call.y);
+}
+
+test "GfxRenderer: an empty text gizmo submits nothing" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    MockBackend.setScreenSize(800, 600);
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .text, .x1 = 10, .y1 = 10, .space = .screen, .text = "" },
+        .{ .kind = .text, .x1 = 10, .y1 = 10, .space = .world, .text = "" },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    try testing.expectEqual(@as(usize, 0), MockBackend.getTextCallCount());
+}
+
+test "GfxRenderer: text gizmos obey the same per-camera pass rules as the line arm (no filter bypass)" {
+    // gfx applies NO enable/category/group filtering of its own — labelle-engine
+    // drops a disabled category before the draw ever reaches `renderGizmoDraws`
+    // (`GizmoState.draw*WithCategory`). The filtering gfx *does* own is which
+    // cameras a world gizmo is painted through (#226 / #303), and text must not
+    // get a private path around it: one pass per split-screen pane, exactly like
+    // the line arm.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    MockBackend.setScreenSize(800, 600);
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+    renderer.setScreenHeight(600);
+
+    renderer.getCameraManager().setupSplitScreen(.vertical_split);
+
+    const draws = [_]core.GizmoDraw{
+        .{ .kind = .line, .x1 = 0, .y1 = 0, .x2 = 50, .y2 = 50, .space = .world },
+        .{ .kind = .text, .x1 = 0, .y1 = 0, .space = .world, .category = 7, .text = "hp" },
+    };
+    renderer.renderGizmoDraws(&draws);
+
+    try testing.expectEqual(@as(usize, 2), MockBackend.getCameraPasses().len);
+    try testing.expectEqual(@as(usize, 2), MockBackend.getLineCallCount());
+    // Same count as the line: drawn once per pane, never more, never fewer.
+    try testing.expectEqual(@as(usize, 2), MockBackend.getTextCallCount());
+}
