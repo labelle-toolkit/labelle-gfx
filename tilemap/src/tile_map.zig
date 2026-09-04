@@ -42,11 +42,28 @@ const isElementNameEnd = xml.isElementNameEnd;
 /// supplies them through this seam instead.
 pub const TilesetSourceResolver = struct {
     context: ?*anyopaque = null,
-    /// `source` is the attribute exactly as written in the `.tmx`
-    /// (e.g. "../tilesets/Overworld.tsx"), NOT joined onto `base_path` —
+    /// `source` is the `<tileset source>` attribute as the document MEANS
+    /// it (e.g. "../tilesets/Overworld.tsx"), NOT joined onto `base_path` —
     /// an embedded catalog keys off the reference, not off a filesystem
     /// layout. Return the `.tsx` XML bytes, or null to fall through to
     /// the filesystem read (when enabled).
+    ///
+    /// "As the document means it" is XML-entity-DECODED since
+    /// labelle-gfx#337: a reference Tiled wrote as
+    /// `source="odd&amp;name.tsx"` arrives here as `odd&name.tsx`, which
+    /// is also the name the filesystem fallback opens — one key for both
+    /// paths. For a reference containing no `& < > " '` (every reference
+    /// Tiled writes for a conventionally named file) decoding is the
+    /// identity, so the key is byte-for-byte what it always was and no
+    /// existing catalog registration moves.
+    ///
+    /// A catalog builder that scans the raw `.tmx` itself (labelle-
+    /// assembler's `tilemap_scan`, which registers under the VERBATIM
+    /// attribute bytes) therefore agrees with this key for every
+    /// entity-free reference, and only diverges for a reference carrying
+    /// an entity — a case that resolved to `FileNotFound` on both sides
+    /// before #337. Aligning that remaining case needs a matching decode
+    /// in the assembler; it is not something this repo can make.
     ///
     /// The returned bytes are BORROWED: they are parsed during the call
     /// and never freed by the loader, so a comptime `@embedFile` (or any

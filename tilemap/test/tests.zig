@@ -1875,3 +1875,140 @@ pub const CULL_ORIGIN = struct {
         try std.testing.expectEqual(@as(f32, 136), calls[0].dest.y);
     }
 };
+
+// ── XML entity decoding (labelle-gfx#337) ────────────────────────────
+//
+// Tiled escapes `& < > " '` when it writes an attribute, so a value kept
+// verbatim is not the string the document meant. These cover the three
+// places that hurts: a tileset `<image source>` the renderer opens, a
+// `<tileset source>` the `.tsx` resolver keys off, and the `name`
+// attributes callers match on by string.
+
+/// Records every `source` the loader hands `tsx_resolver.resolve`, so a
+/// test can assert the KEY, not just the resolution.
+const RecordingTsxResolver = struct {
+    var last_key_buf: [128]u8 = undefined;
+    var last_key_len: usize = 0;
+
+    fn resolve(_: ?*anyopaque, source: []const u8) ?[]const u8 {
+        @memcpy(last_key_buf[0..source.len], source);
+        last_key_len = source.len;
+        // The `.tsx` named by an entity-bearing reference — its own
+        // `<image source>` is escaped too, so the rebase path is exercised
+        // on a decoded value.
+        if (std.mem.eql(u8, source, "tilesets/odd&name.tsx")) {
+            return "<tileset name=\"odd\" tilewidth=\"16\" tileheight=\"16\" columns=\"4\" tilecount=\"8\">\n" ++
+                " <image source=\"a&amp;b.png\" width=\"64\" height=\"32\"/>\n" ++
+                "</tileset>";
+        }
+        return null;
+    }
+
+    fn lastKey() []const u8 {
+        return last_key_buf[0..last_key_len];
+    }
+
+    const value: tilemap.TilesetSourceResolver = .{ .resolveFn = resolve };
+};
+
+pub const XML_ENTITY_DECODING = struct {
+    test "a tileset <image source> is decoded, not left escaped" {
+        // Without decoding this is the literal `tiles&amp;more.png`, which
+        // renderer.zig joins onto base_path and fails to open.
+        const tmx =
+            \\<map version="1.10" width="1" height="1" tilewidth="16" tileheight="16">
+            \\ <tileset firstgid="1" name="t" tilewidth="16" tileheight="16" columns="2" tilecount="4">
+            \\  <image source="tiles&amp;more.png" width="32" height="32"/>
+            \\ </tileset>
+            \\</map>
+        ;
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, tmx);
+        defer map.deinit();
+
+        try std.testing.expectEqualStrings("tiles&more.png", map.tilesets[0].image_source);
+    }
+
+    test "layer, object and tileset names are decoded" {
+        const tmx =
+            \\<map version="1.10" width="1" height="1" tilewidth="16" tileheight="16">
+            \\ <tileset firstgid="1" name="rock &amp; roll" tilewidth="16" tileheight="16" columns="2" tilecount="4">
+            \\  <image source="t.png" width="32" height="32"/>
+            \\ </tileset>
+            \\ <layer name="fore&amp;back" width="1" height="1">
+            \\  <data encoding="csv">1</data>
+            \\ </layer>
+            \\ <objectgroup name="props">
+            \\  <object id="1" name="Tom &amp; Jerry" type="a&lt;b" x="0" y="0"/>
+            \\ </objectgroup>
+            \\</map>
+        ;
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, tmx);
+        defer map.deinit();
+
+        try std.testing.expectEqualStrings("rock & roll", map.tilesets[0].name);
+        // Callers match layers by string, so the decoded name is the one
+        // that must look the map up.
+        try std.testing.expect(map.getLayer("fore&back") != null);
+        try std.testing.expect(map.getLayer("fore&amp;back") == null);
+
+        const objects = map.getObjectLayer("props").?.objects;
+        try std.testing.expectEqualStrings("Tom & Jerry", objects[0].name);
+        try std.testing.expectEqualStrings("a<b", objects[0].obj_type);
+    }
+
+    test "the .tsx resolver is keyed on the DECODED source" {
+        RecordingTsxResolver.last_key_len = 0;
+        var map = try tilemap.TileMap.loadFromMemoryWithOptions(
+            std.testing.allocator,
+            tmxReferencing("tilesets/odd&amp;name.tsx"),
+            "",
+            .{ .tsx_resolver = RecordingTsxResolver.value },
+        );
+        defer map.deinit();
+
+        // One key for both lookups: the resolver sees the same name the
+        // filesystem fallback would open.
+        try std.testing.expectEqualStrings("tilesets/odd&name.tsx", RecordingTsxResolver.lastKey());
+        try std.testing.expectEqualStrings("odd", map.tilesets[0].name);
+        // …and the `.tsx`'s own escaped <image source>, rebased onto the
+        // reference's directory.
+        try std.testing.expectEqualStrings("tilesets/a&b.png", map.tilesets[0].image_source);
+    }
+
+    test "an entity-free reference keys EXACTLY as before (assembler contract)" {
+        // labelle-assembler registers embedded `.tsx` bytes under the
+        // VERBATIM `<tileset source>` bytes. Decoding is the identity for
+        // a reference with no `& < > " '` — i.e. every reference Tiled
+        // writes for a conventionally named file — so no registration a
+        // catalog already makes moves. Guard that.
+        RecordingTsxResolver.last_key_len = 0;
+        try std.testing.expectError(
+            error.ExternalTilesetUnsupported,
+            tilemap.TileMap.loadFromMemoryWithOptions(
+                std.testing.allocator,
+                tmxReferencing("../shared/Overworld.tsx"),
+                "",
+                .{ .tsx_resolver = RecordingTsxResolver.value },
+            ),
+        );
+        try std.testing.expectEqualStrings("../shared/Overworld.tsx", RecordingTsxResolver.lastKey());
+    }
+
+    test "a malformed reference in a path is passed through, not rejected" {
+        // `&notanentity;` and a bare `&` must load — a stray ampersand is
+        // the commonest way a hand-edited .tmx is not well-formed, and the
+        // loader degrades rather than failing the whole map.
+        const tmx =
+            \\<map version="1.10" width="1" height="1" tilewidth="16" tileheight="16">
+            \\ <tileset firstgid="1" name="A &amp B" tilewidth="16" tileheight="16" columns="2" tilecount="4">
+            \\  <image source="odd&notanentity;.png" width="32" height="32"/>
+            \\ </tileset>
+            \\</map>
+        ;
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, tmx);
+        defer map.deinit();
+
+        try std.testing.expectEqualStrings("odd&notanentity;.png", map.tilesets[0].image_source);
+        try std.testing.expectEqualStrings("A &amp B", map.tilesets[0].name);
+    }
+};
