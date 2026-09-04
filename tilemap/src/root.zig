@@ -20,6 +20,8 @@
 //!   and a "collection of images" (`columns="0"`, one `<image>` per
 //!   `<tile>`, tiles free to differ in size) — inline or external
 //!   (labelle-gfx#343)
+//! - Per-tile animations (`<tile><animation><frame tileid= duration=/>`),
+//!   advanced by the caller's own clock — see below
 //! - Tile flip flags (horizontal / vertical / diagonal)
 //! - Viewport culling with world-offset support
 //!
@@ -59,6 +61,27 @@
 //!   init warns once per tileset naming how many of its images are
 //!   unresolved.
 //!
+//! ## Per-tile animations (labelle-gfx#351)
+//! A tileset may animate a TILE ID: `<tile id="20"><animation><frame
+//! tileid="24" duration="240"/>…`. The loader parses those into
+//! `Tileset.animations`; `TileMapRenderer.advanceAnimations(dt_seconds)`
+//! plays them back and the draw pass substitutes the active frame's gid.
+//!
+//! Three things follow from the design, all deliberate:
+//! - **The renderer owns no clock.** Time arrives only through
+//!   `advanceAnimations`, so the caller's pause / time-scale applies for
+//!   free and a headless test is exactly reproducible. Nothing animates
+//!   until someone ticks it.
+//! - **State is per tile id, not per cell** — every cell showing tile 20
+//!   flips together, which is what Tiled means and what makes a field of
+//!   water read as one surface.
+//! - **A map with no `<animation>` pays nothing**: no allocation, an early
+//!   return from the tick, and one null test in the draw pass
+//!   (`hasAnimations()` reports which side of that you are on).
+//!
+//! Animation composes with flipping: the frame swap happens on the
+//! flag-stripped gid, so a flipped animated tile keeps its flip.
+//!
 //! ## Module layout (labelle-gfx#297)
 //! The implementation is split into focused submodules; this root is a
 //! thin re-export of the full public API:
@@ -66,10 +89,12 @@
 //! - `xml.zig`      — generic XML attribute tokenizer (internal)
 //! - `tile_map.zig` — `TileMap` aggregate, TMX loaders/parsers, queries
 //! - `renderer.zig` — draw math, `DrawOptions`, `TileMapRendererWith`
+//! - `animation.zig` — `TileAnimator`, per-tile animation playback
 
 const types = @import("types.zig");
 const tile_map = @import("tile_map.zig");
 const renderer = @import("renderer.zig");
+const animation = @import("animation.zig");
 
 // Anchor so `zig build test`'s src-unit-test step collects the inline
 // `test` blocks from every submodule (e.g. xml.zig's #300 leak regression),
@@ -79,6 +104,7 @@ test {
     _ = @import("xml.zig");
     _ = @import("tile_map.zig");
     _ = @import("renderer.zig");
+    _ = @import("animation.zig");
 }
 
 // ── TMX data model (types.zig) ──────────────────────────────
@@ -86,6 +112,8 @@ pub const TileFlags = types.TileFlags;
 pub const ParseError = types.ParseError;
 pub const Tileset = types.Tileset;
 pub const TileImage = types.TileImage;
+pub const AnimationFrame = types.AnimationFrame;
+pub const TileAnimation = types.TileAnimation;
 pub const TileLayer = types.TileLayer;
 pub const MapObject = types.MapObject;
 pub const ObjectLayer = types.ObjectLayer;
@@ -104,3 +132,6 @@ pub const ResolvedFlip = renderer.ResolvedFlip;
 pub const resolveFlip = renderer.resolveFlip;
 pub const DrawOptions = renderer.DrawOptions;
 pub const TileMapRendererWith = renderer.TileMapRendererWith;
+
+// ── Per-tile animation playback (animation.zig) ─────────────
+pub const TileAnimator = animation.TileAnimator;

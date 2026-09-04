@@ -57,6 +57,40 @@ pub const TileImage = struct {
     height: u32,
 };
 
+/// One frame of a Tiled per-tile animation (`<frame tileid= duration=/>`).
+///
+/// `tileid` is a LOCAL id within the animation's own tileset — the same
+/// id space `<tile id=…>` uses — so a gid is `Tileset.firstgid + local_id`.
+/// Tiled never writes a cross-tileset frame reference.
+pub const AnimationFrame = struct {
+    /// The tile shown during this frame, as a LOCAL id (not a gid).
+    local_id: u32,
+    /// How long the frame is shown, in MILLISECONDS (Tiled's unit).
+    duration_ms: u32,
+};
+
+/// A `<tile id="N"><animation>…</animation></tile>` declaration.
+///
+/// The animation belongs to the TILE ID, not to a map cell: every cell
+/// placing tile `local_id` shows the same frame at the same time, which is
+/// what Tiled means and what makes a field of water read as one surface.
+/// Frames are in document order and owned by the `TileMap`.
+pub const TileAnimation = struct {
+    /// The animated tile's LOCAL id (gid minus `Tileset.firstgid`).
+    local_id: u32,
+    frames: []const AnimationFrame,
+
+    /// Length of one full cycle in milliseconds. Zero when the animation
+    /// carries no frames or every frame declares `duration="0"` — such an
+    /// animation can never advance and consumers skip it rather than
+    /// dividing by it.
+    pub fn totalDurationMs(self: *const TileAnimation) u32 {
+        var total: u32 = 0;
+        for (self.frames) |frame| total +|= frame.duration_ms;
+        return total;
+    }
+};
+
 /// A single tileset definition.
 ///
 /// Two Tiled layouts land in this one type:
@@ -86,6 +120,25 @@ pub const Tileset = struct {
     /// order. EMPTY for an ordinary sheet tileset — its presence is what
     /// distinguishes the two layouts at the consumer.
     tile_images: []const TileImage = &.{},
+    /// Per-`<tile>` animations declared by this tileset, in document
+    /// order. EMPTY for the overwhelmingly common unanimated tileset —
+    /// every consumer short-circuits on its length, so a map without
+    /// `<animation>` never builds animation state at all
+    /// (labelle-gfx#351).
+    animations: []const TileAnimation = &.{},
+
+    /// The animation declared for `local_id`, or null.
+    ///
+    /// Linear over `animations`, which is empty for an unanimated
+    /// tileset. Only ever called while BUILDING animation state (once, at
+    /// renderer init) — never on the draw path, which reads a resolved
+    /// table instead.
+    pub fn tileAnimation(self: *const Tileset, local_id: u32) ?*const TileAnimation {
+        for (self.animations) |*anim| {
+            if (anim.local_id == local_id) return anim;
+        }
+        return null;
+    }
 
     /// True when this is a collection-of-images tileset — it has per-tile
     /// images INSTEAD OF a sheet grid. A tileset declaring `columns > 0`

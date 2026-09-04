@@ -45,6 +45,14 @@ fn freeTileset(allocator: std.mem.Allocator, tileset: *const Tileset) void {
     if (tileset.name.len > 0) allocator.free(tileset.name);
     if (tileset.image_source.len > 0) allocator.free(tileset.image_source);
     freeTileImages(allocator, tileset.tile_images);
+    freeAnimations(allocator, tileset.animations);
+}
+
+fn freeAnimations(allocator: std.mem.Allocator, animations: []const types.TileAnimation) void {
+    for (animations) |anim| {
+        if (anim.frames.len > 0) allocator.free(anim.frames);
+    }
+    if (animations.len > 0) allocator.free(animations);
 }
 
 fn freeTileImages(allocator: std.mem.Allocator, images: []const TileImage) void {
@@ -52,6 +60,28 @@ fn freeTileImages(allocator: std.mem.Allocator, images: []const TileImage) void 
         if (img.source.len > 0) allocator.free(img.source);
     }
     if (images.len > 0) allocator.free(images);
+}
+
+/// Hand the buffered `<frame>` list over to `animations` as the animation
+/// of tile `local_id`, and leave `frames` empty for the next `<tile>`.
+///
+/// A frameless animation, or one outside any `<tile id=…>`, is discarded
+/// rather than recorded: an animation with nothing to show is
+/// indistinguishable from no animation, and recording it would cost the
+/// renderer a table entry that can never change a tile.
+fn commitAnimation(
+    allocator: std.mem.Allocator,
+    animations: *std.ArrayListUnmanaged(types.TileAnimation),
+    frames: *std.ArrayListUnmanaged(types.AnimationFrame),
+    local_id: ?u32,
+) !void {
+    if (frames.items.len == 0 or local_id == null) {
+        frames.clearRetainingCapacity();
+        return;
+    }
+    const owned = try frames.toOwnedSlice(allocator);
+    errdefer allocator.free(owned);
+    try animations.append(allocator, .{ .local_id = local_id.?, .frames = owned });
 }
 
 // ── External tileset resolution (labelle-gfx#335) ──────────
@@ -432,12 +462,33 @@ pub const TileMap = struct {
             }
             tile_images.deinit(allocator);
         }
+        // Per-`<tile>` `<animation>` declarations (labelle-gfx#351).
+        // Stays empty — and allocates nothing — for a tileset without a
+        // single `<animation>`, which is the common case.
+        var animations: std.ArrayListUnmanaged(types.TileAnimation) = .empty;
+        errdefer {
+            for (animations.items) |anim| {
+                if (anim.frames.len > 0) allocator.free(anim.frames);
+            }
+            animations.deinit(allocator);
+        }
+        // Frames of the `<animation>` currently open. `deinit` (not
+        // `errdefer`) because the scan can also leave an unterminated
+        // animation behind on the SUCCESS path — a truncated `<tileset>`
+        // breaks out of the loop below with frames still buffered.
+        // `toOwnedSlice` empties the list, so this stays correct after a
+        // finished animation hands its frames over.
+        var frames: std.ArrayListUnmanaged(types.AnimationFrame) = .empty;
+        defer frames.deinit(allocator);
+        var in_animation = false;
+
         // The `<tile id=…>` currently open, so a nested `<image>` is
         // attributed to its tile rather than to the tileset.
         var current_tile_id: ?u32 = null;
 
         // Parse embedded tileset — look for <image> elements, at the
-        // tileset level (a sheet) or nested in a <tile> (a collection).
+        // tileset level (a sheet) or nested in a <tile> (a collection),
+        // and `<animation>` frame lists nested in a <tile>.
         while (pos.* < content.len) {
             while (pos.* < content.len and content[pos.*] != '<') : (pos.* += 1) {}
             if (pos.* >= content.len) break;
@@ -462,10 +513,31 @@ pub const TileMap = struct {
                 const close_tag = content[close_start..pos.*];
                 pos.* += 1;
                 if (std.mem.indexOf(u8, close_tag, "tileset") != null) break;
+                // `</animation>` closes the frame list — commit it to the
+                // tile it was nested in. Checked BEFORE the `tile` test
+                // below, which `animation` does not match anyway, so the
+                // frames are attributed while `current_tile_id` still
+                // names their tile.
+                if (std.mem.indexOf(u8, close_tag, "animation") != null) {
+                    if (in_animation) {
+                        try commitAnimation(allocator, &animations, &frames, current_tile_id);
+                        in_animation = false;
+                    }
+                    continue;
+                }
                 // `</tile>` ends the tile the images were nested in — the
                 // `tileset` check above already consumed `</tileset>`, so
                 // any remaining `tile` here is the tile's own close tag.
-                if (std.mem.indexOf(u8, close_tag, "tile") != null) current_tile_id = null;
+                if (std.mem.indexOf(u8, close_tag, "tile") != null) {
+                    // An `<animation>` the document never closed still
+                    // belongs to this tile rather than bleeding into the
+                    // next one.
+                    if (in_animation) {
+                        try commitAnimation(allocator, &animations, &frames, current_tile_id);
+                        in_animation = false;
+                    }
+                    current_tile_id = null;
+                }
                 continue;
             }
 
@@ -481,6 +553,15 @@ pub const TileMap = struct {
                 const tile_parsed = try parseAttributes(allocator, content, pos);
                 defer freeAttributes(allocator, tile_parsed.attrs);
 
+                // A `<tile>` opening while an animation is still buffered
+                // means the previous one was never closed; commit it to
+                // the tile it belonged to BEFORE `current_tile_id` moves
+                // on, or its frames would be attributed to this new tile.
+                if (in_animation) {
+                    try commitAnimation(allocator, &animations, &frames, current_tile_id);
+                    in_animation = false;
+                }
+
                 current_tile_id = if (getAttr(tile_parsed.attrs, "id")) |id|
                     try std.fmt.parseInt(u32, id, 10)
                 else
@@ -488,6 +569,48 @@ pub const TileMap = struct {
                 // `<tile id="3"/>` — a tile with only attributes. Nothing
                 // nests in it, and no `</tile>` will arrive to clear this.
                 if (tile_parsed.self_closed) current_tile_id = null;
+                continue;
+            }
+
+            // ── Per-tile animation (labelle-gfx#351) ────────────────
+            // `<tile id="20"><animation><frame tileid=… duration=…/>…`.
+            // Attributes are consumed rather than skipped for the same
+            // reason `<tile>`'s are: an unread attribute value containing
+            // `<` would derail the scanner.
+            if (std.mem.eql(u8, img_elem_name, "animation")) {
+                const anim_parsed = try parseAttributes(allocator, content, pos);
+                defer freeAttributes(allocator, anim_parsed.attrs);
+                // An empty `<animation/>` declares no frames; nothing to
+                // open and no `</animation>` will arrive to close it.
+                if (anim_parsed.self_closed) continue;
+                // A second `<animation>` inside one tile (malformed) —
+                // commit what is buffered rather than merging the two.
+                if (in_animation) {
+                    try commitAnimation(allocator, &animations, &frames, current_tile_id);
+                }
+                in_animation = current_tile_id != null;
+                continue;
+            }
+
+            if (std.mem.eql(u8, img_elem_name, "frame")) {
+                const frame_parsed = try parseAttributes(allocator, content, pos);
+                defer freeAttributes(allocator, frame_parsed.attrs);
+                if (!in_animation) continue;
+
+                // `tileid` is required for a frame to mean anything; a
+                // frame without one is dropped rather than defaulting to
+                // tile 0, which would flash an unrelated tile. `duration`
+                // defaults to 0 — a zero-length frame Tiled itself never
+                // writes, and which the animator skips over.
+                const tileid = getAttr(frame_parsed.attrs, "tileid") orelse continue;
+                var frame = types.AnimationFrame{
+                    .local_id = try std.fmt.parseInt(u32, tileid, 10),
+                    .duration_ms = 0,
+                };
+                if (getAttr(frame_parsed.attrs, "duration")) |d| {
+                    frame.duration_ms = try std.fmt.parseInt(u32, d, 10);
+                }
+                try frames.append(allocator, frame);
                 continue;
             }
 
@@ -545,7 +668,22 @@ pub const TileMap = struct {
             }
         }
 
-        tileset.tile_images = try tile_images.toOwnedSlice(allocator);
+        // A `<tileset>` truncated mid-animation leaves frames buffered;
+        // keep them rather than dropping the tile's animation on the
+        // floor. `frames`'s `defer deinit` handles the empty remainder.
+        if (in_animation) {
+            try commitAnimation(allocator, &animations, &frames, current_tile_id);
+        }
+
+        // Take BOTH slices before publishing either: a failure between the
+        // two hand-overs would otherwise leave one owned by nobody (the
+        // list errdefers above see an emptied list and free nothing).
+        const owned_images = try tile_images.toOwnedSlice(allocator);
+        errdefer freeTileImages(allocator, owned_images);
+        const owned_animations = try animations.toOwnedSlice(allocator);
+
+        tileset.tile_images = owned_images;
+        tileset.animations = owned_animations;
         return .{ .tileset = tileset, .source = null };
     }
 
