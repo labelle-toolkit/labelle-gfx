@@ -67,9 +67,32 @@ pub const gizmo_text_max_len: usize = 255;
 /// safe direction for a cull: the box is never smaller than the glyphs, so
 /// `gizmoTextVisible` can never discard a label that would have been partly
 /// on-screen.
-pub fn gizmoTextExtent(len: usize, size: f32) struct { w: f32, h: f32 } {
-    const n: f32 = @floatFromInt(@min(len, gizmo_text_max_len));
-    return .{ .w = n * size, .h = size };
+pub fn gizmoTextExtent(text: []const u8, size: f32) struct { w: f32, h: f32 } {
+    // Only the bytes that actually reach the backend matter — the draw path
+    // truncates at `gizmo_text_max_len`, so anything past it cannot be drawn
+    // and must not inflate the box.
+    const drawn = text[0..@min(text.len, gizmo_text_max_len)];
+
+    // raylib's `DrawText` renders newline-separated rows, and `GizmoDraw.text`
+    // imposes no single-line restriction. A fixed one-row height would reject
+    // a multi-line label that starts above the viewport even though its later
+    // rows are on-screen.
+    var rows: f32 = 1;
+    var longest: usize = 0;
+    var col: usize = 0;
+    for (drawn) |c| {
+        if (c == '\n') {
+            longest = @max(longest, col);
+            col = 0;
+            rows += 1;
+        } else {
+            col += 1;
+        }
+    }
+    longest = @max(longest, col);
+
+    const w: f32 = @floatFromInt(longest);
+    return .{ .w = w * size, .h = rows * size };
 }
 
 /// Does a label with its top-left at `(x, y)` overlap the `vw` × `vh` viewport
@@ -87,9 +110,9 @@ pub fn gizmoTextExtent(len: usize, size: f32) struct { w: f32, h: f32 } {
 ///
 /// A non-finite coordinate falls out as "not visible": every comparison
 /// against NaN is false.
-pub fn gizmoTextVisible(x: f32, y: f32, len: usize, size: f32, vw: f32, vh: f32) bool {
-    if (len == 0) return false;
-    const e = gizmoTextExtent(len, size);
+pub fn gizmoTextVisible(x: f32, y: f32, text: []const u8, size: f32, vw: f32, vh: f32) bool {
+    if (text.len == 0) return false;
+    const e = gizmoTextExtent(text, size);
     return x + e.w >= 0 and x <= vw and y + e.h >= 0 and y <= vh;
 }
 
@@ -1082,7 +1105,7 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                 if (d.space != .screen) continue;
                 if (d.kind == .text) {
                     // Already screen space: no projection, only the cull.
-                    if (gizmoTextVisible(d.x1, d.y1, d.text.len, gizmo_text_size, cull_w, cull_h)) {
+                    if (gizmoTextVisible(d.x1, d.y1, d.text, gizmo_text_size, cull_w, cull_h)) {
                         drawGizmoText(d, d.x1, d.y1);
                     }
                     continue;
@@ -1173,7 +1196,7 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                 // `worldToScreen` takes LOGICAL (y_axis) world coords and does
                 // the flip itself — pass `d.y1` raw, not pre-flipped.
                 const p = cam.worldToScreen(d.x1, d.y1);
-                if (!gizmoTextVisible(p.x, p.y, d.text.len, gizmo_text_size, dims.width, dims.height)) continue;
+                if (!gizmoTextVisible(p.x, p.y, d.text, gizmo_text_size, dims.width, dims.height)) continue;
                 drawGizmoText(d, p.x, p.y);
             }
         }

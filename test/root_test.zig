@@ -5140,13 +5140,13 @@ test "gizmoTextExtent: over-estimates width so the cull never discards a visible
     // `size` per character is exact on labelle-bgfx (glyph advance ==
     // FONT_CHAR_W * size / FONT_CHAR_H == size) and an over-estimate on raylib
     // (default font advances ~size/2). Over-estimating is the safe direction.
-    const e = renderer_mod.gizmoTextExtent(4, 10);
+    const e = renderer_mod.gizmoTextExtent("abcd", 10);
     try testing.expectEqual(@as(f32, 40), e.w);
     try testing.expectEqual(@as(f32, 10), e.h);
 
     // Clamped at the truncation limit — a longer string is drawn truncated, so
     // its box must not keep growing past what is actually submitted.
-    const clamped = renderer_mod.gizmoTextExtent(renderer_mod.gizmo_text_max_len + 500, 10);
+    const clamped = renderer_mod.gizmoTextExtent(&([_]u8{'x'} ** (renderer_mod.gizmo_text_max_len + 500)), 10);
     const max_len_f: f32 = @floatFromInt(renderer_mod.gizmo_text_max_len);
     try testing.expectEqual(max_len_f * 10, clamped.w);
 }
@@ -5157,34 +5157,34 @@ test "gizmoTextVisible: keeps partly-on-screen labels, drops fully-off-screen on
     const vh: f32 = 600;
 
     // Fully inside.
-    try testing.expect(renderer_mod.gizmoTextVisible(100, 100, 8, size, vw, vh));
+    try testing.expect(renderer_mod.gizmoTextVisible(100, 100, "12345678", size, vw, vh));
     // Exactly on the origin corner, and exactly on the far corner: both touch.
-    try testing.expect(renderer_mod.gizmoTextVisible(0, 0, 8, size, vw, vh));
-    try testing.expect(renderer_mod.gizmoTextVisible(vw, vh, 8, size, vw, vh));
+    try testing.expect(renderer_mod.gizmoTextVisible(0, 0, "12345678", size, vw, vh));
+    try testing.expect(renderer_mod.gizmoTextVisible(vw, vh, "12345678", size, vw, vh));
 
     // Straddling the left/top edge — the label still has glyphs on screen, so
     // it must NOT be culled. (8 chars × 10 px = 80 px of extent.)
-    try testing.expect(renderer_mod.gizmoTextVisible(-40, 300, 8, size, vw, vh));
-    try testing.expect(renderer_mod.gizmoTextVisible(300, -5, 8, size, vw, vh));
+    try testing.expect(renderer_mod.gizmoTextVisible(-40, 300, "12345678", size, vw, vh));
+    try testing.expect(renderer_mod.gizmoTextVisible(300, -5, "12345678", size, vw, vh));
 
     // Entirely past an edge — culled.
-    try testing.expect(!renderer_mod.gizmoTextVisible(-81, 300, 8, size, vw, vh));
-    try testing.expect(!renderer_mod.gizmoTextVisible(300, -11, 8, size, vw, vh));
-    try testing.expect(!renderer_mod.gizmoTextVisible(vw + 1, 300, 8, size, vw, vh));
-    try testing.expect(!renderer_mod.gizmoTextVisible(300, vh + 1, 8, size, vw, vh));
+    try testing.expect(!renderer_mod.gizmoTextVisible(-81, 300, "12345678", size, vw, vh));
+    try testing.expect(!renderer_mod.gizmoTextVisible(300, -11, "12345678", size, vw, vh));
+    try testing.expect(!renderer_mod.gizmoTextVisible(vw + 1, 300, "12345678", size, vw, vh));
+    try testing.expect(!renderer_mod.gizmoTextVisible(300, vh + 1, "12345678", size, vw, vh));
 
     // An empty string has nothing to draw.
-    try testing.expect(!renderer_mod.gizmoTextVisible(100, 100, 0, size, vw, vh));
+    try testing.expect(!renderer_mod.gizmoTextVisible(100, 100, "", size, vw, vh));
 
     // Non-finite coordinates fall out as "not visible" — every comparison
     // against NaN is false. This is the guard that keeps a poisoned coordinate
     // away from raylib's `@intFromFloat`.
     const nan = std.math.nan(f32);
-    try testing.expect(!renderer_mod.gizmoTextVisible(nan, 100, 8, size, vw, vh));
-    try testing.expect(!renderer_mod.gizmoTextVisible(100, nan, 8, size, vw, vh));
+    try testing.expect(!renderer_mod.gizmoTextVisible(nan, 100, "12345678", size, vw, vh));
+    try testing.expect(!renderer_mod.gizmoTextVisible(100, nan, "12345678", size, vw, vh));
     // …as does a coordinate so large it could not be narrowed to i32.
-    try testing.expect(!renderer_mod.gizmoTextVisible(1e30, 100, 8, size, vw, vh));
-    try testing.expect(!renderer_mod.gizmoTextVisible(-1e30, 100, 8, size, vw, vh));
+    try testing.expect(!renderer_mod.gizmoTextVisible(1e30, 100, "12345678", size, vw, vh));
+    try testing.expect(!renderer_mod.gizmoTextVisible(-1e30, 100, "12345678", size, vw, vh));
 }
 
 test "GfxRenderer: a world-space text gizmo lands on its subject's screen pixel under camera pan+zoom" {
@@ -5338,4 +5338,30 @@ test "GfxRenderer: text gizmos obey the same per-camera pass rules as the line a
     try testing.expectEqual(@as(usize, 2), MockBackend.getLineCallCount());
     // Same count as the line: drawn once per pane, never more, never fewer.
     try testing.expectEqual(@as(usize, 2), MockBackend.getTextCallCount());
+}
+
+test "gizmoTextExtent: a multi-line label is as tall as its rows and as wide as its longest" {
+    // raylib's DrawText renders newline-separated rows, and GizmoDraw.text has
+    // no single-line restriction — so a fixed one-row height would cull a
+    // label whose later rows are on-screen.
+    const e = renderer_mod.gizmoTextExtent("ab\ncdef\ng", 10);
+    try testing.expectEqual(@as(f32, 40), e.w); // longest row is "cdef"
+    try testing.expectEqual(@as(f32, 30), e.h); // three rows
+}
+
+test "gizmoTextVisible: keeps a multi-line label whose later rows are on-screen" {
+    const size: f32 = 10;
+    const vw: f32 = 800;
+    const vh: f32 = 600;
+    const three_rows = "aa\nbb\ncc"; // 30 px tall
+
+    // Top-left sits 15 px above the viewport: row 1 is off-screen, rows 2-3
+    // are not. A single-row extent would have discarded the whole draw.
+    try testing.expect(renderer_mod.gizmoTextVisible(100, -15, three_rows, size, vw, vh));
+
+    // Far enough up that even the last row clears the top edge.
+    try testing.expect(!renderer_mod.gizmoTextVisible(100, -31, three_rows, size, vw, vh));
+
+    // A single-row label at the same offset is correctly still culled.
+    try testing.expect(!renderer_mod.gizmoTextVisible(100, -15, "aa", size, vw, vh));
 }
