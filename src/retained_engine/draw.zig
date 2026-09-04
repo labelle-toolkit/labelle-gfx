@@ -37,7 +37,10 @@ pub fn DrawHelpers(comptime Self: type) type {
             const tex_id = sprite.texture;
 
             // Resolve source rect and display dimensions
-            const tex_info = self.textures.get(tex_id);
+            // `liveTexture`, not a raw map read: an invalidated minted key
+            // (surface lost, labelle-engine#820) must take the draw-nothing
+            // branch below, not sample its dead handle.
+            const tex_info = self.liveTexture(tex_id);
             var src_x: f32 = 0;
             var src_y: f32 = 0;
             var src_w: f32 = 0;

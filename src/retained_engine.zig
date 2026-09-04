@@ -94,6 +94,13 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             backend_texture: B.Texture,
             width: f32,
             height: f32,
+            /// False once `invalidateTexture` has dropped the handle: the
+            /// GPU context that owned `backend_texture` is gone (Android
+            /// TERM_WINDOW), so the value is a dead number that must be
+            /// neither sampled nor passed to `B.unloadTexture`. The entry
+            /// itself stays registered so the key survives the outage and
+            /// `replaceTexture` can re-arm it (labelle-engine#820).
+            gpu_resident: bool = true,
         };
 
         pub const Grid = spatial_grid.SpatialGrid(u32);
@@ -214,7 +221,10 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // Unload all textures from the backend
             var tex_iter = self.textures.iterator();
             while (tex_iter.next()) |entry| {
-                B.unloadTexture(entry.value_ptr.backend_texture);
+                // An invalidated entry's handle died with its surface;
+                // destroying it on the new context is UB (or kills a
+                // recycled slot). Only live handles go back to the backend.
+                if (entry.value_ptr.gpu_resident) B.unloadTexture(entry.value_ptr.backend_texture);
             }
             self.textures.deinit();
             self.sprites.deinit();
@@ -538,8 +548,98 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
 
         pub fn unloadTexture(self: *Self, id: TextureId) void {
             if (self.textures.fetchRemove(id)) |kv| {
-                B.unloadTexture(kv.value.backend_texture);
+                // See `invalidateTexture`: a non-resident handle is already
+                // dead, so the entry is dropped without a backend free.
+                if (kv.value.gpu_resident) B.unloadTexture(kv.value.backend_texture);
             }
+        }
+
+        // -- Surface-loss lifecycle for minted keys (labelle-engine#820) --
+        //
+        // The asset catalog survives an Android TERM_WINDOW / INIT_WINDOW
+        // round-trip by dropping its dead handles without freeing them
+        // (`invalidateGpuResources`) and re-uploading under the SAME slot
+        // handles (`reenqueueGpuResident` → `registerCatalogTexture`, which
+        // is idempotent on a caller-owned key). Textures the engine uploads
+        // DIRECTLY — `loadTextureFromMemory`, a plugin's atlas PNG, a UI
+        // kit's 9-slice sheet — had no equivalent: their keys are minted
+        // here, `registerCatalogTexture` refuses anything at or above
+        // `TEXTURE_KEY_BASE`, and a fresh `loadTextureFromMemory` hands out
+        // a NEW key, so every holder of the old id had to be told. These two
+        // entry points give a minted key the same two-phase lifecycle the
+        // catalog's slots already have: the id a caller holds stays valid
+        // across the outage.
+
+        /// Drop the backend handle behind `id` WITHOUT destroying it — for
+        /// the moment the GPU context that owned it is already gone (or
+        /// about to be), where `B.unloadTexture` would be UB on the dead
+        /// context, or worse: after the backend re-inits it recycles slot
+        /// numbers, and freeing through the stale handle destroys whatever
+        /// live texture landed in that slot (labelle-engine#820 reproduced
+        /// exactly that — the sky atlas drew a menu kit's icons).
+        ///
+        /// The key stays registered so `replaceTexture` can re-arm it and
+        /// `unloadTexture` still frees the entry. Until it is re-armed the
+        /// id resolves to nothing: `getTextureInfo` / `nativeTextureId`
+        /// return null, a sprite bound to it draws nothing (the minted-key
+        /// branch in `drawSpriteEntry`, gfx#324), `drawMesh` /
+        /// `drawScreenTexture` / `updateTexture` no-op. No-op on an unknown
+        /// id, and idempotent.
+        pub fn invalidateTexture(self: *Self, id: TextureId) void {
+            if (self.textures.getPtr(id)) |info| info.gpu_resident = false;
+        }
+
+        /// Swap the backend texture behind an EXISTING key, keeping the key.
+        /// The previous handle is freed if it is still resident (a plain
+        /// content swap) and left alone if `invalidateTexture` already
+        /// declared it dead (the surface-restore path). Sprites bound to the
+        /// key are re-indexed against the new dimensions.
+        ///
+        /// Ownership of `tex` transfers on entry: on an unknown `id` there is
+        /// nowhere to store it, so it is given straight back to the backend
+        /// and `error.TextureNotRegistered` is returned — the caller never
+        /// holds a leaked upload. A minted key is only ever unknown once it
+        /// has been `unloadTexture`d, so this is the "you released it in the
+        /// meantime" case, not a routine one.
+        pub fn replaceTexture(self: *Self, id: TextureId, tex: B.Texture) !void {
+            const info = self.textures.getPtr(id) orelse {
+                B.unloadTexture(tex);
+                return error.TextureNotRegistered;
+            };
+            if (info.gpu_resident) B.unloadTexture(info.backend_texture);
+            info.* = .{
+                .backend_texture = tex,
+                .width = @floatFromInt(tex.width),
+                .height = @floatFromInt(tex.height),
+            };
+            self.reindexSpritesUsingTexture(id);
+        }
+
+        /// `loadTextureFromMemory`, but under a key the caller already holds:
+        /// decode + upload `data` through the backend and `replaceTexture`
+        /// it in. This is what the engine calls on `surfaceRestored` for
+        /// every direct upload it retained the bytes of, so the `u32` it
+        /// handed the game on the original load keeps working after resume.
+        /// Errors are the backend decode/upload errors plus
+        /// `error.TextureNotRegistered` (see `replaceTexture`); on any of
+        /// them the entry is left as it was.
+        pub fn reuploadTextureFromMemory(self: *Self, id: TextureId, file_type: [:0]const u8, data: []const u8) !void {
+            // Reject an unknown key BEFORE decoding: a full PNG decode just
+            // to hand the result straight back would be pure waste.
+            if (!self.textures.contains(id)) return error.TextureNotRegistered;
+            const tex = try B.loadTextureFromMemory(file_type, data);
+            try self.replaceTexture(id, tex);
+        }
+
+        /// Resident lookup — the entry for `id` if it is registered AND its
+        /// backend handle is alive. Every path that hands `backend_texture`
+        /// to the backend goes through this, so an invalidated key behaves
+        /// exactly like an unregistered one on the GPU side while the
+        /// registry still remembers it. `pub` only so the draw pass in
+        /// `retained_engine/draw.zig` can reach it — not an API.
+        pub fn liveTexture(self: *const Self, id: TextureId) ?TextureInfo {
+            const info = self.textures.get(id) orelse return null;
+            return if (info.gpu_resident) info else null;
         }
 
         /// Register a backend texture under a caller-chosen handle.
@@ -622,7 +722,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         ///
         /// Null when the id is not registered.
         pub fn nativeTextureId(self: *const Self, id: TextureId) ?BackendTextureId {
-            const info = self.textures.get(id) orelse return null;
+            const info = self.liveTexture(id) orelse return null;
             // Backends migrate to `Texture.id: BackendTextureId` ONE AT A TIME
             // (#328 phase 3), and gfx compiles against whichever backend a game
             // picks — so this has to accept both spellings for the duration.
@@ -635,8 +735,10 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             return if (comptime @typeInfo(@TypeOf(raw)) == .@"enum") raw else @enumFromInt(raw);
         }
 
+        /// Null when `id` is unregistered OR invalidated (`invalidateTexture`)
+        /// — a caller that gets an entry back can use its `backend_texture`.
         pub fn getTextureInfo(self: *const Self, id: TextureId) ?TextureInfo {
-            return self.textures.get(id);
+            return self.liveTexture(id);
         }
 
         // -- Dynamic textures (runtime-updated pixels) --
@@ -665,7 +767,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         /// backend lacks support or the id is unknown.
         pub fn updateTexture(self: *Self, id: TextureId, pixels: []const u8) void {
             if (comptime @hasDecl(BackendImpl, "updateTexture")) {
-                const info = self.textures.get(id) orelse return;
+                const info = self.liveTexture(id) orelse return;
                 BackendImpl.updateTexture(info.backend_texture, pixels);
             }
         }
@@ -706,7 +808,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             blend: backend_mod.BlendMode,
         ) void {
             if (comptime @hasDecl(BackendImpl, "drawMesh")) {
-                const info = self.textures.get(texture_id) orelse return;
+                const info = self.liveTexture(texture_id) orelse return;
                 B.drawMesh(info.backend_texture, positions, uvs, colors, indices, blend);
             }
         }
@@ -754,7 +856,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // `u32` it got back from `loadTextureFromMemory`. Typing these
             // seams is phase 4 of #328; the retag is explicit until then.
             const id: TextureId = @enumFromInt(texture_id);
-            const info = self.textures.get(id) orelse return;
+            const info = self.liveTexture(id) orelse return;
             B.drawTexturePro(
                 info.backend_texture,
                 .{ .x = src_x, .y = src_y, .width = src_w, .height = src_h },
