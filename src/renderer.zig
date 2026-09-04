@@ -295,6 +295,30 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             self.inner.unloadTexture(id);
         }
 
+        // Surface-loss lifecycle for minted keys (labelle-engine#820).
+        // Forwarded explicitly — the engine holds THIS wrapper and gates on
+        // `@hasDecl(Renderer, ...)`, so a seam that exists only on the inner
+        // engine is a silent no-op through the real stack (the gfx#291
+        // lesson). Same signatures as `RetainedEngine`.
+
+        /// Forward `RetainedEngine.invalidateTexture`: drop the dead backend
+        /// handle behind `id` on surface loss, keeping the key registered.
+        pub fn invalidateTexture(self: *Self, id: types_mod.TextureId) void {
+            self.inner.invalidateTexture(id);
+        }
+
+        /// Forward `RetainedEngine.replaceTexture`: swap the backend texture
+        /// behind an existing key without changing the key.
+        pub fn replaceTexture(self: *Self, id: types_mod.TextureId, tex: BackendImpl.Texture) !void {
+            return self.inner.replaceTexture(id, tex);
+        }
+
+        /// Forward `RetainedEngine.reuploadTextureFromMemory`: decode +
+        /// upload under a key the caller already holds (surface restore).
+        pub fn reuploadTextureFromMemory(self: *Self, id: types_mod.TextureId, file_type: [:0]const u8, data: []const u8) !void {
+            return self.inner.reuploadTextureFromMemory(id, file_type, data);
+        }
+
         /// Forward the optional textured-mesh primitive to the inner
         /// `RetainedEngine` (labelle-gfx#290 Stage 5 / #291). `GfxRenderer` is
         /// the wrapper the engine actually holds, so without this forwarder

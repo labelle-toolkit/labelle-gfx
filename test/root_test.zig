@@ -167,6 +167,169 @@ test "RetainedEngine: filled triangle takes drawTriangle, outline takes drawLine
     try testing.expectEqual(@as(usize, 3), MockBackend.getLineCallCount());
 }
 
+// ── Surface-loss lifecycle for minted keys (labelle-engine#820) ──────────
+//
+// A direct upload (`loadTextureFromMemory`) mints a key the caller keeps
+// for the life of the game. Across an Android surface loss the engine
+// needs to (1) declare the backend handle dead WITHOUT freeing it and
+// (2) re-upload under the SAME key, so the game's `u32` stays valid.
+
+test "RetainedEngine: invalidateTexture keeps the key but resolves it to nothing (#820)" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const id = try engine.loadTextureFromMemory("png", &[_]u8{});
+    try testing.expect(engine.getTextureInfo(id) != null);
+    try testing.expect(engine.nativeTextureId(id) != null);
+
+    engine.invalidateTexture(id);
+
+    // Registered, but every GPU-facing lookup treats it as absent.
+    try testing.expect(engine.textures.contains(id));
+    try testing.expect(engine.getTextureInfo(id) == null);
+    try testing.expect(engine.nativeTextureId(id) == null);
+
+    // Draw paths no-op instead of sampling the dead handle.
+    engine.drawScreenTexture(id.toInt(), 0, 0, 1, 1, 0, 0, 1, 1, 255, 255, 255, 255);
+    try testing.expectEqual(@as(usize, 0), MockBackend.getDrawCallCount());
+    const positions = [_]f32{ 0, 0, 10, 0, 10, 10 };
+    const uvs = [_]f32{ 0, 0, 1, 0, 1, 1 };
+    const colors = [_]u32{ 0xffffffff, 0xffffffff, 0xffffffff };
+    const indices = [_]u16{ 0, 1, 2 };
+    engine.drawMesh(id, &positions, &uvs, &colors, &indices, .normal);
+    try testing.expectEqual(@as(usize, 0), MockBackend.getMeshCallCount());
+
+    // Idempotent, and an unknown id is a no-op too.
+    engine.invalidateTexture(id);
+    engine.invalidateTexture(@enumFromInt(123_456));
+
+    // A sprite bound to the invalidated key draws nothing (the minted-key
+    // draw-nothing branch, gfx#324) rather than fabricating a texture.
+    engine.createSprite(EntityId.from(1), .{ .texture = id, .pivot = .center }, gfx.Position{ .x = 10, .y = 10 });
+    engine.render();
+    try testing.expectEqual(@as(usize, 0), MockBackend.getDrawCallCount());
+
+    // Releasing an invalidated key drops the entry (no backend free, which
+    // the mock cannot observe — the point is that it doesn't trap/UB).
+    engine.unloadTexture(id);
+    try testing.expect(!engine.textures.contains(id));
+}
+
+test "RetainedEngine: reuploadTextureFromMemory re-arms the SAME key with a fresh backend texture (#820)" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const id = try engine.loadTextureFromMemory("png", &[_]u8{});
+    const before = engine.getTextureInfo(id).?.backend_texture.id;
+    engine.invalidateTexture(id);
+    try testing.expect(engine.getTextureInfo(id) == null);
+
+    try engine.reuploadTextureFromMemory(id, "png", &[_]u8{});
+
+    // Same public key, new backend handle (the mock mints monotonically),
+    // resident again: draws reach the backend.
+    const after = engine.getTextureInfo(id).?.backend_texture.id;
+    try testing.expect(after != before);
+    try testing.expect(engine.nativeTextureId(id) != null);
+    engine.drawScreenTexture(id.toInt(), 0, 0, 1, 1, 0, 0, 1, 1, 255, 255, 255, 255);
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+
+    // No new key was minted — the registry has exactly the one entry.
+    try testing.expectEqual(@as(u32, 1), engine.textures.count());
+
+    // A content swap on a LIVE key works too (frees the old, keeps the key).
+    try engine.reuploadTextureFromMemory(id, "png", &[_]u8{});
+    try testing.expect(engine.getTextureInfo(id).?.backend_texture.id != after);
+    try testing.expectEqual(@as(u32, 1), engine.textures.count());
+}
+
+test "RetainedEngine: replaceTexture / reupload on an unknown key fail without minting (#820)" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const id = try engine.loadTextureFromMemory("png", &[_]u8{});
+    engine.unloadTexture(id);
+
+    // Released in the meantime → the caller's key means nothing; neither
+    // path may resurrect it under a new backend texture.
+    try testing.expectError(error.TextureNotRegistered, engine.reuploadTextureFromMemory(id, "png", &[_]u8{}));
+    const stray = try Engine.BackendType.loadTextureFromMemory("png", &[_]u8{});
+    try testing.expectError(error.TextureNotRegistered, engine.replaceTexture(id, stray));
+    try testing.expectEqual(@as(u32, 0), engine.textures.count());
+}
+
+test "RetainedEngine: the lifecycle seams ignore catalog (sub-base) keys — they are the catalog's lifecycle (#820)" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // A catalog slot handle, registered the way the assembler-emitted
+    // ImageBackendAdapter does it. The adapter's slot table owns the upload.
+    const slot: u32 = 7;
+    const slot_id: gfx.TextureId = @enumFromInt(slot);
+    const slot_tex = try MockBackend.loadTexture("slot.png");
+    engine.registerCatalogTexture(slot, slot_tex);
+
+    // invalidateTexture must NOT mark it: a non-resident sub-base entry
+    // would send the sprite draw into the pre-upload fallback, which
+    // fabricates a backend texture from the handle.
+    engine.invalidateTexture(slot_id);
+    try testing.expectEqual(slot_tex.id, engine.getTextureInfo(slot_id).?.backend_texture.id);
+    engine.createSprite(EntityId.from(1), .{ .texture = slot_id, .pivot = .center }, gfx.Position{ .x = 10, .y = 10 });
+    engine.render();
+    // The one draw call sampled the REGISTERED texture, not a fabricated one.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+    try testing.expectEqual(slot_tex.id, MockBackend.getDrawCalls()[0].texture_id);
+
+    // replace / reupload refuse it too (and give the stray upload back).
+    const stray = try MockBackend.loadTexture("stray.png");
+    try testing.expectError(error.NotAMintedKey, engine.replaceTexture(slot_id, stray));
+    try testing.expectError(error.NotAMintedKey, engine.reuploadTextureFromMemory(slot_id, "png", &[_]u8{}));
+    try testing.expectEqual(slot_tex.id, engine.getTextureInfo(slot_id).?.backend_texture.id);
+    try testing.expectEqual(@as(u32, 1), engine.textures.count());
+}
+
+// Same shape as the gfx#291 guard above: the engine holds `GfxRenderer`,
+// not `RetainedEngine`, and gates on `@hasDecl(Renderer, ...)` — a seam
+// missing from the wrapper is a silent no-op through the real stack.
+test "GfxRenderer: invalidateTexture / reuploadTextureFromMemory / replaceTexture forward through the wrapper (#820)" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    const id = try renderer.loadTextureFromMemory("png", &[_]u8{});
+    const before = renderer.getTextureInfo(id).?.backend_texture.id;
+
+    renderer.invalidateTexture(id);
+    try testing.expect(renderer.getTextureInfo(id) == null);
+
+    try renderer.reuploadTextureFromMemory(id, "png", &[_]u8{});
+    const after = renderer.getTextureInfo(id).?.backend_texture.id;
+    try testing.expect(after != before);
+
+    const fresh = try MockBackend.loadTexture("fresh.png");
+    try renderer.replaceTexture(id, fresh);
+    try testing.expectEqual(fresh.id, renderer.getTextureInfo(id).?.backend_texture.id);
+}
+
 // ── Screen-space UI primitives (labelle-engine#771) ──────────────────────
 
 test "RetainedEngine: createTextureFromPixels registers a drawable screen texture" {
