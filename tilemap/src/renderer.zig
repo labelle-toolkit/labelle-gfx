@@ -82,6 +82,41 @@ pub fn resolveFlip(raw_gid: u32) ResolvedFlip {
     return .{ .flip_h = v, .flip_v = !h, .rotation = 90 };
 }
 
+/// Every LOCAL tile id a cell placing `local_id` can ever show: the
+/// frames of its animation, or just `local_id` itself when it has none.
+///
+/// An iterator rather than a slice so the unanimated case — every tile of
+/// every map without an `<animation>` — allocates nothing and yields
+/// exactly one id, keeping the caller's loop identical to the pre-#351
+/// single-id one.
+const AnimatedIds = struct {
+    /// The animation's frames, or empty for an unanimated tile.
+    frames: []const types.AnimationFrame,
+    /// The placed id, yielded when there are no frames.
+    fallback: u32,
+    i: usize = 0,
+    done: bool = false,
+
+    fn next(self: *AnimatedIds) ?u32 {
+        if (self.frames.len == 0) {
+            if (self.done) return null;
+            self.done = true;
+            return self.fallback;
+        }
+        if (self.i >= self.frames.len) return null;
+        defer self.i += 1;
+        return self.frames[self.i].local_id;
+    }
+};
+
+fn animatedIds(tileset: *const Tileset, local_id: u32) AnimatedIds {
+    // `animations` is empty for every unanimated tileset, so this costs
+    // one length compare on the overwhelmingly common path.
+    const anim = tileset.tileAnimation(local_id) orelse
+        return .{ .frames = &.{}, .fallback = local_id };
+    return .{ .frames = anim.frames, .fallback = local_id };
+}
+
 // ── TileMap Renderer (backend-generic) ──────────────────────
 
 /// Drawing options for tile layers
@@ -432,20 +467,35 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
                         if (gid == 0) continue;
                         const tileset_idx = self.findTilesetIndex(gid) orelse continue;
                         const tileset = &self.map.tilesets[tileset_idx];
-                        const image = tileset.tileImage(gid - tileset.firstgid) orelse continue;
+                        const placed_id = gid - tileset.firstgid;
 
-                        // Cell-local geometry of the drawn box, matching
-                        // `drawLayerDirect`: bottom-left anchored at native
-                        // size, then rotated 90° about its own centre.
-                        const w: f32 = @floatFromInt(image.width);
-                        const h: f32 = @floatFromInt(image.height);
-                        const cx = w * 0.5;
-                        const cy = th - h * 0.5;
+                        // Measure EVERY id this cell can show, not just the
+                        // one the document placed (labelle-gfx#351): an
+                        // animated collection tile swaps to another
+                        // `<tile>`, whose image need not be the same size —
+                        // collection tilesets are explicitly not uniform.
+                        // Measuring the placed frame alone would under-cull
+                        // a taller frame at the viewport edge, clipping it
+                        // for exactly as long as that frame is on screen.
+                        // Unanimated maps run the single-id loop below,
+                        // which is the pre-#351 measurement exactly.
+                        var frames = animatedIds(tileset, placed_id);
+                        while (frames.next()) |local_id| {
+                            const image = tileset.tileImage(local_id) orelse continue;
 
-                        left = @max(left, h * 0.5 - cx);
-                        right = @max(right, cx + h * 0.5 - tw);
-                        up = @max(up, w * 0.5 - cy);
-                        down = @max(down, cy + w * 0.5 - th);
+                            // Cell-local geometry of the drawn box, matching
+                            // `drawLayerDirect`: bottom-left anchored at native
+                            // size, then rotated 90° about its own centre.
+                            const w: f32 = @floatFromInt(image.width);
+                            const h: f32 = @floatFromInt(image.height);
+                            const cx = w * 0.5;
+                            const cy = th - h * 0.5;
+
+                            left = @max(left, h * 0.5 - cx);
+                            right = @max(right, cx + h * 0.5 - tw);
+                            up = @max(up, w * 0.5 - cy);
+                            down = @max(down, cy + w * 0.5 - th);
+                        }
                     }
                 }
             }
@@ -563,21 +613,26 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
                 var x: u32 = cols.start;
                 while (x < cols.end) : (x += 1) {
                     const raw_gid = layer.getTileRaw(x, y);
-                    const placed_gid = raw_gid & ~TileFlags.ALL_FLAGS;
-                    if (placed_gid == 0) continue;
-
-                    // Per-tile animation (labelle-gfx#351): swap in the
-                    // gid of the active frame. Substitution happens on the
-                    // FLAG-STRIPPED gid and `resolveFlip` reads `raw_gid`
-                    // independently below, so an animated tile placed with
-                    // a flip keeps its flip on every frame. `resolve` is a
-                    // subtract, a compare and a load; the whole thing folds
-                    // to one null test on a map without animations.
-                    const gid = if (self.animator) |*anim| anim.resolve(placed_gid) else placed_gid;
+                    const gid = raw_gid & ~TileFlags.ALL_FLAGS;
+                    if (gid == 0) continue;
 
                     const tileset_idx = self.findTilesetIndex(gid) orelse continue;
                     const tileset = &self.map.tilesets[tileset_idx];
-                    const local_id = gid - tileset.firstgid;
+                    const placed_id = gid - tileset.firstgid;
+
+                    // Per-tile animation (labelle-gfx#351): swap in the
+                    // active frame's tile id. Done on the LOCAL id, after
+                    // the tileset is resolved — a `<frame tileid>` is local
+                    // to its own tileset, so the substitution can never
+                    // move the tile to another tileset and needs no gid
+                    // arithmetic. `resolveFlip` reads `raw_gid`
+                    // independently below, so an animated tile placed with
+                    // a flip keeps its flip on every frame. The whole thing
+                    // folds to one null test on a map without animations.
+                    const local_id = if (self.animator) |*anim|
+                        anim.resolve(tileset_idx, placed_id)
+                    else
+                        placed_id;
 
                     const dest_x = @as(f32, @floatFromInt(x)) * tile_w + off_x - camera_x;
                     const dest_y = @as(f32, @floatFromInt(y)) * tile_h + off_y - camera_y;

@@ -419,6 +419,56 @@ const animated_tsx =
     \\</tileset>
 ;
 
+/// A COLLECTION tileset (`columns="0"`, one `<image>` per `<tile>`) whose
+/// animated tile changes SIZE between frames: tile 0 is 16x16, tile 1 is
+/// 48x16. Placed with the diagonal flip, which is the one case that pushes
+/// a tile out of the two sides bottom-left anchoring never reaches — so
+/// the cull overhang has to account for the frame the cell will SWAP TO,
+/// not just the one the document placed.
+const animated_collection_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="1" height="1" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="props" tilewidth="16" tileheight="16" columns="0" tilecount="2">
+    \\  <tile id="0">
+    \\   <image source="small.png" width="16" height="16"/>
+    \\   <animation>
+    \\    <frame tileid="0" duration="240"/>
+    \\    <frame tileid="1" duration="240"/>
+    \\   </animation>
+    \\  </tile>
+    \\  <tile id="1">
+    \\   <image source="wide.png" width="48" height="16"/>
+    \\  </tile>
+    \\ </tileset>
+    \\ <layer name="props" width="1" height="1">
+    \\  <data encoding="csv">536870913</data>
+    \\ </layer>
+    \\</map>
+;
+
+/// A `<frame tileid>` whose gid OVERFLOWS `u32`: `firstgid="1"` plus tile
+/// 4294967295. The animation's own id is ordinary, so validation reaches
+/// the frame and does the add — unchecked, that is a panic in any safe
+/// build. The document has to be survivable instead: it loads, and simply
+/// animates nothing.
+const overflowing_frame_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="1" height="1" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="edge" tilewidth="16" tileheight="16" columns="4" tilecount="4294967295">
+    \\  <image source="edge.png" width="64" height="32"/>
+    \\  <tile id="0">
+    \\   <animation>
+    \\    <frame tileid="0" duration="240"/>
+    \\    <frame tileid="4294967295" duration="240"/>
+    \\   </animation>
+    \\  </tile>
+    \\ </tileset>
+    \\ <layer name="ground" width="1" height="1">
+    \\  <data encoding="csv">1</data>
+    \\ </layer>
+    \\</map>
+;
+
 /// A `.tmx` referencing `source` and nothing else — the reference is what
 /// these tests vary.
 fn tmxReferencing(comptime source: []const u8) []const u8 {
@@ -2975,5 +3025,80 @@ pub const TILE_ANIMATIONS = struct {
         renderer.advanceAnimations(-5);
         renderer.drawAllLayers(0, 0, .{});
         try std.testing.expectEqual(@as(f32, 0), drawnSrc(0).y);
+    }
+};
+
+// ── Animation hardening (labelle-gfx#352 review) ─────────────────────
+
+pub const TILE_ANIMATION_EDGES = struct {
+    test "an animated collection tile widens the cull for the frames it swaps to" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, animated_collection_tmx);
+        defer map.deinit();
+
+        var renderer = try collectionRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // The PLACED frame is 16x16 — a diagonally flipped square spills
+        // out of no side, so measuring it alone yields 0 here. Frame 1 is
+        // 48x16, whose 90° rotation reaches 16px BELOW the cell: without
+        // measuring the frames, that tile is culled a row early at the
+        // viewport edge and vanishes for the half of the cycle it is on.
+        try std.testing.expectEqual(@as(f32, 16), renderer.tile_overhang_down);
+
+        // And it really does swap: frame 0 is tile image 0, frame 1 is
+        // tile image 1, which the per-tile resolver gives distinct ids.
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(u32, 200), RecordingBackend.calls.items[0].texture_id);
+
+        RecordingBackend.calls.clearRetainingCapacity();
+        renderer.advanceAnimations(0.3);
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(u32, 201), RecordingBackend.calls.items[0].texture_id);
+    }
+
+    test "a frame gid that would overflow u32 loads and animates nothing" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        // `firstgid=1` + `tileid=4294967295` overflows u32. Reaching the
+        // animator with that unchecked is a panic in any safe build.
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, overflowing_frame_tmx);
+        defer map.deinit();
+        try std.testing.expectEqual(@as(usize, 1), map.tilesets[0].animations.len);
+
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // Refused, so the map is unanimated — and the tick stays a no-op
+        // rather than a crash.
+        try std.testing.expect(!renderer.hasAnimations());
+        renderer.advanceAnimations(1.0);
+    }
+
+    test "a non-finite dt cannot freeze an animation for good" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, animated_tmx);
+        defer map.deinit();
+
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // An infinite dt would leave `elapsed_ms` NaN forever: every later
+        // frame comparison against NaN is false, so the animation would
+        // stick on its last frame for the rest of the process.
+        renderer.advanceAnimations(std.math.inf(f32));
+        renderer.advanceAnimations(std.math.nan(f32));
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, 0), RecordingBackend.calls.items[0].src.y);
+
+        RecordingBackend.calls.clearRetainingCapacity();
+        renderer.advanceAnimations(0.3);
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, 16), RecordingBackend.calls.items[0].src.y);
     }
 };
