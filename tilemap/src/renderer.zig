@@ -11,6 +11,7 @@ const tile_map = @import("tile_map.zig");
 
 const TileFlags = types.TileFlags;
 const Tileset = types.Tileset;
+const TileImage = types.TileImage;
 const TileLayer = types.TileLayer;
 const TileMap = tile_map.TileMap;
 
@@ -152,10 +153,49 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
         pub const TextureResolver = struct {
             context: ?*anyopaque = null,
             resolveFn: *const fn (context: ?*anyopaque, tileset_index: usize, tileset: *const Tileset) ?BackendType.Texture,
+            /// Per-TILE texture resolution for a Tiled collection-of-images
+            /// tileset (labelle-gfx#343), which has no sheet: each `<tile>`
+            /// carries its own `<image>`, so one tileset needs N textures
+            /// rather than one. Called once per entry of
+            /// `Tileset.tile_images`, keyed by that entry's own `source` —
+            /// the SAME catalog key a sheet tileset's `image_source` uses,
+            /// so an embedded catalog needs no new key shape, only more
+            /// keys.
+            ///
+            /// Optional, and null by default: a caller that only ships
+            /// sheet tilesets keeps its existing resolver literal
+            /// unchanged, and a collection tileset then falls through to
+            /// the filesystem fallback exactly as an unresolved sheet does.
+            resolveTileFn: ?*const fn (
+                context: ?*anyopaque,
+                tileset_index: usize,
+                tileset: *const Tileset,
+                image_index: usize,
+                image: *const TileImage,
+            ) ?BackendType.Texture = null,
 
             pub fn resolve(self: TextureResolver, tileset_index: usize, tileset: *const Tileset) ?BackendType.Texture {
                 return self.resolveFn(self.context, tileset_index, tileset);
             }
+
+            pub fn resolveTile(
+                self: TextureResolver,
+                tileset_index: usize,
+                tileset: *const Tileset,
+                image_index: usize,
+                image: *const TileImage,
+            ) ?BackendType.Texture {
+                const f = self.resolveTileFn orelse return null;
+                return f(self.context, tileset_index, tileset, image_index, image);
+            }
+        };
+
+        /// Identifies one per-tile image: which tileset, and which entry
+        /// of its `tile_images`. Both are indices into structures the
+        /// `TileMap` owns, so the key stays valid for the renderer's life.
+        pub const TileImageKey = struct {
+            tileset: u32,
+            image: u32,
         };
 
         pub const InitOptions = struct {
@@ -170,7 +210,30 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
 
         allocator: std.mem.Allocator,
         map: *const TileMap,
+        /// Sheet tilesets: one texture per tileset, keyed by tileset index.
         textures: std.AutoHashMap(usize, TextureEntry),
+        /// Collection-of-images tilesets: one texture per `<tile>` image.
+        /// Ownership is NOT tracked per entry — several tiles may share one
+        /// texture when they name the same `source`, so the textures this
+        /// renderer loaded itself are held once each in `owned_tile_textures`.
+        tile_textures: std.AutoHashMap(TileImageKey, BackendType.Texture),
+        /// The per-tile textures loaded through the filesystem fallback —
+        /// deduplicated by source, unloaded once each on `deinit`.
+        /// Resolver-supplied textures never land here: they belong to the
+        /// caller's catalog.
+        owned_tile_textures: std.ArrayListUnmanaged(BackendType.Texture),
+        /// How far, in UNSCALED pixels, the largest collection tile can
+        /// spill out of its grid cell, PER SIDE (see `drawLayerDirect`).
+        /// Zero on every side for every map without an oversized per-tile
+        /// image, which makes the cull arithmetic below identical to the
+        /// pre-#343 one. `left`/`down` stay zero unless a non-square image
+        /// is actually placed with the diagonal flip, whose 90° rotation
+        /// is the only thing that can push a tile out of the two sides
+        /// bottom-left anchoring never reaches.
+        tile_overhang_left: f32,
+        tile_overhang_right: f32,
+        tile_overhang_up: f32,
+        tile_overhang_down: f32,
         base_path: []const u8,
 
         pub fn init(allocator: std.mem.Allocator, map: *const TileMap) !Self {
@@ -182,25 +245,31 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
                 .allocator = allocator,
                 .map = map,
                 .textures = std.AutoHashMap(usize, TextureEntry).init(allocator),
+                .tile_textures = std.AutoHashMap(TileImageKey, BackendType.Texture).init(allocator),
+                .owned_tile_textures = .empty,
+                .tile_overhang_left = 0,
+                .tile_overhang_right = 0,
+                .tile_overhang_up = 0,
+                .tile_overhang_down = 0,
                 .base_path = map.base_path,
             };
             errdefer self.deinit();
 
+            // Filesystem-fallback dedup for per-tile images, keyed by the
+            // `source` they name: an artist reusing one prop across several
+            // `<tile>` entries must cost one texture, not one per tile —
+            // and, more importantly, ONE unload. Keys borrow the map's
+            // strings, which outlive this call. Init-time only.
+            var loaded_by_source = std.StringHashMap(BackendType.Texture).init(allocator);
+            defer loaded_by_source.deinit();
+
             for (map.tilesets, 0..) |*tileset, i| {
                 // A Tiled "collection of images" tileset (one `<image>` per
-                // `<tile>`) parses with `columns = 0` and has no sheet grid
-                // to slice, so every tile from it draws nothing. Say so once
-                // here rather than per tile per frame (labelle-gfx#339), and
-                // skip texture resolution entirely: the draw pass drops every
-                // tile of this tileset on its empty source rect, so resolving
-                // and retaining one arbitrary per-tile image would only cost
-                // memory and IO.
-                if (tileset.columns == 0) {
-                    std.log.scoped(.labelle_gfx).warn(
-                        "tilemap: tileset '{s}' declares columns=0 (a Tiled collection-of-images tileset, one image per tile). " ++
-                            "Per-tile images are not supported — its tiles draw nothing. Re-export it as a single tileset image to render it.",
-                        .{tileset.name},
-                    );
+                // `<tile>`) has no sheet: it needs one texture per tile,
+                // resolved through the same seam by each tile's own source
+                // (labelle-gfx#343).
+                if (tileset.isCollection()) {
+                    try self.initCollectionTextures(i, tileset, options, &loaded_by_source);
                     continue;
                 }
 
@@ -228,7 +297,151 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
                 };
             }
 
+            self.measureTileOverhang();
             return self;
+        }
+
+        /// Resolve one texture per `<tile>` image of a collection tileset.
+        ///
+        /// Mirrors the sheet path above step for step — resolver first,
+        /// filesystem fallback second, a failed load degrading to "this
+        /// tile draws nothing" — with the source-keyed dedup layered on so
+        /// a repeated image is loaded and unloaded exactly once.
+        fn initCollectionTextures(
+            self: *Self,
+            tileset_index: usize,
+            tileset: *const Tileset,
+            options: InitOptions,
+            loaded_by_source: *std.StringHashMap(BackendType.Texture),
+        ) !void {
+            var resolved: usize = 0;
+
+            for (tileset.tile_images, 0..) |*image, image_index| {
+                const key = TileImageKey{
+                    .tileset = @intCast(tileset_index),
+                    .image = @intCast(image_index),
+                };
+
+                if (options.resolver) |resolver| {
+                    if (resolver.resolveTile(tileset_index, tileset, image_index, image)) |texture| {
+                        try self.tile_textures.put(key, texture);
+                        resolved += 1;
+                        continue;
+                    }
+                }
+                if (!options.load_unresolved_from_filesystem) continue;
+                if (image.source.len == 0) continue;
+
+                if (loaded_by_source.get(image.source)) |texture| {
+                    try self.tile_textures.put(key, texture);
+                    resolved += 1;
+                    continue;
+                }
+
+                const full_path = try std.fs.path.join(self.allocator, &.{ self.base_path, image.source });
+                defer self.allocator.free(full_path);
+
+                const path_z = try self.allocator.dupeZ(u8, full_path);
+                defer self.allocator.free(path_z);
+
+                const texture = BackendType.loadTexture(path_z) catch continue;
+                // Take ownership BEFORE publishing the texture anywhere: if
+                // the append is the allocation that fails, nothing else
+                // references the texture yet and it must be unloaded here.
+                // Once it is in the list, `deinit` (reached through this
+                // function's caller's errdefer) releases it.
+                self.owned_tile_textures.append(self.allocator, texture) catch |err| {
+                    BackendType.unloadTexture(texture);
+                    return err;
+                };
+                try self.tile_textures.put(key, texture);
+                try loaded_by_source.put(image.source, texture);
+                resolved += 1;
+            }
+
+            // #342 warned once per collection tileset because NONE of them
+            // could render. They render now, so the warning narrows to the
+            // case that still draws nothing: images no texture was found
+            // for. A fully resolved collection tileset is silent.
+            if (resolved < tileset.tile_images.len) {
+                std.log.scoped(.labelle_gfx).warn(
+                    "tilemap: collection-of-images tileset '{s}': {d} of {d} per-tile images resolved to no texture — those tiles draw nothing. " ++
+                        "Supply them through `TextureResolver.resolveTileFn` (keyed by each tile's own `source`), or leave the filesystem fallback enabled.",
+                    .{ tileset.name, tileset.tile_images.len - resolved, tileset.tile_images.len },
+                );
+            }
+        }
+
+        /// Record how far the largest collection tile spills out of its
+        /// grid cell, per side, so the viewport cull can widen by that
+        /// much.
+        ///
+        /// Tiled draws an oversized tile anchored at the BOTTOM-LEFT of its
+        /// cell, so it grows up and to the right: a tile whose cell sits
+        /// just left of, or just below, the visible range can still be
+        /// on screen. Without this the cull would pop large props at the
+        /// viewport edge. Every map whose tiles fit their cells — every
+        /// sheet map — measures zero and culls exactly as before.
+        ///
+        /// The DIAGONAL flip breaks that "up and to the right" rule.
+        /// `resolveFlip` renders it as a 90° rotation about the
+        /// destination centre, so a non-square image is drawn `height`
+        /// wide and `width` tall about the same centre — a 16x48 prop
+        /// covers 48 horizontal pixels and reaches into the cells on
+        /// BOTH sides, including the two sides bottom-left anchoring never
+        /// touches. Those bounds are measured only for images a layer
+        /// actually places diagonally flipped, so a map without such a
+        /// placement culls by the unrotated bounds alone.
+        fn measureTileOverhang(self: *Self) void {
+            const tw: f32 = @floatFromInt(self.map.tile_width);
+            const th: f32 = @floatFromInt(self.map.tile_height);
+
+            var left: f32 = 0;
+            var right: f32 = 0;
+            var up: f32 = 0;
+            var down: f32 = 0;
+
+            var any_collection = false;
+            for (self.map.tilesets) |*tileset| {
+                if (tileset.tile_images.len > 0) any_collection = true;
+                for (tileset.tile_images) |image| {
+                    right = @max(right, @as(f32, @floatFromInt(image.width)) - tw);
+                    up = @max(up, @as(f32, @floatFromInt(image.height)) - th);
+                }
+            }
+
+            // Cheap exit for every sheet-only map: no per-tile image can
+            // be rotated, so the layer scan below has nothing to find.
+            if (any_collection) {
+                for (self.map.tile_layers) |*layer| {
+                    for (layer.data) |raw_gid| {
+                        if (raw_gid & TileFlags.FLIPPED_DIAGONALLY == 0) continue;
+                        const gid = raw_gid & ~TileFlags.ALL_FLAGS;
+                        if (gid == 0) continue;
+                        const tileset_idx = self.findTilesetIndex(gid) orelse continue;
+                        const tileset = &self.map.tilesets[tileset_idx];
+                        const image = tileset.tileImage(gid - tileset.firstgid) orelse continue;
+
+                        // Cell-local geometry of the drawn box, matching
+                        // `drawLayerDirect`: bottom-left anchored at native
+                        // size, then rotated 90° about its own centre.
+                        const w: f32 = @floatFromInt(image.width);
+                        const h: f32 = @floatFromInt(image.height);
+                        const cx = w * 0.5;
+                        const cy = th - h * 0.5;
+
+                        left = @max(left, h * 0.5 - cx);
+                        right = @max(right, cx + h * 0.5 - tw);
+                        up = @max(up, w * 0.5 - cy);
+                        down = @max(down, cy + w * 0.5 - th);
+                    }
+                }
+            }
+
+            self.tile_overhang_left = left;
+            self.tile_overhang_right = right;
+            self.tile_overhang_up = up;
+            self.tile_overhang_down = down;
         }
 
         pub fn deinit(self: *Self) void {
@@ -239,6 +452,12 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
                 }
             }
             self.textures.deinit();
+
+            for (self.owned_tile_textures.items) |texture| {
+                BackendType.unloadTexture(texture);
+            }
+            self.owned_tile_textures.deinit(self.allocator);
+            self.tile_textures.deinit();
         }
 
         pub fn drawLayer(
@@ -282,8 +501,21 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
             // camera's visible world rect.
             const cull_x = options.view_start_x orelse camera_x;
             const cull_y = options.view_start_y orelse camera_y;
-            const cols = visibleTileRange(cull_x, view_w, tile_w, off_x, layer.width);
-            const rows = visibleTileRange(cull_y, view_h, tile_h, off_y, layer.height);
+            // Widen the cull by the largest collection-tile spill, per
+            // side: such a tile is anchored bottom-left in its cell and
+            // extends up and right (and, once diagonally flipped, out of
+            // the other two sides too), so a cell outside the range can
+            // still be visible. A tile spilling RIGHT is reached by moving
+            // the window's left edge left, and one spilling DOWN by moving
+            // its top edge up. All four are 0 unless the map has an
+            // oversized per-tile image, which makes these the pre-#343
+            // calls exactly.
+            const over_left = self.tile_overhang_left * scale;
+            const over_right = self.tile_overhang_right * scale;
+            const over_up = self.tile_overhang_up * scale;
+            const over_down = self.tile_overhang_down * scale;
+            const cols = visibleTileRange(cull_x - over_right, view_w + over_right + over_left, tile_w, off_x, layer.width);
+            const rows = visibleTileRange(cull_y - over_down, view_h + over_down + over_up, tile_h, off_y, layer.height);
 
             var y: u32 = rows.start;
             while (y < rows.end) : (y += 1) {
@@ -295,26 +527,68 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
 
                     const tileset_idx = self.findTilesetIndex(gid) orelse continue;
                     const tileset = &self.map.tilesets[tileset_idx];
-                    const entry = self.textures.get(tileset_idx) orelse continue;
-
                     const local_id = gid - tileset.firstgid;
-                    const src_rect = tileset.getTileRect(local_id);
-                    // A collection-of-images tileset has no sheet grid and
-                    // yields an empty rect (labelle-gfx#339); skip rather
-                    // than submit a degenerate zero-sized draw. `init`
-                    // already warned once for this tileset.
-                    if (src_rect.width == 0 or src_rect.height == 0) continue;
 
                     const dest_x = @as(f32, @floatFromInt(x)) * tile_w + off_x - camera_x;
                     const dest_y = @as(f32, @floatFromInt(y)) * tile_h + off_y - camera_y;
 
                     const flip = resolveFlip(raw_gid);
+                    const tint_a: u8 = @intFromFloat(@as(f32, @floatFromInt(options.tint_a)) * layer.opacity);
+
+                    // ── Collection of images (labelle-gfx#343) ──────────
+                    // The tile owns its texture AND its size; neither comes
+                    // from the map grid. `tileImageIndex` short-circuits on
+                    // an empty `tile_images`, so a sheet tileset pays one
+                    // length compare to reach the path below.
+                    if (tileset.tileImageIndex(local_id)) |image_index| {
+                        const image = &tileset.tile_images[image_index];
+                        if (image.width == 0 or image.height == 0) continue;
+                        const texture = self.tile_textures.get(.{
+                            .tileset = @intCast(tileset_idx),
+                            .image = @intCast(image_index),
+                        }) orelse continue;
+
+                        // Tiled anchors a tile at the BOTTOM-LEFT of its
+                        // cell and draws it at its native size, so art
+                        // taller or wider than the grid grows up and to the
+                        // right. A tile exactly one cell in size lands
+                        // pixel-identically to the sheet path below.
+                        const draw_w = @as(f32, @floatFromInt(image.width)) * scale;
+                        const draw_h = @as(f32, @floatFromInt(image.height)) * scale;
+                        const top_y = dest_y + tile_h - draw_h;
+
+                        var img_src_w: f32 = @floatFromInt(image.width);
+                        var img_src_h: f32 = @floatFromInt(image.height);
+                        if (flip.flip_h) img_src_w = -img_src_w;
+                        if (flip.flip_v) img_src_h = -img_src_h;
+
+                        BackendType.drawTexturePro(
+                            texture,
+                            .{ .x = 0, .y = 0, .width = img_src_w, .height = img_src_h },
+                            .{
+                                .x = dest_x + draw_w * 0.5,
+                                .y = top_y + draw_h * 0.5,
+                                .width = draw_w,
+                                .height = draw_h,
+                            },
+                            .{ .x = draw_w * 0.5, .y = draw_h * 0.5 },
+                            flip.rotation,
+                            .{ .r = options.tint_r, .g = options.tint_g, .b = options.tint_b, .a = tint_a },
+                        );
+                        continue;
+                    }
+
+                    const entry = self.textures.get(tileset_idx) orelse continue;
+                    const src_rect = tileset.getTileRect(local_id);
+                    // A `columns == 0` tileset with no `<image>` for this
+                    // tile yields an empty rect (labelle-gfx#339); skip
+                    // rather than submit a degenerate zero-sized draw.
+                    if (src_rect.width == 0 or src_rect.height == 0) continue;
+
                     var src_w: f32 = @floatFromInt(src_rect.width);
                     var src_h: f32 = @floatFromInt(src_rect.height);
                     if (flip.flip_h) src_w = -src_w;
                     if (flip.flip_v) src_h = -src_h;
-
-                    const tint_a: u8 = @intFromFloat(@as(f32, @floatFromInt(options.tint_a)) * layer.opacity);
 
                     // Dest is anchored at the tile centre with a centred
                     // origin so the diagonal-flip 90° rotation spins the

@@ -3473,7 +3473,13 @@ test "Tileset getTileRect" {
 
 test "Tileset getTileRect on a collection-of-images tileset (columns=0)" {
     // labelle-gfx#339: `columns = 0` used to divide by zero on the first
-    // draw. It now yields an empty rect, which the draw pass skips.
+    // draw. A collection tileset now answers from its per-tile images
+    // (labelle-gfx#343) — and a tile it defines no image for still yields
+    // an empty rect, which the draw pass skips.
+    const images = [_]gfx.TileImage{
+        .{ .local_id = 0, .source = "bush.png", .width = 16, .height = 16 },
+        .{ .local_id = 1, .source = "tall.png", .width = 32, .height = 48 },
+    };
     const tileset = gfx.Tileset{
         .firstgid = 1,
         .name = "props",
@@ -3484,8 +3490,18 @@ test "Tileset getTileRect on a collection-of-images tileset (columns=0)" {
         .image_source = "",
         .image_width = 0,
         .image_height = 0,
+        .tile_images = &images,
     };
 
+    // Each tile's own image, at its own size — they need not match.
+    const first = tileset.getTileRect(0);
+    try testing.expect(first.x == 0 and first.y == 0);
+    try testing.expect(first.width == 16 and first.height == 16);
+
+    const second = tileset.getTileRect(1);
+    try testing.expect(second.width == 32 and second.height == 48);
+
+    // No `<image>` for tile 3: nothing names its pixels.
     const rect = tileset.getTileRect(3);
     try testing.expect(rect.x == 0 and rect.y == 0);
     try testing.expect(rect.width == 0 and rect.height == 0);

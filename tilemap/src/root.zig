@@ -16,6 +16,10 @@
 //! - External `.tsx` tilesets (Tiled's shared-tileset workflow),
 //!   resolved from the map's directory or from caller-supplied bytes
 //!   (`LoadOptions.tsx_resolver`)
+//! - Both Tiled tileset layouts: a single sheet sliced by a uniform grid,
+//!   and a "collection of images" (`columns="0"`, one `<image>` per
+//!   `<tile>`, tiles free to differ in size) — inline or external
+//!   (labelle-gfx#343)
 //! - Tile flip flags (horizontal / vertical / diagonal)
 //! - Viewport culling with world-offset support
 //!
@@ -28,21 +32,32 @@
 //!   `LoadOptions.tsx_resolver`, or use a base-path/filesystem load)
 //! - No infinite maps (`error.InfiniteMapUnsupported`)
 //!
-//! ## Loads, but draws nothing
-//! - **Inline** Tiled "collection of images" tilesets (`columns="0"`, one
-//!   `<image>` per `<tile>`): there is no sheet grid to slice, so their
-//!   tiles are skipped by the draw pass with one `log.warn` per tileset at
-//!   renderer init. The map still loads and its other tilesets still
-//!   render (labelle-gfx#339).
+//! ## Collection-of-images tilesets (labelle-gfx#343)
+//! A collection tileset carries no sheet: `Tileset.tile_images` holds one
+//! `TileImage` per `<tile>`, each with its own `source`, `width` and
+//! `height`. The renderer resolves ONE TEXTURE PER TILE IMAGE — through
+//! the same seam a sheet uses, keyed by each tile's own `source`
+//! (`TextureResolver.resolveTileFn`, optional and null by default, so a
+//! sheet-only caller compiles unchanged) — and draws each tile at its
+//! native size, anchored at the bottom-left of its grid cell the way
+//! Tiled does. A tile exactly one cell in size draws pixel-identically to
+//! the sheet path.
 //!
-//!   The **external** (`.tsx`) form of the same tileset is rejected
-//!   outright with `error.ExternalTilesetUnsupported` instead
-//!   (labelle-gfx#336), so it never reaches renderer init. The two paths
-//!   differ deliberately: rejecting an inline one would fail a `.tmx` that
-//!   loads today over a single decorative tileset, whereas the external
-//!   form has never loaded, so nothing regresses by keeping it out.
-//!   Unifying them — in either direction — is part of supporting the
-//!   feature properly (labelle-gfx#343).
+//! Inline and external (`.tsx`) collections now behave the SAME. They did
+//! not before: an inline one loaded and drew nothing (labelle-gfx#339's
+//! empty-rect guard) while the external form was rejected outright with
+//! `error.ExternalTilesetUnsupported` (labelle-gfx#336), because
+//! rejecting an inline one would have failed a `.tmx` that already
+//! loaded. Both render now, so the asymmetry is gone.
+//!
+//! ## Loads, but draws nothing
+//! - A tile of a `columns="0"` tileset that the document defines no
+//!   `<image>` for: nothing names its pixels, so `getTileRect` still
+//!   yields an empty rect and the draw pass skips it (labelle-gfx#339).
+//! - Any tile image no texture could be resolved for — the resolver
+//!   declined it and the filesystem fallback is off or failed. Renderer
+//!   init warns once per tileset naming how many of its images are
+//!   unresolved.
 //!
 //! ## Module layout (labelle-gfx#297)
 //! The implementation is split into focused submodules; this root is a
@@ -70,6 +85,7 @@ test {
 pub const TileFlags = types.TileFlags;
 pub const ParseError = types.ParseError;
 pub const Tileset = types.Tileset;
+pub const TileImage = types.TileImage;
 pub const TileLayer = types.TileLayer;
 pub const MapObject = types.MapObject;
 pub const ObjectLayer = types.ObjectLayer;
