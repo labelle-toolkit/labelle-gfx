@@ -42,11 +42,33 @@ const isElementNameEnd = xml.isElementNameEnd;
 /// supplies them through this seam instead.
 pub const TilesetSourceResolver = struct {
     context: ?*anyopaque = null,
-    /// `source` is the attribute exactly as written in the `.tmx`
-    /// (e.g. "../tilesets/Overworld.tsx"), NOT joined onto `base_path` —
+    /// `source` is the `<tileset source>` attribute as the document MEANS
+    /// it (e.g. "../tilesets/Overworld.tsx"), NOT joined onto `base_path` —
     /// an embedded catalog keys off the reference, not off a filesystem
     /// layout. Return the `.tsx` XML bytes, or null to fall through to
     /// the filesystem read (when enabled).
+    ///
+    /// "As the document means it" is XML-entity-DECODED since
+    /// labelle-gfx#337: a reference Tiled wrote as
+    /// `source="odd&amp;name.tsx"` arrives here as `odd&name.tsx`, which
+    /// is also the name the filesystem fallback opens — one key for both
+    /// paths. For a reference containing no `& < > " '` (every reference
+    /// Tiled writes for a conventionally named file) decoding is the
+    /// identity, so the key is byte-for-byte what it always was and no
+    /// existing catalog registration moves.
+    ///
+    /// **A resolver may be called TWICE for one reference.** When the
+    /// decoded key returns null AND the raw attribute bytes differ from
+    /// it, the loader retries with the VERBATIM bytes before giving up
+    /// (labelle-gfx#346 review). Two contracts need that: a pre-#337
+    /// caller could legitimately have registered an entity-bearing
+    /// reference under its escaped spelling and resolved fine from
+    /// memory, and labelle-assembler's `tilemap_scan` registers under the
+    /// verbatim attribute bytes to this day. Decoded-first keeps the
+    /// decoded key canonical; the raw retry means neither registration
+    /// stops working. A resolver must therefore be side-effect free
+    /// enough to tolerate the second call — every resolver shape this
+    /// seam is for (a lookup into an embedded catalog) already is.
     ///
     /// The returned bytes are BORROWED: they are parsed during the call
     /// and never freed by the loader, so a comptime `@embedFile` (or any
@@ -317,7 +339,7 @@ pub const TileMap = struct {
         const source = elem.source orelse return elem.tileset;
         defer allocator.free(source);
 
-        return resolveExternalTileset(allocator, source, elem.tileset.firstgid, base_path, options);
+        return resolveExternalTileset(allocator, source, elem.source_raw, elem.tileset.firstgid, base_path, options);
     }
 
     /// One parsed `<tileset>` element — either an inline definition or a
@@ -329,6 +351,11 @@ pub const TileMap = struct {
         /// element carries nothing but `firstgid` and this path — every
         /// other field lives in the referenced file.
         source: ?[]const u8,
+        /// The same attribute UNDECODED — borrowed from the `content`
+        /// this element was parsed out of, so valid exactly as long as
+        /// that buffer. Empty for an inline definition. Feeds the raw-key
+        /// retry in `TilesetSourceResolver.resolveFn`.
+        source_raw: []const u8 = "",
     };
 
     /// The shared `<tileset>` element parser: runs over the element in a
@@ -363,7 +390,11 @@ pub const TileMap = struct {
             // Tiled self-closes the reference; tolerate an explicit
             // `</tileset>` rather than letting the map scanner trip on it.
             if (!parsed.self_closed) skipTilesetBody(content, pos);
-            return .{ .tileset = tileset, .source = try allocator.dupe(u8, src) };
+            return .{
+                .tileset = tileset,
+                .source = try allocator.dupe(u8, src),
+                .source_raw = xml.getAttrRaw(attrs, "source") orelse "",
+            };
         }
 
         if (getAttr(attrs, "name")) |n| tileset.name = try allocator.dupe(u8, n);
@@ -442,11 +473,30 @@ pub const TileMap = struct {
     fn resolveExternalTileset(
         allocator: std.mem.Allocator,
         source: []const u8,
+        /// The undecoded `source` attribute bytes, for the compatibility
+        /// retry below. Empty means "no raw spelling available", which is
+        /// indistinguishable from "identical to `source`" here.
+        source_raw: []const u8,
         firstgid: u32,
         base_path: []const u8,
         options: LoadOptions,
     ) !Tileset {
-        const provided: ?[]const u8 = if (options.tsx_resolver) |resolver| resolver.resolve(source) else null;
+        const provided: ?[]const u8 = if (options.tsx_resolver) |resolver| blk: {
+            if (resolver.resolve(source)) |bytes| break :blk bytes;
+            // The decoded key is canonical, but it is NOT the key every
+            // existing catalog was built with: before #337 the resolver
+            // was handed the verbatim attribute bytes, so a pure-memory
+            // caller could have registered `odd&amp;name.tsx` and
+            // resolved it successfully. Decoding alone would turn that
+            // working registration into `ExternalTilesetUnsupported`.
+            // Retry on the raw spelling — only when it actually differs,
+            // so the overwhelmingly common entity-free reference still
+            // costs exactly one resolver call (labelle-gfx#346 review).
+            if (source_raw.len > 0 and !std.mem.eql(u8, source_raw, source)) {
+                if (resolver.resolve(source_raw)) |bytes| break :blk bytes;
+            }
+            break :blk null;
+        } else null;
 
         // Resolver bytes are borrowed; a filesystem read is ours to free.
         var owned_bytes: ?[]u8 = null;
