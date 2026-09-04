@@ -3294,6 +3294,55 @@ test "SpriteComponent.toVisual produces correct SpriteVisual" {
     try testing.expect(visual.visible);
 }
 
+test "TextComponent.font defaults to .invalid and toVisual carries it through" {
+    // The game-facing TextComponent is what labelle-engine's `Game.setTextFont`
+    // (engine v2.15.0, engine#845) writes. That mixin gates on
+    // `@hasField(Text, "font")`, so without this field the whole engine API
+    // compiled down to `return;` — a silent no-op for every game (gfx#348).
+    const TextComp = gfx.TextComponent(DefaultLayers);
+
+    // The field exists at all — this is the exact predicate the engine gates on.
+    try testing.expect(@hasField(TextComp, "font"));
+
+    // Default: `.invalid` == "use the backend's built-in font", byte-identical
+    // to the pre-#348 behaviour.
+    const plain = (TextComp{ .text = "plain" }).toVisual();
+    try testing.expectEqual(gfx.FontId.invalid, plain.font);
+
+    // A font set on the component reaches the render-side TextVisual intact.
+    const custom = gfx.FontId.from(7);
+    const styled = (TextComp{ .text = "styled", .font = custom }).toVisual();
+    try testing.expectEqual(custom, styled.font);
+    try testing.expectEqualStrings("styled", styled.text);
+}
+
+test "TextComponent: a set font survives createText into the retained engine" {
+    // One step further than `toVisual`: the renderer stores the visual in the
+    // retained engine's text table, so the font must still be there when the
+    // draw pass reads the entry back.
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    const TextComp = gfx.TextComponent(DefaultLayers);
+    const Position = gfx.Position;
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const custom = gfx.FontId.from(3);
+    engine.createText(
+        EntityId.from(1),
+        (TextComp{ .text = "hello", .font = custom }).toVisual(),
+        Position{ .x = 10, .y = 20 },
+    );
+    try testing.expectEqual(custom, engine.texts.get(1).?.visual.font);
+
+    // And an update replaces it rather than dropping back to `.invalid`.
+    engine.updateText(EntityId.from(1), (TextComp{ .text = "hello", .font = gfx.FontId.from(4) }).toVisual());
+    try testing.expectEqual(gfx.FontId.from(4), engine.texts.get(1).?.visual.font);
+}
+
 // ── Effects ────────────────────────────────────────────────
 
 test "Fade: fades from 1 to 0" {
