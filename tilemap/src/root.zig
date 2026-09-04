@@ -28,6 +28,22 @@
 //!   `LoadOptions.tsx_resolver`, or use a base-path/filesystem load)
 //! - No infinite maps (`error.InfiniteMapUnsupported`)
 //!
+//! ## Loads, but draws nothing
+//! - **Inline** Tiled "collection of images" tilesets (`columns="0"`, one
+//!   `<image>` per `<tile>`): there is no sheet grid to slice, so their
+//!   tiles are skipped by the draw pass with one `log.warn` per tileset at
+//!   renderer init. The map still loads and its other tilesets still
+//!   render (labelle-gfx#339).
+//!
+//!   The **external** (`.tsx`) form of the same tileset is rejected
+//!   outright with `error.ExternalTilesetUnsupported` instead
+//!   (labelle-gfx#336), so it never reaches renderer init. The two paths
+//!   differ deliberately: rejecting an inline one would fail a `.tmx` that
+//!   loads today over a single decorative tileset, whereas the external
+//!   form has never loaded, so nothing regresses by keeping it out.
+//!   Unifying them — in either direction — is part of supporting the
+//!   feature properly (labelle-gfx#343).
+//!
 //! ## Module layout (labelle-gfx#297)
 //! The implementation is split into focused submodules; this root is a
 //! thin re-export of the full public API:
