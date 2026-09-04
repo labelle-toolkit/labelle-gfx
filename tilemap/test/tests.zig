@@ -44,10 +44,9 @@ const multi_tileset_tmx =
     \\</map>
 ;
 
-// A Tiled "collection of images" tileset (labelle-gfx#339): one <image>
+// A Tiled "collection of images" tileset (labelle-gfx#343): one <image>
 // per <tile> instead of one sheet, so Tiled writes columns="0" and no
-// tileset-level <image>. Parses fine today; `getTileRect` then divides
-// the local id by `columns`.
+// tileset-level <image>. Each tile carries its own source and size.
 const collection_of_images_tmx =
     \\<?xml version="1.0" encoding="UTF-8"?>
     \\<map version="1.10" orientation="orthogonal" width="2" height="1" tilewidth="16" tileheight="16">
@@ -66,8 +65,8 @@ const collection_of_images_tmx =
 ;
 
 // A map mixing a collection-of-images tileset (gids 1..4) with a normal
-// sheet tileset (gids 5+): the sheet must keep drawing when the
-// collection tileset is skipped.
+// sheet tileset (gids 5+) in the SAME file: both layouts must render
+// side by side, each through its own texture.
 const mixed_collection_tmx =
     \\<?xml version="1.0" encoding="UTF-8"?>
     \\<map version="1.10" orientation="orthogonal" width="2" height="1" tilewidth="16" tileheight="16">
@@ -81,6 +80,123 @@ const mixed_collection_tmx =
     \\ </tileset>
     \\ <layer name="mixed" width="2" height="1">
     \\  <data encoding="csv">1,5</data>
+    \\ </layer>
+    \\</map>
+;
+
+// A collection tileset whose tiles do NOT share a size: a 16x16 tile and
+// a 32x48 one on a 16x16 grid. Tiled draws each at its native size,
+// anchored at the bottom-left of its cell, so the tall tile overhangs
+// its cell upward and to the right.
+const nonuniform_collection_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="2" height="1" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="props" tilewidth="16" tileheight="16" tilecount="2" columns="0">
+    \\  <tile id="0">
+    \\   <image source="small.png" width="16" height="16"/>
+    \\  </tile>
+    \\  <tile id="1">
+    \\   <image source="tall.png" width="32" height="48"/>
+    \\  </tile>
+    \\ </tileset>
+    \\ <layer name="props" width="2" height="1">
+    \\  <data encoding="csv">1,2</data>
+    \\ </layer>
+    \\</map>
+;
+
+// Two tiles of one collection naming the SAME image — an artist reusing a
+// prop. The filesystem fallback must load (and unload) it once.
+const shared_image_collection_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="2" height="1" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="props" tilewidth="16" tileheight="16" tilecount="2" columns="0">
+    \\  <tile id="0"><image source="bush.png" width="16" height="16"/></tile>
+    \\  <tile id="1"><image source="bush.png" width="16" height="16"/></tile>
+    \\ </tileset>
+    \\ <layer name="props" width="2" height="1">
+    \\  <data encoding="csv">1,2</data>
+    \\ </layer>
+    \\</map>
+;
+
+// A collection tile that is EXACTLY one cell wide but three cells tall,
+// placed with the diagonal flip (gid 1 | 0x20000000). Unrotated it has no
+// horizontal overhang at all; the 90° rotation `resolveFlip` turns that
+// flag into draws it 48 pixels WIDE about its own centre, spilling into
+// the cells on either side (labelle-gfx#343 review).
+const rotated_tall_collection_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="3" height="1" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="props" tilewidth="16" tileheight="16" tilecount="1" columns="0">
+    \\  <tile id="0">
+    \\   <image source="tall.png" width="16" height="48"/>
+    \\  </tile>
+    \\ </tileset>
+    \\ <layer name="props" width="3" height="1">
+    \\  <data encoding="csv">536870913,0,0</data>
+    \\ </layer>
+    \\</map>
+;
+
+// The transpose of the above: three cells wide, one tall, diagonally
+// flipped so it is drawn 48 pixels TALL and hangs BELOW its cell — the one
+// direction bottom-left anchoring can never reach, so the row range never
+// widened for it.
+const rotated_wide_collection_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="1" height="2" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="props" tilewidth="16" tileheight="16" tilecount="1" columns="0">
+    \\  <tile id="0">
+    \\   <image source="wide.png" width="48" height="16"/>
+    \\  </tile>
+    \\ </tileset>
+    \\ <layer name="props" width="1" height="2">
+    \\  <data encoding="csv">536870913,0</data>
+    \\ </layer>
+    \\</map>
+;
+
+// `width`/`height` are OPTIONAL on `<image>`: a hand-authored or older
+// collection tileset can omit them. The tile must still render, at the
+// tileset's declared tile size, rather than silently drawing nothing.
+const sizeless_collection_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="1" height="1" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="props" tilewidth="16" tileheight="16" tilecount="1" columns="0">
+    \\  <tile id="0">
+    \\   <image source="bush.png"/>
+    \\  </tile>
+    \\ </tileset>
+    \\ <layer name="props" width="1" height="1">
+    \\  <data encoding="csv">1</data>
+    \\ </layer>
+    \\</map>
+;
+
+// A collection tileset whose `<tile>` elements carry more than an image —
+// the shape Tiled writes once a tile has properties, an animation or
+// collision. The nested `<properties>`/`<objectgroup>` must not swallow
+// the `<image>`, and the self-closed `<tile id="2"/>` must not leave the
+// scanner attributing a later image to it.
+const annotated_collection_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="2" height="1" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="props" tilewidth="16" tileheight="16" tilecount="3" columns="0">
+    \\  <tile id="0">
+    \\   <properties><property name="solid" type="bool" value="true"/></properties>
+    \\   <image source="bush.png" width="16" height="16"/>
+    \\   <objectgroup draworder="index" id="2">
+    \\    <object id="1" x="2" y="2" width="12" height="12"/>
+    \\   </objectgroup>
+    \\  </tile>
+    \\  <tile id="2"/>
+    \\  <tile id="1">
+    \\   <image source="rock.png" width="16" height="16"/>
+    \\  </tile>
+    \\ </tileset>
+    \\ <layer name="props" width="2" height="1">
+    \\  <data encoding="csv">1,2</data>
     \\ </layer>
     \\</map>
 ;
@@ -173,8 +289,9 @@ const awkward_tsx =
 ;
 
 // Tiled's collection-of-images shape: `columns="0"` and one `<image>` per
-// `<tile>` instead of a single tileset-wide image. The loader models a
-// grid, so this shape has no representation here.
+// `<tile>` instead of a single tileset-wide image. Its per-tile sources
+// are relative to the `.tsx`'s own directory, so they need the same
+// rebase a sheet's `image_source` gets.
 const collection_tsx =
     \\<?xml version="1.0" encoding="UTF-8"?>
     \\<tileset version="1.10" name="coll" tilewidth="16" tileheight="16" tilecount="2" columns="0">
@@ -353,6 +470,55 @@ fn resolvedRenderer(alloc: std.mem.Allocator, map: *const tilemap.TileMap) !Rend
         .load_unresolved_from_filesystem = false,
     });
 }
+
+/// The per-TILE half of the resolution seam (labelle-gfx#343): a distinct
+/// texture per `(tileset, tile image)`, so a test can tell which tile
+/// image a draw call used.
+fn tileIndexResolver(
+    _: ?*anyopaque,
+    tileset_index: usize,
+    _: *const tilemap.Tileset,
+    image_index: usize,
+    _: *const tilemap.TileImage,
+) ?RecordingBackend.Texture {
+    return .{ .id = @intCast(200 + tileset_index * 10 + image_index), .width = 32, .height = 32 };
+}
+
+/// A renderer whose resolver serves BOTH layouts — the engine's shape once
+/// it implements the per-tile seam.
+fn collectionRenderer(alloc: std.mem.Allocator, map: *const tilemap.TileMap) !Renderer {
+    return Renderer.initWithOptions(alloc, map, .{
+        .resolver = .{ .resolveFn = indexResolver, .resolveTileFn = tileIndexResolver },
+        .load_unresolved_from_filesystem = false,
+    });
+}
+
+/// Records the `source` string of every per-tile image the renderer asks
+/// about — the catalog key a collection tileset resolves by.
+const SourceRecordingResolver = struct {
+    sources: std.ArrayListUnmanaged([]const u8) = .empty,
+    allocator: std.mem.Allocator,
+
+    fn deinit(self: *SourceRecordingResolver) void {
+        self.sources.deinit(self.allocator);
+    }
+
+    fn resolveSheet(_: ?*anyopaque, _: usize, _: *const tilemap.Tileset) ?RecordingBackend.Texture {
+        return null;
+    }
+
+    fn resolveTile(
+        context: ?*anyopaque,
+        _: usize,
+        _: *const tilemap.Tileset,
+        _: usize,
+        image: *const tilemap.TileImage,
+    ) ?RecordingBackend.Texture {
+        const self: *SourceRecordingResolver = @ptrCast(@alignCast(context.?));
+        self.sources.append(self.allocator, image.source) catch {};
+        return .{ .id = 300, .width = 16, .height = 16 };
+    }
+};
 
 // ── TileMap parsing ──────────────────────────────────────────────────
 
@@ -862,18 +1028,43 @@ pub const PARSER_REJECTIONS = struct {
         try std.testing.expectEqualStrings("art/shared.png", map.tilesets[0].image_source);
     }
 
-    test "rejects a collection-of-images .tsx rather than yielding columns=0" {
-        // `getTileRect` divides by `columns`; a tileset shape this loader
-        // cannot represent must not reach the renderer.
-        try std.testing.expectError(
-            error.ExternalTilesetUnsupported,
-            tilemap.TileMap.loadFromMemoryWithOptions(
-                std.testing.allocator,
-                tmxReferencing("tilesets/collection.tsx"),
-                "",
-                .{ .tsx_resolver = tsx_table_resolver },
-            ),
+    test "resolves a collection-of-images .tsx instead of rejecting it" {
+        // labelle-gfx#336 refused this shape outright because the loader
+        // modelled only a sheet grid. It models per-tile images now
+        // (labelle-gfx#343), so the external form loads exactly like the
+        // inline one — the two paths no longer differ.
+        var map = try tilemap.TileMap.loadFromMemoryWithOptions(
+            std.testing.allocator,
+            tmxReferencing("tilesets/collection.tsx"),
+            "",
+            .{ .tsx_resolver = tsx_table_resolver },
         );
+        defer map.deinit();
+
+        const ts = &map.tilesets[0];
+        try std.testing.expectEqualStrings("coll", ts.name);
+        try std.testing.expectEqual(@as(u32, 0), ts.columns);
+        // firstgid comes from the REFERENCE, not the `.tsx`.
+        try std.testing.expectEqual(@as(u32, 17), ts.firstgid);
+        try std.testing.expect(ts.isCollection());
+        try std.testing.expectEqual(@as(usize, 2), ts.tile_images.len);
+    }
+
+    test "per-tile images of a .tsx rebase through the .tsx directory" {
+        // `<image source="a.png">` inside `tilesets/collection.tsx` names
+        // `tilesets/a.png` from the MAP's directory — the same rebase a
+        // sheet's `image_source` gets, applied to every per-tile source.
+        var map = try tilemap.TileMap.loadFromMemoryWithOptions(
+            std.testing.allocator,
+            tmxReferencing("tilesets/collection.tsx"),
+            "",
+            .{ .tsx_resolver = tsx_table_resolver },
+        );
+        defer map.deinit();
+
+        const images = map.tilesets[0].tile_images;
+        try std.testing.expectEqualStrings("tilesets/a.png", images[0].source);
+        try std.testing.expectEqualStrings("tilesets/b.png", images[1].source);
     }
 
     test "reads an <image> child that breaks across lines" {
@@ -1137,64 +1328,382 @@ pub const TILESET = struct {
     }
 };
 
-// ── Collection-of-images tilesets (labelle-gfx#339) ──────────────────
+// ── Collection-of-images tilesets (labelle-gfx#343) ──────────────────
 
 pub const COLLECTION_OF_IMAGES = struct {
-    test "an inline collection-of-images tileset still loads" {
-        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, collection_of_images_tmx);
-        defer map.deinit();
-
-        try std.testing.expectEqual(@as(usize, 1), map.tilesets.len);
-        try std.testing.expectEqual(@as(u32, 0), map.tilesets[0].columns);
-    }
-
-    test "getTileRect on a zero-column tileset yields an empty rect, not a panic" {
+    test "parses one image per <tile> instead of keeping only the last" {
         var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, collection_of_images_tmx);
         defer map.deinit();
 
         const ts = &map.tilesets[0];
-        inline for (.{ 0, 1 }) |local_id| {
-            const rect = ts.getTileRect(local_id);
-            try std.testing.expectEqual(@as(u32, 0), rect.x);
-            try std.testing.expectEqual(@as(u32, 0), rect.y);
-            try std.testing.expectEqual(@as(u32, 0), rect.width);
-            try std.testing.expectEqual(@as(u32, 0), rect.height);
-        }
+        try std.testing.expectEqual(@as(u32, 0), ts.columns);
+        try std.testing.expect(ts.isCollection());
+        // No sheet: a collection tileset's images live per tile.
+        try std.testing.expectEqualStrings("", ts.image_source);
+
+        try std.testing.expectEqual(@as(usize, 2), ts.tile_images.len);
+        try std.testing.expectEqual(@as(u32, 0), ts.tile_images[0].local_id);
+        try std.testing.expectEqualStrings("bush.png", ts.tile_images[0].source);
+        try std.testing.expectEqual(@as(u32, 16), ts.tile_images[0].width);
+        try std.testing.expectEqual(@as(u32, 1), ts.tile_images[1].local_id);
+        try std.testing.expectEqualStrings("rock.png", ts.tile_images[1].source);
     }
 
-    test "drawing a zero-column tileset emits no draw calls instead of panicking" {
+    test "a sheet tileset carries no per-tile images" {
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, minimal_tmx);
+        defer map.deinit();
+
+        try std.testing.expect(!map.tilesets[0].isCollection());
+        try std.testing.expectEqual(@as(usize, 0), map.tilesets[0].tile_images.len);
+        try std.testing.expectEqualStrings("test.png", map.tilesets[0].image_source);
+    }
+
+    test "per-tile images survive properties, collision and self-closed tiles" {
+        // Tiled nests <properties>/<objectgroup> inside a <tile>, and
+        // writes <tile id="N"/> for a tile that has only attributes. The
+        // body scan must bind each <image> to its own enclosing <tile>.
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, annotated_collection_tmx);
+        defer map.deinit();
+
+        const ts = &map.tilesets[0];
+        try std.testing.expectEqual(@as(usize, 2), ts.tile_images.len);
+        try std.testing.expectEqual(@as(u32, 0), ts.tile_images[0].local_id);
+        try std.testing.expectEqualStrings("bush.png", ts.tile_images[0].source);
+        try std.testing.expectEqual(@as(u32, 1), ts.tile_images[1].local_id);
+        try std.testing.expectEqualStrings("rock.png", ts.tile_images[1].source);
+        // Nothing leaked onto the tileset itself.
+        try std.testing.expectEqualStrings("", ts.image_source);
+    }
+
+    test "getTileRect yields each tile's own image rect" {
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, nonuniform_collection_tmx);
+        defer map.deinit();
+
+        const ts = &map.tilesets[0];
+        const small = ts.getTileRect(0);
+        try std.testing.expectEqual(@as(u32, 0), small.x);
+        try std.testing.expectEqual(@as(u32, 0), small.y);
+        try std.testing.expectEqual(@as(u32, 16), small.width);
+        try std.testing.expectEqual(@as(u32, 16), small.height);
+
+        // Tiles of one collection need NOT share a size.
+        const tall = ts.getTileRect(1);
+        try std.testing.expectEqual(@as(u32, 32), tall.width);
+        try std.testing.expectEqual(@as(u32, 48), tall.height);
+    }
+
+    test "getTileRect still yields an empty rect for an id the collection omits" {
+        // The labelle-gfx#339 guard survives for the one case that has no
+        // answer: a columns=0 tileset asked for a tile it never defined.
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, collection_of_images_tmx);
+        defer map.deinit();
+
+        const rect = map.tilesets[0].getTileRect(7);
+        try std.testing.expectEqual(@as(u32, 0), rect.width);
+        try std.testing.expectEqual(@as(u32, 0), rect.height);
+    }
+
+    test "a collection tileset draws one call per tile from its own texture" {
         RecordingBackend.reset(std.testing.allocator);
         defer RecordingBackend.cleanup();
 
         var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, collection_of_images_tmx);
         defer map.deinit();
 
-        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        var renderer = try collectionRenderer(std.testing.allocator, &map);
         defer renderer.deinit();
 
         renderer.drawAllLayers(0, 0, .{});
 
-        try std.testing.expectEqual(@as(usize, 0), RecordingBackend.calls.items.len);
+        // Two tiles, two per-tile textures — not skipped, and not sharing
+        // one arbitrary image (the pre-#343 single-`image_source` model).
+        try std.testing.expectEqual(@as(usize, 2), RecordingBackend.calls.items.len);
+        try std.testing.expectEqual(@as(u32, 200), RecordingBackend.calls.items[0].texture_id);
+        try std.testing.expectEqual(@as(u32, 201), RecordingBackend.calls.items[1].texture_id);
+
+        // Source rect is the whole per-tile image, at its own origin.
+        try std.testing.expectEqual(@as(f32, 0), RecordingBackend.calls.items[0].src.x);
+        try std.testing.expectEqual(@as(f32, 16), RecordingBackend.calls.items[0].src.width);
     }
 
-    test "a sheet tileset in the same map keeps drawing" {
+    test "the per-tile resolver is keyed by each tile's own source" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, collection_of_images_tmx);
+        defer map.deinit();
+
+        var recorder = SourceRecordingResolver{ .allocator = std.testing.allocator };
+        defer recorder.deinit();
+
+        var renderer = try Renderer.initWithOptions(std.testing.allocator, &map, .{
+            .resolver = .{
+                .context = &recorder,
+                .resolveFn = SourceRecordingResolver.resolveSheet,
+                .resolveTileFn = SourceRecordingResolver.resolveTile,
+            },
+            .load_unresolved_from_filesystem = false,
+        });
+        defer renderer.deinit();
+
+        // One resolution per tile image, each under the tile's OWN source —
+        // the same catalog key shape a sheet's `image_source` uses.
+        try std.testing.expectEqual(@as(usize, 2), recorder.sources.items.len);
+        try std.testing.expectEqualStrings("bush.png", recorder.sources.items[0]);
+        try std.testing.expectEqualStrings("rock.png", recorder.sources.items[1]);
+    }
+
+    test "non-uniform tiles draw at their own size, bottom-left anchored" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, nonuniform_collection_tmx);
+        defer map.deinit();
+
+        var renderer = try collectionRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(usize, 2), RecordingBackend.calls.items.len);
+
+        // The 16x16 tile fills its cell — pixel-identical to the sheet path.
+        const small = RecordingBackend.calls.items[0];
+        try std.testing.expectEqual(@as(f32, 16), small.dest.width);
+        try std.testing.expectEqual(@as(f32, 16), small.dest.height);
+        try std.testing.expectEqual(@as(f32, 8), small.dest.x);
+        try std.testing.expectEqual(@as(f32, 8), small.dest.y);
+
+        // The 32x48 tile in cell (1,0) keeps its native size and hangs off
+        // the cell upward: its bottom edge is the cell's bottom edge (y=16),
+        // so its top is at y=-32 and its centre at y=-8.
+        const tall = RecordingBackend.calls.items[1];
+        try std.testing.expectEqual(@as(f32, 32), tall.dest.width);
+        try std.testing.expectEqual(@as(f32, 48), tall.dest.height);
+        try std.testing.expectEqual(@as(f32, 32), tall.dest.x);
+        try std.testing.expectEqual(@as(f32, -8), tall.dest.y);
+        try std.testing.expectEqual(@as(f32, 16), tall.origin.x);
+        try std.testing.expectEqual(@as(f32, 24), tall.origin.y);
+        // The source rect is the whole image, not a grid cell.
+        try std.testing.expectEqual(@as(f32, 32), tall.src.width);
+        try std.testing.expectEqual(@as(f32, 48), tall.src.height);
+    }
+
+    test "scale applies to a non-uniform tile's own size" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, nonuniform_collection_tmx);
+        defer map.deinit();
+
+        var renderer = try collectionRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        renderer.drawAllLayers(0, 0, .{ .scale = 2 });
+
+        const tall = RecordingBackend.calls.items[1];
+        try std.testing.expectEqual(@as(f32, 64), tall.dest.width);
+        try std.testing.expectEqual(@as(f32, 96), tall.dest.height);
+    }
+
+    test "an oversized tile is drawn from a cell just outside the view" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, nonuniform_collection_tmx);
+        defer map.deinit();
+
+        var renderer = try collectionRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // View covers world x 32..48. The 32-wide tile lives in cell 1
+        // (grid 16..32) but spans 16..48, so it IS on screen; culling on
+        // the grid alone would pop it.
+        renderer.drawAllLayers(32, 0, .{ .view_width = 16, .view_height = 64 });
+
+        try std.testing.expectEqual(@as(usize, 1), RecordingBackend.calls.items.len);
+        try std.testing.expectEqual(@as(u32, 201), RecordingBackend.calls.items[0].texture_id);
+    }
+
+    test "a diagonally flipped tall tile is drawn from the cell left of the view" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, rotated_tall_collection_tmx);
+        defer map.deinit();
+
+        var renderer = try collectionRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // The 16x48 image in cell 0 is exactly one cell WIDE, so its
+        // unrotated horizontal overhang is zero. The diagonal flip draws
+        // it rotated 90° about its centre (8, -8), i.e. across world
+        // x -16..32 — a third of it inside this 16..32 view. Culling on
+        // the unrotated bounds alone drops cell 0 and the prop pops.
+        renderer.drawAllLayers(16, 0, .{ .view_width = 16, .view_height = 64 });
+
+        try std.testing.expectEqual(@as(usize, 1), RecordingBackend.calls.items.len);
+        try std.testing.expectEqual(@as(f32, 90), RecordingBackend.calls.items[0].rotation);
+    }
+
+    test "a diagonally flipped wide tile is drawn from the cell above the view" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, rotated_wide_collection_tmx);
+        defer map.deinit();
+
+        var renderer = try collectionRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // The transposed case, and the one bottom-left anchoring can never
+        // produce: rotated about its centre (24, 8) the 48x16 image covers
+        // world y -16..32, hanging BELOW its own row. The view is row 1
+        // (y 16..32), so cell (0,0) has to survive a cull that only ever
+        // widened the row range DOWNWARD.
+        renderer.drawAllLayers(0, 16, .{ .view_width = 16, .view_height = 16 });
+
+        try std.testing.expectEqual(@as(usize, 1), RecordingBackend.calls.items.len);
+        try std.testing.expectEqual(@as(f32, 90), RecordingBackend.calls.items[0].rotation);
+    }
+
+    test "an unflipped map culls exactly as it did before the rotated bounds" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, nonuniform_collection_tmx);
+        defer map.deinit();
+
+        var renderer = try collectionRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // Same view as "an oversized tile is drawn from a cell just outside
+        // the view". No gid here carries the diagonal flag, so the rotated
+        // bounds contribute nothing and the 16x16 tile in cell 0 — outside
+        // this 32..48 view — must stay culled, not become collateral
+        // over-draw from a wider range.
+        renderer.drawAllLayers(32, 0, .{ .view_width = 16, .view_height = 64 });
+
+        try std.testing.expectEqual(@as(usize, 1), RecordingBackend.calls.items.len);
+        try std.testing.expectEqual(@as(u32, 201), RecordingBackend.calls.items[0].texture_id);
+    }
+
+    test "a per-tile image without width/height falls back to the tile size" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, sizeless_collection_tmx);
+        defer map.deinit();
+
+        // The parser fills the gap, so a consumer reading `tile_images`
+        // (labelle-engine#843) sees a usable size too, not just the
+        // renderer.
+        try std.testing.expectEqual(@as(u32, 16), map.tilesets[0].tile_images[0].width);
+        try std.testing.expectEqual(@as(u32, 16), map.tilesets[0].tile_images[0].height);
+
+        var renderer = try collectionRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        renderer.drawAllLayers(0, 0, .{});
+
+        // Renders as a one-cell tile — identical to the sheet path — where
+        // a zero size would have skipped the draw entirely.
+        try std.testing.expectEqual(@as(usize, 1), RecordingBackend.calls.items.len);
+        const call = RecordingBackend.calls.items[0];
+        try std.testing.expectEqual(@as(f32, 16), call.dest.width);
+        try std.testing.expectEqual(@as(f32, 16), call.dest.height);
+        try std.testing.expectEqual(@as(f32, 8), call.dest.x);
+        try std.testing.expectEqual(@as(f32, 8), call.dest.y);
+    }
+
+    test "a collection and a sheet tileset render side by side in one map" {
         RecordingBackend.reset(std.testing.allocator);
         defer RecordingBackend.cleanup();
 
         var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, mixed_collection_tmx);
         defer map.deinit();
 
-        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        var renderer = try collectionRenderer(std.testing.allocator, &map);
         defer renderer.deinit();
 
         renderer.drawAllLayers(0, 0, .{});
 
-        // gid 1 is the collection tileset (skipped); gid 5 is the sheet.
-        try std.testing.expectEqual(@as(usize, 1), RecordingBackend.calls.items.len);
-        try std.testing.expectEqual(@as(u32, 101), RecordingBackend.calls.items[0].texture_id);
+        // gid 1 is the collection tileset's tile 0; gid 5 is the sheet's.
+        try std.testing.expectEqual(@as(usize, 2), RecordingBackend.calls.items.len);
+        try std.testing.expectEqual(@as(u32, 200), RecordingBackend.calls.items[0].texture_id);
+        try std.testing.expectEqual(@as(u32, 101), RecordingBackend.calls.items[1].texture_id);
+
+        // The sheet tile still slices its grid; the collection tile does not.
+        try std.testing.expectEqual(@as(f32, 0), RecordingBackend.calls.items[1].src.x);
+        try std.testing.expectEqual(@as(f32, 16), RecordingBackend.calls.items[1].src.width);
     }
 
-    test "an unsupported collection tileset never reaches texture resolution" {
+    test "an external collection .tsx renders like an inline one" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemoryWithOptions(
+            std.testing.allocator,
+            tmxReferencing("tilesets/collection.tsx"),
+            "",
+            .{ .tsx_resolver = tsx_table_resolver },
+        );
+        defer map.deinit();
+
+        var renderer = try collectionRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        renderer.drawAllLayers(0, 0, .{});
+
+        // The map's layer is gids 17..20; the `.tsx` defines tiles 0 and 1,
+        // so gids 17 and 18 draw and 19/20 have no image.
+        try std.testing.expectEqual(@as(usize, 2), RecordingBackend.calls.items.len);
+        try std.testing.expectEqual(@as(u32, 200), RecordingBackend.calls.items[0].texture_id);
+        try std.testing.expectEqual(@as(u32, 201), RecordingBackend.calls.items[1].texture_id);
+    }
+
+    test "a repeated tile image is loaded once and unloaded once" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemoryWithBasePath(
+            std.testing.allocator,
+            shared_image_collection_tmx,
+            "assets",
+        );
+        defer map.deinit();
+
+        var renderer = try Renderer.init(std.testing.allocator, &map);
+
+        // Two tiles naming one file: one texture, shared.
+        try std.testing.expectEqual(@as(u32, 1), RecordingBackend.load_count);
+
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(usize, 2), RecordingBackend.calls.items.len);
+        try std.testing.expectEqual(
+            RecordingBackend.calls.items[0].texture_id,
+            RecordingBackend.calls.items[1].texture_id,
+        );
+
+        renderer.deinit();
+        // Once, not once per tile — a double unload would be a use-after-free.
+        try std.testing.expectEqual(@as(u32, 1), RecordingBackend.unload_count);
+    }
+
+    test "resolver-supplied per-tile textures are not unloaded on deinit" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, collection_of_images_tmx);
+        defer map.deinit();
+
+        var renderer = try collectionRenderer(std.testing.allocator, &map);
+        renderer.deinit();
+
+        // The caller's catalog owns them, exactly as for a sheet tileset.
+        try std.testing.expectEqual(@as(u32, 0), RecordingBackend.unload_count);
+    }
+
+    test "a resolver without the per-tile seam leaves collection tiles unresolved" {
         RecordingBackend.reset(std.testing.allocator);
         defer RecordingBackend.cleanup();
 
@@ -1208,12 +1717,17 @@ pub const COLLECTION_OF_IMAGES = struct {
         });
         defer renderer.deinit();
 
-        // Tileset 0 is the collection tileset: `init` warns and skips it
-        // before resolution, so no texture is resolved or retained for a
-        // tileset whose every tile the draw pass drops. Tileset 1 (the
-        // sheet) still resolves normally.
+        // `resolveTileFn` is optional and null here — a caller still on the
+        // sheet-only seam compiles unchanged, and its collection tilesets
+        // fall through (warned about at init) rather than misresolving to
+        // the tileset-level texture. Only the sheet (index 1) resolves.
         try std.testing.expectEqual(@as(usize, 1), counter.calls);
         try std.testing.expectEqual(@as(usize, 1), counter.last_index.?);
+
+        RecordingBackend.calls = .empty;
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(usize, 1), RecordingBackend.calls.items.len);
+        try std.testing.expectEqual(@as(u32, 101), RecordingBackend.calls.items[0].texture_id);
     }
 };
 

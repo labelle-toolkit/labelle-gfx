@@ -121,6 +121,9 @@ pub const TileLayer = tilemap_mod.TileLayer;
 pub const ObjectLayer = tilemap_mod.ObjectLayer;
 pub const MapObject = tilemap_mod.MapObject;
 pub const Tileset = tilemap_mod.Tileset;
+/// One `<tile>`'s own image in a Tiled collection-of-images tileset
+/// (labelle-gfx#343) — the entries of `Tileset.tile_images`.
+pub const TileImage = tilemap_mod.TileImage;
 pub const TileFlags = tilemap_mod.TileFlags;
 pub const TileMapRendererWith = tilemap_mod.TileMapRendererWith;
 pub const TileMapDrawOptions = tilemap_mod.DrawOptions;
