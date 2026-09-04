@@ -1887,12 +1887,15 @@ pub const CULL_ORIGIN = struct {
 /// Records every `source` the loader hands `tsx_resolver.resolve`, so a
 /// test can assert the KEY, not just the resolution.
 const RecordingTsxResolver = struct {
-    var last_key_buf: [128]u8 = undefined;
+    var last_key_buf: [512]u8 = undefined;
     var last_key_len: usize = 0;
 
     fn resolve(_: ?*anyopaque, source: []const u8) ?[]const u8 {
-        @memcpy(last_key_buf[0..source.len], source);
-        last_key_len = source.len;
+        // Truncate rather than overrun: a fixture longer than the buffer
+        // must fail the assertion that reads `lastKey()`, not scribble
+        // over whatever follows it in static memory.
+        last_key_len = @min(source.len, last_key_buf.len);
+        @memcpy(last_key_buf[0..last_key_len], source[0..last_key_len]);
         // The `.tsx` named by an entity-bearing reference — its own
         // `<image source>` is escaped too, so the rebase path is exercised
         // on a decoded value.
@@ -1992,6 +1995,59 @@ pub const XML_ENTITY_DECODING = struct {
             ),
         );
         try std.testing.expectEqualStrings("../shared/Overworld.tsx", RecordingTsxResolver.lastKey());
+    }
+
+    /// A resolver registered under the PRE-#337 raw spelling, plus a
+    /// count of how many times the loader asked it anything.
+    const RawKeyTsxResolver = struct {
+        var calls: usize = 0;
+
+        fn resolve(_: ?*anyopaque, source: []const u8) ?[]const u8 {
+            calls += 1;
+            if (std.mem.eql(u8, source, "tilesets/odd&amp;name.tsx")) {
+                return "<tileset name=\"raw\" tilewidth=\"16\" tileheight=\"16\" columns=\"4\" tilecount=\"8\">\n" ++
+                    " <image source=\"a.png\" width=\"64\" height=\"32\"/>\n" ++
+                    "</tileset>";
+            }
+            return null;
+        }
+
+        const value: tilemap.TilesetSourceResolver = .{ .resolveFn = resolve };
+    };
+
+    test "a resolver keyed on the pre-#337 RAW source still resolves" {
+        // The compatibility case the review caught: a pure-memory caller
+        // that registered the escaped reference verbatim resolved fine
+        // before decoding existed. Sending only the decoded key would
+        // turn that working registration into ExternalTilesetUnsupported.
+        RawKeyTsxResolver.calls = 0;
+        var map = try tilemap.TileMap.loadFromMemoryWithOptions(
+            std.testing.allocator,
+            tmxReferencing("tilesets/odd&amp;name.tsx"),
+            "",
+            .{ .tsx_resolver = RawKeyTsxResolver.value },
+        );
+        defer map.deinit();
+
+        try std.testing.expectEqualStrings("raw", map.tilesets[0].name);
+        // Decoded first, raw only as the retry — two calls, in that order.
+        try std.testing.expectEqual(@as(usize, 2), RawKeyTsxResolver.calls);
+    }
+
+    test "an entity-free reference never costs a second resolver call" {
+        // The retry fires only when the raw spelling actually differs, so
+        // the overwhelmingly common reference is unchanged in cost.
+        RawKeyTsxResolver.calls = 0;
+        try std.testing.expectError(
+            error.ExternalTilesetUnsupported,
+            tilemap.TileMap.loadFromMemoryWithOptions(
+                std.testing.allocator,
+                tmxReferencing("../shared/Overworld.tsx"),
+                "",
+                .{ .tsx_resolver = RawKeyTsxResolver.value },
+            ),
+        );
+        try std.testing.expectEqual(@as(usize, 1), RawKeyTsxResolver.calls);
     }
 
     test "a malformed reference in a path is passed through, not rejected" {

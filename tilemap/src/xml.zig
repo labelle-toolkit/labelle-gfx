@@ -13,12 +13,31 @@
 //! `decodeEntities` for the malformed-input policy.
 
 const std = @import("std");
+const builtin = @import("builtin");
+
+/// Bytes the numeric-reference scanner has examined, so a test can assert
+/// the scan's BOUND rather than its wall-clock time (labelle-gfx#346).
+/// Test builds only — `builtin.is_test` compiles both the counter and
+/// every increment out of a shipped build, so this is neither a cost nor
+/// a shared-mutable-state hazard at runtime.
+var scan_steps: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {};
 
 // ── XML Parsing Helpers ─────────────────────────────────────
 
 pub const Attribute = struct {
     key: []const u8,
     value: []const u8,
+    /// The VERBATIM bytes between the quotes, BEFORE entity decoding.
+    ///
+    /// A borrowed sub-slice of the `content` handed to `parseAttributes`:
+    /// never allocated, never freed, and valid only while that buffer is.
+    /// Empty when the attribute carried no quoted value.
+    ///
+    /// Read `value` unless you specifically need the undecoded bytes. The
+    /// one caller that does is the external-`.tsx` resolver, which keeps
+    /// honouring a key registered under the pre-#337 raw spelling; see
+    /// `TilesetSourceResolver.resolveFn`.
+    raw_value: []const u8 = "",
 };
 
 pub const ParsedAttributes = struct {
@@ -66,13 +85,19 @@ const named_entities = [_]NamedEntity{
 ///
 /// **Malformed input passes through verbatim.** `&notanentity;`, a bare
 /// `&`, an unterminated `&amp`, and a numeric reference naming no
-/// character (`&#xD800;`, `&#99999999;`) are copied byte-for-byte rather
-/// than raising. This module is documented as a forgiving scanner, and
-/// the loader around it degrades rather than fails on everything else it
-/// does not understand (unknown elements are skipped, unsupported tileset
-/// shapes warn). A stray `&` in a layer NAME is cosmetic; erroring would
-/// turn it into a whole-map load failure, and an unescaped `&` is the
-/// single most common way a hand-edited `.tmx` is not well-formed.
+/// character XML permits (`&#xD800;`, `&#99999999;`, `&#0;`, `&#xFFFF;`,
+/// the uppercase `&#X41;`) are copied byte-for-byte rather than raising.
+/// This module is documented as a forgiving scanner, and the loader
+/// around it degrades rather than fails on everything else it does not
+/// understand (unknown elements are skipped, unsupported tileset shapes
+/// warn). A stray `&` in a layer NAME is cosmetic; erroring would turn it
+/// into a whole-map load failure, and an unescaped `&` is the single most
+/// common way a hand-edited `.tmx` is not well-formed.
+///
+/// Pass-through is the CONSERVATIVE branch, which is why the accept set
+/// is exactly XML's and no wider: bytes left alone stay the bytes the
+/// document had, while decoding something XML never defined silently
+/// rewrites a path nobody asked to rewrite.
 pub fn decodeEntities(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     // Fast path: no `&` means no reference, so the decoded value IS the
     // raw bytes — one dupe, byte-identical to the pre-#337 behaviour and
@@ -119,25 +144,65 @@ fn decodeReference(s: []const u8, out: *std.ArrayListUnmanaged(u8)) ?usize {
     if (rest.len == 0 or rest[0] != '#') return null;
 
     var j: usize = 1;
-    const base: u8 = if (j < rest.len and (rest[j] == 'x' or rest[j] == 'X')) blk: {
+    // XML 1.0 spells the hexadecimal form with a LOWERCASE `x` only —
+    // `CharRef ::= '&#' [0-9]+ ';' | '&#x' [0-9a-fA-F]+ ';'` — so `&#X41;`
+    // is not a character reference at all. Decoding it would rewrite a
+    // path that legitimately contains those bytes, which is the very bug
+    // the pass-through policy exists to avoid, so it goes through
+    // verbatim like any other malformed reference (labelle-gfx#346).
+    const base: u8 = if (j < rest.len and rest[j] == 'x') blk: {
         j += 1;
         break :blk 16;
     } else 10;
 
+    // Scan the DIGIT RUN, not the whole remaining value. Hunting forward
+    // for a `;` made a hostile or corrupted attribute quadratic: a value
+    // of many `&#` starts had every one of them walk the entire suffix
+    // before returning null, after which the outer loop advanced a single
+    // byte (labelle-gfx#346). A `&` is never a digit in either base, so a
+    // run stops before it can reach the next start and every input byte is
+    // examined a bounded number of times.
     const digits_start = j;
-    while (j < rest.len and rest[j] != ';') : (j += 1) {}
-    if (j >= rest.len) return null; // unterminated: `&#41` with no `;`
+    while (j < rest.len) : (j += 1) {
+        if (builtin.is_test) scan_steps += 1;
+        if (!isDigitInBase(rest[j], base)) break;
+    }
+    // Unterminated (`&#41`), or a non-digit before the `;` (`&#xZZ;`).
+    if (j >= rest.len or rest[j] != ';') return null;
     const digits = rest[digits_start..j];
     if (digits.len == 0) return null; // `&#;` / `&#x;`
 
     // `u21` holds every Unicode scalar and rejects anything past 0x1FFFFF
-    // as an overflow; `utf8Encode` then rejects surrogates and anything
-    // above U+10FFFF. Both land on the pass-through branch.
+    // as an overflow; `isXmlChar` then rejects every code point outside
+    // XML 1.0's `Char` production. All land on the pass-through branch.
     const cp = std.fmt.parseUnsigned(u21, digits, base) catch return null;
+    if (!isXmlChar(cp)) return null;
     var buf: [4]u8 = undefined;
     const n = std.unicode.utf8Encode(cp, &buf) catch return null;
     out.appendSliceAssumeCapacity(buf[0..n]);
     return j + 2; // '&' + everything up to and including the ';'
+}
+
+fn isDigitInBase(c: u8, base: u8) bool {
+    return if (base == 16) std.ascii.isHex(c) else std.ascii.isDigit(c);
+}
+
+/// XML 1.0 §2.2 `Char`:
+///
+///     Char ::= #x9 | #xA | #xD | [#x20-#xD7FF]
+///            | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
+///
+/// A reference naming anything else — NUL, a C0 control other than tab /
+/// LF / CR, a surrogate, U+FFFE, U+FFFF — is not well-formed XML, so
+/// decoding it would inject a byte no conforming document asked for into
+/// what is very often a filesystem path. `&#0;` in an `<image source>`
+/// used to be a literal (broken but nameable) path; encoding it would
+/// make it an unopenable one. Pass those through instead (labelle-gfx#346).
+fn isXmlChar(cp: u21) bool {
+    return cp == 0x9 or cp == 0xA or cp == 0xD or
+        (cp >= 0x20 and cp <= 0xD7FF) or
+        (cp >= 0xE000 and cp <= 0xFFFD) or
+        (cp >= 0x10000 and cp <= 0x10FFFF);
 }
 
 pub fn parseAttributes(allocator: std.mem.Allocator, content: []const u8, pos: *usize) !ParsedAttributes {
@@ -163,12 +228,16 @@ pub fn parseAttributes(allocator: std.mem.Allocator, content: []const u8, pos: *
         while (pos.* < content.len and content[pos.*] == '=') : (pos.* += 1) {}
 
         var value: []const u8 = "";
+        var raw_value: []const u8 = "";
         var value_owned = false;
         if (pos.* < content.len and content[pos.*] == '"') {
             pos.* += 1;
             const val_start = pos.*;
             while (pos.* < content.len and content[pos.*] != '"') : (pos.* += 1) {}
-            value = try decodeEntities(allocator, content[val_start..pos.*]);
+            // Borrowed, not duped: `raw_value` points into `content` and
+            // is never freed (see `Attribute.raw_value`).
+            raw_value = content[val_start..pos.*];
+            value = try decodeEntities(allocator, raw_value);
             value_owned = true;
             pos.* += 1;
         }
@@ -181,7 +250,7 @@ pub fn parseAttributes(allocator: std.mem.Allocator, content: []const u8, pos: *
         // and no caller of `parseAttributes` had to change.
         errdefer if (value_owned) allocator.free(value);
 
-        try attrs.append(allocator, .{ .key = key, .value = value });
+        try attrs.append(allocator, .{ .key = key, .value = value, .raw_value = raw_value });
     }
 
     var self_closed = false;
@@ -196,6 +265,11 @@ pub fn parseAttributes(allocator: std.mem.Allocator, content: []const u8, pos: *
     };
 }
 
+/// `attr.raw_value` is a borrowed sub-slice of the parsed document and is
+/// deliberately NOT freed here. `attr.value` for a valueless attribute is
+/// the `""` literal; `Allocator.free` returns immediately on a zero-length
+/// slice without touching the pointer, so the unconditional free is safe
+/// for it (a test below pins that).
 pub fn freeAttributes(allocator: std.mem.Allocator, attrs: []Attribute) void {
     for (attrs) |attr| {
         allocator.free(attr.key);
@@ -207,6 +281,15 @@ pub fn freeAttributes(allocator: std.mem.Allocator, attrs: []Attribute) void {
 pub fn getAttr(attrs: []const Attribute, key: []const u8) ?[]const u8 {
     for (attrs) |attr| {
         if (std.mem.eql(u8, attr.key, key)) return attr.value;
+    }
+    return null;
+}
+
+/// `getAttr`, but the UNDECODED bytes — see `Attribute.raw_value` for why
+/// this exists and why it borrows the document.
+pub fn getAttrRaw(attrs: []const Attribute, key: []const u8) ?[]const u8 {
+    for (attrs) |attr| {
+        if (std.mem.eql(u8, attr.key, key)) return attr.raw_value;
     }
     return null;
 }
@@ -289,6 +372,7 @@ test "malformed references pass through verbatim rather than erroring" {
     try expectDecodes("&#xZZ;", "&#xZZ;"); // not hex digits
     try expectDecodes("&#xD800;", "&#xD800;"); // lone surrogate: no UTF-8
     try expectDecodes("&#99999999;", "&#99999999;"); // past U+10FFFF
+    try expectDecodes("&#4 1;", "&#4 1;"); // non-digit before the `;`
     // A real entity still decodes when it shares the value with junk.
     try expectDecodes("&bogus; &amp; x", "&bogus; & x");
 }
@@ -296,7 +380,6 @@ test "malformed references pass through verbatim rather than erroring" {
 test "numeric character references decode in both spellings" {
     try expectDecodes("&#65;", "A");
     try expectDecodes("&#x41;", "A");
-    try expectDecodes("&#X41;", "A");
     try expectDecodes("&#0065;", "A"); // leading zeros
     try expectDecodes("caf&#233;.png", "caf\u{e9}.png"); // 2-byte UTF-8
     try expectDecodes("&#x4E2D;", "\u{4E2D}"); // 3-byte
@@ -339,4 +422,147 @@ test "an OOM while decoding a value leaks nothing" {
     var pos: usize = 0;
     try std.testing.expectError(error.OutOfMemory, parseAttributes(alloc, content, &pos));
     try std.testing.expect(failing.has_induced_failure);
+}
+
+// ── Review findings on labelle-gfx#346 ──
+
+test "an uppercase &#X…; is not a character reference" {
+    // XML 1.0 spells CharRef's hex form with a lowercase `x` only, so
+    // `&#X41;` is ordinary text. Decoding it would corrupt a path that
+    // happens to contain those bytes.
+    try expectDecodes("&#X41;", "&#X41;");
+    try expectDecodes("&#X1F600;", "&#X1F600;");
+    // The lowercase form still decodes, unchanged.
+    try expectDecodes("&#x41;", "A");
+}
+
+test "a reference outside XML's Char production passes through" {
+    // Decoding these injects a NUL / control / noncharacter into what is
+    // usually a filesystem path, turning a literal-but-nameable path into
+    // an unopenable one — against the pass-through policy.
+    try expectDecodes("&#0;", "&#0;");
+    try expectDecodes("&#x0;", "&#x0;");
+    try expectDecodes("&#x1;", "&#x1;");
+    try expectDecodes("&#x1F;", "&#x1F;"); // C0 control
+    try expectDecodes("&#8;", "&#8;"); // backspace
+    try expectDecodes("&#xB;", "&#xB;"); // vertical tab
+    try expectDecodes("&#xFFFE;", "&#xFFFE;");
+    try expectDecodes("&#xFFFF;", "&#xFFFF;");
+    try expectDecodes("&#xDFFF;", "&#xDFFF;"); // high surrogate end
+    // In situ: the path keeps its literal bytes rather than gaining a NUL.
+    try expectDecodes("map&#0;.png", "map&#0;.png");
+}
+
+test "the three permitted control characters still decode" {
+    // `Char` admits exactly #x9, #xA and #xD below #x20 — a stricter
+    // filter than "printable", and these are legal in an attribute.
+    try expectDecodes("&#x9;", "\t");
+    try expectDecodes("&#xA;", "\n");
+    try expectDecodes("&#xD;", "\r");
+    // …and the boundaries either side of the surrogate/noncharacter gaps.
+    try expectDecodes("&#x20;", " ");
+    try expectDecodes("&#xD7FF;", "\u{D7FF}");
+    try expectDecodes("&#xE000;", "\u{E000}");
+    try expectDecodes("&#xFFFD;", "\u{FFFD}");
+    try expectDecodes("&#x10000;", "\u{10000}");
+    try expectDecodes("&#x10FFFF;", "\u{10FFFF}");
+}
+
+test "many unterminated numeric starts do not scan quadratically" {
+    // A corrupted or hostile `.tmx` can hold an attribute made of nothing
+    // but `&#`. Hunting forward for a `;` made every one of those starts
+    // walk the whole remaining value before returning null, after which
+    // the outer loop advanced a single byte — O(n^2), enough to stall a
+    // load. The digit-run scan makes it linear.
+    //
+    // Asserted on the deterministic quantity the fix changes (bytes the
+    // numeric scanner examines), not on the wall clock: Zig 0.16 has no
+    // `std.time.Timer` and timing asserts are flaky in CI — the same call
+    // this repo's #208 culling benchmark makes.
+    const n = 48_000;
+    const raw = try std.testing.allocator.alloc(u8, n);
+    defer std.testing.allocator.free(raw);
+    var k: usize = 0;
+    while (k < n) : (k += 2) {
+        raw[k] = '&';
+        raw[k + 1] = '#';
+    }
+
+    scan_steps = 0;
+    const got = try decodeEntities(std.testing.allocator, raw);
+    defer std.testing.allocator.free(got);
+
+    // Nothing resolves, so the value is unchanged.
+    try std.testing.expectEqualStrings(raw, got);
+    // 24_000 starts, each examining exactly ONE byte — the `&` opening
+    // the next start, which is not a digit in either base and ends the
+    // run at once (the final start runs off the end and examines none).
+    // The `;`-hunting scan examined ~n^2/4 = 5.8e8 bytes for this same
+    // input: five orders of magnitude more, and quadratic in `n`.
+    try std.testing.expectEqual(@as(usize, 23_999), scan_steps);
+}
+
+test "the numeric scan never crosses into the next reference" {
+    // The general bound, on a value that DOES have digits: each start
+    // examines only its own digit run, so total scan work is linear in
+    // the value length however many starts it holds.
+    const raw = "&#12&#12&#12&#12" ** 100; // 100 starts, 2 digits each
+    scan_steps = 0;
+    const got = try decodeEntities(std.testing.allocator, raw);
+    defer std.testing.allocator.free(got);
+
+    try std.testing.expectEqualStrings(raw, got);
+    // 400 starts x (2 digits + the `&` that stops the run), less the one
+    // byte the final start runs out of input before examining.
+    try std.testing.expectEqual(@as(usize, 1_199), scan_steps);
+}
+
+// ── Attribute.raw_value ──
+
+test "raw_value keeps the undecoded bytes and is not freed" {
+    // `freeAttributes` must free key and value but never `raw_value`,
+    // which borrows the document. std.testing.allocator panics on a free
+    // of memory it does not own, so a stray free fails here.
+    const content = "source=\"odd&amp;name.tsx\" plain=\"a.tsx\">";
+    var pos: usize = 0;
+    const parsed = try parseAttributes(std.testing.allocator, content, &pos);
+    defer freeAttributes(std.testing.allocator, parsed.attrs);
+
+    try std.testing.expectEqualStrings("odd&name.tsx", getAttr(parsed.attrs, "source").?);
+    try std.testing.expectEqualStrings("odd&amp;name.tsx", getAttrRaw(parsed.attrs, "source").?);
+    // Identity for an entity-free value: raw and decoded agree.
+    try std.testing.expectEqualStrings("a.tsx", getAttr(parsed.attrs, "plain").?);
+    try std.testing.expectEqualStrings("a.tsx", getAttrRaw(parsed.attrs, "plain").?);
+    try std.testing.expect(getAttrRaw(parsed.attrs, "missing") == null);
+}
+
+test "an attribute with no quoted value survives parse and free" {
+    // The value stays the `""` literal, which `freeAttributes` and the
+    // errdefer chain both hand to `allocator.free`. That is safe —
+    // `Allocator.free` returns on a zero-length slice before it can touch
+    // the pointer — but the guarantee is worth pinning: the testing
+    // allocator would flag any real free of unowned memory, and the OOM
+    // path exercises the same value through the errdefer.
+    {
+        const content = "bare other=\"x\">";
+        var pos: usize = 0;
+        const parsed = try parseAttributes(std.testing.allocator, content, &pos);
+        defer freeAttributes(std.testing.allocator, parsed.attrs);
+
+        try std.testing.expectEqualStrings("", getAttr(parsed.attrs, "bare").?);
+        try std.testing.expectEqualStrings("", getAttrRaw(parsed.attrs, "bare").?);
+        try std.testing.expectEqualStrings("x", getAttr(parsed.attrs, "other").?);
+    }
+    {
+        // Allocation order for `bare other="x"`: 0 dupe("bare"),
+        // 1 attrs.append grow. Failing #1 runs the function-level errdefer
+        // over an already-appended… nothing, and the per-value errdefer
+        // over the unowned `""`.
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 1 });
+        const alloc = failing.allocator();
+        const content = "bare other=\"x\">";
+        var pos: usize = 0;
+        try std.testing.expectError(error.OutOfMemory, parseAttributes(alloc, content, &pos));
+        try std.testing.expect(failing.has_induced_failure);
+    }
 }
