@@ -508,6 +508,17 @@ pub fn DrawHelpers(comptime Self: type) type {
             }
         }
 
+        /// KNOWN GAP (gfx#348): `text.font` is carried all the way here — the
+        /// component sets it, `toVisual` propagates it, the retained text table
+        /// stores it — but it is DROPPED at this call. `drawText` is a REQUIRED
+        /// decl of core's draw sub-surface and its signature takes no font
+        /// (`labelle-core/src/backend_contract.zig`, `draw_fn_decls` /
+        /// `DRAW_CONTRACT_VERSION`), so every backend renders text with its own
+        /// built-in font. Honouring a `FontId` needs a font-aware draw decl in
+        /// core plus backend support — a core release + pin bump, out of scope
+        /// here. Until then a non-`.invalid` font is inert at the pixel level,
+        /// but it is now DATA the engine can set and a backend can later read,
+        /// instead of a field the component could not even hold.
         pub fn drawTextEntry(entry: *const TextEntry) void {
             const text = &entry.visual;
             const tpos = entry.position;

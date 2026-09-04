@@ -11,6 +11,7 @@ pub const Pivot = types_mod.Pivot;
 pub const SizeMode = types_mod.SizeMode;
 pub const Container = types_mod.Container;
 pub const TextureId = types_mod.TextureId;
+pub const FontId = types_mod.FontId;
 pub const Material = types_mod.Material;
 pub const Shape = visuals_mod.Shape;
 pub const VisualType = core.VisualType;
@@ -121,6 +122,15 @@ pub fn TextComponent(comptime LayerEnum: type) type {
         const Self = @This();
         pub const TextVisual = VTypes.TextVisual;
 
+        /// Font this text draws with. `.invalid` (the default) means "use
+        /// whatever font the BACKEND already ships" — byte-identical to the
+        /// pre-#348 behaviour, so no existing game or `.zon` scene changes.
+        ///
+        /// This is the field labelle-engine's `Game.setTextFont` writes
+        /// (engine v2.15.0, engine#845). That mixin gates on
+        /// `@hasField(Text, "font")`, so before this field existed the whole
+        /// engine API compiled down to `return;` on every game.
+        font: FontId = .invalid,
         text: [:0]const u8 = "",
         size: f32 = 16,
         color: Color = Color.white,
@@ -130,6 +140,7 @@ pub fn TextComponent(comptime LayerEnum: type) type {
 
         pub fn toVisual(self: Self) TextVisual {
             return .{
+                .font = self.font,
                 .text = self.text,
                 .size = self.size,
                 .color = self.color,
