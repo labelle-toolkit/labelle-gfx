@@ -270,6 +270,40 @@ test "RetainedEngine: replaceTexture / reupload on an unknown key fail without m
     try testing.expectEqual(@as(u32, 0), engine.textures.count());
 }
 
+test "RetainedEngine: the lifecycle seams ignore catalog (sub-base) keys — they are the catalog's lifecycle (#820)" {
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // A catalog slot handle, registered the way the assembler-emitted
+    // ImageBackendAdapter does it. The adapter's slot table owns the upload.
+    const slot: u32 = 7;
+    const slot_id: gfx.TextureId = @enumFromInt(slot);
+    const slot_tex = try MockBackend.loadTexture("slot.png");
+    engine.registerCatalogTexture(slot, slot_tex);
+
+    // invalidateTexture must NOT mark it: a non-resident sub-base entry
+    // would send the sprite draw into the pre-upload fallback, which
+    // fabricates a backend texture from the handle.
+    engine.invalidateTexture(slot_id);
+    try testing.expectEqual(slot_tex.id, engine.getTextureInfo(slot_id).?.backend_texture.id);
+    engine.createSprite(EntityId.from(1), .{ .texture = slot_id, .pivot = .center }, gfx.Position{ .x = 10, .y = 10 });
+    engine.render();
+    // The one draw call sampled the REGISTERED texture, not a fabricated one.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+    try testing.expectEqual(slot_tex.id, MockBackend.getDrawCalls()[0].texture_id);
+
+    // replace / reupload refuse it too (and give the stray upload back).
+    const stray = try MockBackend.loadTexture("stray.png");
+    try testing.expectError(error.NotAMintedKey, engine.replaceTexture(slot_id, stray));
+    try testing.expectError(error.NotAMintedKey, engine.reuploadTextureFromMemory(slot_id, "png", &[_]u8{}));
+    try testing.expectEqual(slot_tex.id, engine.getTextureInfo(slot_id).?.backend_texture.id);
+    try testing.expectEqual(@as(u32, 1), engine.textures.count());
+}
+
 // Same shape as the gfx#291 guard above: the engine holds `GfxRenderer`,
 // not `RetainedEngine`, and gates on `@hasDecl(Renderer, ...)` — a seam
 // missing from the wrapper is a silent no-op through the real stack.

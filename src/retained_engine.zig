@@ -585,8 +585,24 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         /// branch in `drawSpriteEntry`, gfx#324), `drawMesh` /
         /// `drawScreenTexture` / `updateTexture` no-op. No-op on an unknown
         /// id, and idempotent.
+        ///
+        /// MINTED keys only (`>= TEXTURE_KEY_BASE`). A catalog slot handle
+        /// is the catalog's lifecycle (`invalidateGpuResources` +
+        /// re-`registerCatalogTexture`) and its upload is owned by the
+        /// adapter's slot table, not this registry; and a non-resident
+        /// sub-base entry would send `drawSpriteEntry` into its
+        /// pre-upload fallback, which fabricates a backend texture from
+        /// the handle — the one thing an invalidated key must never do.
+        /// So a sub-base id is ignored here, not marked.
         pub fn invalidateTexture(self: *Self, id: TextureId) void {
+            if (!isMintedKey(id)) return;
             if (self.textures.getPtr(id)) |info| info.gpu_resident = false;
+        }
+
+        /// The ownership split `TEXTURE_KEY_BASE` documents, as a predicate:
+        /// the lifecycle seams below act on the gfx-owned half only.
+        fn isMintedKey(id: TextureId) bool {
+            return id.toInt() >= TEXTURE_KEY_BASE;
         }
 
         /// Swap the backend texture behind an EXISTING key, keeping the key.
@@ -595,13 +611,19 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         /// declared it dead (the surface-restore path). Sprites bound to the
         /// key are re-indexed against the new dimensions.
         ///
-        /// Ownership of `tex` transfers on entry: on an unknown `id` there is
-        /// nowhere to store it, so it is given straight back to the backend
-        /// and `error.TextureNotRegistered` is returned — the caller never
-        /// holds a leaked upload. A minted key is only ever unknown once it
-        /// has been `unloadTexture`d, so this is the "you released it in the
-        /// meantime" case, not a routine one.
+        /// Ownership of `tex` transfers on entry: when it cannot be stored it
+        /// is given straight back to the backend and an error is returned —
+        /// the caller never holds a leaked upload. `error.TextureNotRegistered`
+        /// on an unknown `id` (a minted key is only unknown once it has been
+        /// `unloadTexture`d — the "you released it in the meantime" case);
+        /// `error.NotAMintedKey` on a sub-base id, whose upload the catalog's
+        /// adapter owns (freeing the old one here would double-free it; see
+        /// `invalidateTexture`).
         pub fn replaceTexture(self: *Self, id: TextureId, tex: B.Texture) !void {
+            if (!isMintedKey(id)) {
+                B.unloadTexture(tex);
+                return error.NotAMintedKey;
+            }
             const info = self.textures.getPtr(id) orelse {
                 B.unloadTexture(tex);
                 return error.TextureNotRegistered;
@@ -621,11 +643,12 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         /// every direct upload it retained the bytes of, so the `u32` it
         /// handed the game on the original load keeps working after resume.
         /// Errors are the backend decode/upload errors plus
-        /// `error.TextureNotRegistered` (see `replaceTexture`); on any of
-        /// them the entry is left as it was.
+        /// `error.TextureNotRegistered` / `error.NotAMintedKey` (see
+        /// `replaceTexture`); on any of them the entry is left as it was.
         pub fn reuploadTextureFromMemory(self: *Self, id: TextureId, file_type: [:0]const u8, data: []const u8) !void {
-            // Reject an unknown key BEFORE decoding: a full PNG decode just
-            // to hand the result straight back would be pure waste.
+            // Reject a key we would refuse anyway BEFORE decoding: a full PNG
+            // decode just to hand the result straight back is pure waste.
+            if (!isMintedKey(id)) return error.NotAMintedKey;
             if (!self.textures.contains(id)) return error.TextureNotRegistered;
             const tex = try B.loadTextureFromMemory(file_type, data);
             try self.replaceTexture(id, tex);
