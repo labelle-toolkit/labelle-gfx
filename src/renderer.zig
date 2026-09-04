@@ -15,6 +15,107 @@ const VisualType = core.VisualType;
 const GizmoDraw = core.GizmoDraw;
 const EntityId = types_mod.EntityId;
 
+// ── Text gizmos: metrics + the off-viewport cull (labelle-gfx#338) ───────────
+//
+// FONT. A `.text` gizmo draws with whatever font the BACKEND already ships —
+// no font asset is loaded, baked, or shipped for a debug label, which was the
+// whole point of labelle-engine#827. `drawText` is a REQUIRED decl of core's
+// *draw* sub-surface (`backend_contract.draw_fn_decls`), so every conforming
+// backend already has one:
+//
+//   - labelle-raylib forwards to raylib's `DrawText` against raylib's embedded
+//     default font (`labelle-raylib/src/gfx.zig:148`);
+//   - labelle-bgfx samples its own embedded 8×8 ASCII bitmap atlas
+//     (`labelle-bgfx/src/gfx/font.zig`, re-exported at `src/gfx.zig:378`).
+//
+// Both are pixel-positioned and camera-aware, so neither needs bgfx's
+// `BGFX_DEBUG_TEXT` character-cell pass and neither backend needs a change to
+// make this arm work. (The `drawText` no-op at `labelle-bgfx/src/window.zig:1302`
+// that gfx#338 was filed against is a *different*, unused decl on the WINDOW
+// module — `(text, i32 x, i32 y, i32 size, r, g, b, a)` — not the `(text, f32 x,
+// f32 y, f32 size, Color)` draw-surface one the renderer reaches through
+// `Backend(Impl)`.) The draw site still gates on `@hasDecl` so a partial test
+// backend that omits the decl no-ops cleanly instead of failing to compile.
+//
+// ORIGIN. Both backends treat `(x, y)` as the label's TOP-LEFT and grow the
+// string rightwards / downwards in screen pixels. The cull box below is written
+// to that convention.
+
+/// Design-pixel font size every `.text` gizmo draws at.
+///
+/// `GizmoDraw` carries no size field (it is `kind, x1, y1, x2, y2, color,
+/// group, space, category, text` — `x2`/`y2` already mean width/radius/end-x
+/// for the other kinds), so the size is a renderer constant rather than a
+/// per-draw one. 10 px is raylib's default-font base size, and maps to a 1.25×
+/// scale of labelle-bgfx's 8×8 atlas.
+pub const gizmo_text_size: f32 = 10;
+
+/// Longest `.text` gizmo string drawn. The string is borrowed for the duration
+/// of `renderGizmoDraws` only (labelle-core#73), so the draw site copies it
+/// into a stack buffer of this size to NUL-terminate it for the backend's
+/// `[:0]const u8` parameter — nothing is retained past the call. Longer
+/// strings are truncated rather than dropped; a debug label that long is
+/// already unreadable.
+pub const gizmo_text_max_len: usize = 255;
+
+/// Conservative design-pixel extent of a `len`-character gizmo label at
+/// `size`.
+///
+/// `size` per character is EXACT on labelle-bgfx (its glyph advance is
+/// `FONT_CHAR_W * size / FONT_CHAR_H` = `size`) and an OVER-estimate on raylib
+/// (whose default font advances roughly `size / 2`). Over-estimating is the
+/// safe direction for a cull: the box is never smaller than the glyphs, so
+/// `gizmoTextVisible` can never discard a label that would have been partly
+/// on-screen.
+pub fn gizmoTextExtent(text: []const u8, size: f32) struct { w: f32, h: f32 } {
+    // Only the bytes that actually reach the backend matter — the draw path
+    // truncates at `gizmo_text_max_len`, so anything past it cannot be drawn
+    // and must not inflate the box.
+    const drawn = text[0..@min(text.len, gizmo_text_max_len)];
+
+    // raylib's `DrawText` renders newline-separated rows, and `GizmoDraw.text`
+    // imposes no single-line restriction. A fixed one-row height would reject
+    // a multi-line label that starts above the viewport even though its later
+    // rows are on-screen.
+    var rows: f32 = 1;
+    var longest: usize = 0;
+    var col: usize = 0;
+    for (drawn) |c| {
+        if (c == '\n') {
+            longest = @max(longest, col);
+            col = 0;
+            rows += 1;
+        } else {
+            col += 1;
+        }
+    }
+    longest = @max(longest, col);
+
+    const w: f32 = @floatFromInt(longest);
+    return .{ .w = w * size, .h = rows * size };
+}
+
+/// Does a label with its top-left at `(x, y)` overlap the `vw` × `vh` viewport
+/// at all? Pure; `(x, y, vw, vh)` are design pixels in one frame of reference
+/// (for a world draw, the camera projection's output and the camera's own
+/// viewport dimensions).
+///
+/// Text is culled rather than drawn off-screen for two reasons the geometric
+/// primitives don't share. A world label far outside the view projects to an
+/// enormous coordinate, and raylib's `drawText` narrows x/y with
+/// `@intFromFloat` — out-of-range there is illegal behaviour, not a harmless
+/// off-screen quad. And a backend that ever routes this through a
+/// character-cell debug pass (bgfx's `dbgTextPrintf`) would CLAMP a negative
+/// column to 0 and stack every off-screen label in the corner.
+///
+/// A non-finite coordinate falls out as "not visible": every comparison
+/// against NaN is false.
+pub fn gizmoTextVisible(x: f32, y: f32, text: []const u8, size: f32, vw: f32, vh: f32) bool {
+    if (text.len == 0) return false;
+    const e = gizmoTextExtent(text, size);
+    return x + e.w >= 0 and x <= vw and y + e.h >= 0 and y <= vh;
+}
+
 /// Retained-mode renderer with the project's Y-axis convention defaulted to
 /// `.up`. Zig has no default comptime params, so `GfxRenderer` is the `.up`
 /// alias of `GfxRendererWith` — three-arg callers (the assembler-emitted
@@ -993,8 +1094,22 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             clearViewport();
 
             // Screen-space gizmos (no camera, no flip)
+            //
+            // The cull frame of reference is the backend's screen — the same
+            // dimensions `Camera.getViewportDimensions` falls back to for a
+            // full-window camera, so the screen and world text culls agree on
+            // what "the viewport" is.
+            const cull_w: f32 = @floatFromInt(BackendImpl.getScreenWidth());
+            const cull_h: f32 = @floatFromInt(BackendImpl.getScreenHeight());
             for (draws) |d| {
                 if (d.space != .screen) continue;
+                if (d.kind == .text) {
+                    // Already screen space: no projection, only the cull.
+                    if (gizmoTextVisible(d.x1, d.y1, d.text, gizmo_text_size, cull_w, cull_h)) {
+                        drawGizmoText(d, d.x1, d.y1);
+                    }
+                    continue;
+                }
                 drawGizmoPrimitive(d, 0);
             }
         }
@@ -1052,14 +1167,79 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                 drawGizmoPrimitive(d, sh);
             }
             cam.end();
+
+            // World-space TEXT rides a second pass, deliberately OUTSIDE
+            // `begin()/end()` (labelle-gfx#338).
+            //
+            // The label is projected world→screen here, through the SAME
+            // sprite-facing `cam.worldToScreen` the #314 rect test uses as its
+            // ground truth (which applies `core.toScreenY` against the same
+            // reference height the renderer's own flip uses — the camera
+            // module pins that invariant), and then drawn as screen-space
+            // text. So it pans and tracks its subject exactly like the line /
+            // rect / circle arms, but its glyphs keep a constant on-screen
+            // size instead of growing with camera zoom — the readable
+            // behaviour for a debug label, and the one behaviour a backend
+            // that routes text through a camera-unaware debug pass could also
+            // reproduce.
+            //
+            // The camera's scissor (`applyViewport`) is still asserted here —
+            // `clearViewport` runs in the caller, after the camera loop — so a
+            // split-screen pane still clips its own labels.
+            //
+            // `d.text` is BORROWED for the duration of `renderGizmoDraws`
+            // (labelle-core#73). Nothing below retains it: `drawGizmoText`
+            // copies into a stack buffer that dies with the call.
+            const dims = cam.getViewportDimensions();
+            for (draws) |d| {
+                if (d.space != .world or d.kind != .text) continue;
+                // `worldToScreen` takes LOGICAL (y_axis) world coords and does
+                // the flip itself — pass `d.y1` raw, not pre-flipped.
+                const p = cam.worldToScreen(d.x1, d.y1);
+                if (!gizmoTextVisible(p.x, p.y, d.text, gizmo_text_size, dims.width, dims.height)) continue;
+                drawGizmoText(d, p.x, p.y);
+            }
+        }
+
+        /// Unpack a gizmo's packed ARGB `u32` into the backend's colour type.
+        /// One definition, shared by every gizmo arm, so text honours `color`
+        /// byte-for-byte the way the geometric primitives do.
+        fn gizmoColor(argb: u32) B.Color {
+            return B.color(
+                @truncate((argb >> 16) & 0xFF),
+                @truncate((argb >> 8) & 0xFF),
+                @truncate(argb & 0xFF),
+                @truncate((argb >> 24) & 0xFF),
+            );
+        }
+
+        /// Draw one `.text` gizmo at an already-resolved SCREEN position.
+        ///
+        /// Callers own the projection (world) or pass the draw's own coords
+        /// (screen), and own the cull — this leaf only NUL-terminates and
+        /// submits.
+        fn drawGizmoText(d: GizmoDraw, x: f32, y: f32) void {
+            // `drawText` is a required decl of core's draw sub-surface, so this
+            // gate holds on every conforming backend; it is here so a partial
+            // test backend that omits it degrades to a clean no-op rather than
+            // a compile error — the same shape `drawMesh` / `setApplyFit` /
+            // `designToPhysical` use.
+            if (!@hasDecl(BackendImpl, "drawText")) return;
+            if (d.text.len == 0) return;
+
+            // The backend takes `[:0]const u8`; `GizmoDraw.text` is a borrowed
+            // `[]const u8`. Copy into a stack buffer to terminate it — the copy
+            // lives exactly as long as this call, which is what the borrow
+            // contract asks for.
+            var buf: [gizmo_text_max_len + 1]u8 = undefined;
+            const n = @min(d.text.len, gizmo_text_max_len);
+            @memcpy(buf[0..n], d.text[0..n]);
+            buf[n] = 0;
+            B.drawText(buf[0..n :0], x, y, gizmo_text_size, gizmoColor(d.color));
         }
 
         fn drawGizmoPrimitive(d: GizmoDraw, screen_height: f32) void {
-            const r: u8 = @truncate((d.color >> 16) & 0xFF);
-            const gr: u8 = @truncate((d.color >> 8) & 0xFF);
-            const b: u8 = @truncate(d.color & 0xFF);
-            const a: u8 = @truncate((d.color >> 24) & 0xFF);
-            const c = B.color(r, gr, b, a);
+            const c = gizmoColor(d.color);
 
             // Map world-space gizmo Y to screen via the same canonical core
             // transform as entity positions. `screen_height == 0` is the
@@ -1108,6 +1288,12 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
                         B.drawLine(d.x2, y2, d.x2 - nx * hs - ny * hs * 0.5, y2 - ny * hs + nx * hs * 0.5, 2, c);
                     }
                 },
+                // Text is NOT drawn here. It needs the camera as a *projection*
+                // (world→screen) rather than as an ambient transform, plus an
+                // off-viewport cull, so it rides the dedicated pass in
+                // `drawWorldGizmos` / the screen-space loop instead
+                // (labelle-gfx#338). Reaching it through this arm would draw it
+                // inside `beginMode2D` and double-transform it.
                 .text => {},
             }
         }

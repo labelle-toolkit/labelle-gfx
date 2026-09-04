@@ -77,6 +77,55 @@ Practical guidance: keep materials the exception (the flashing hit target, the
 dissolving pickup — a few sprites), never a whole-layer default, and group
 material sprites in draw order where possible.
 
+## Gizmo overlays
+
+`renderGizmoDraws` paints a frame's `GizmoDraw` list — debug lines, rects,
+circles, arrows and text. World-space draws go through the active camera
+(one pass per split-screen pane, at most one full-window camera);
+screen-space draws are painted flat afterwards.
+
+No enable / category / group filtering happens here. labelle-engine's
+`GizmoState` drops a disabled category *before* the draw reaches this list, so
+every kind — text included — is filtered identically and no primitive has a
+private path around it.
+
+### Text gizmos and the backend's built-in font
+
+A `.text` gizmo draws with the font the **backend already ships**. Nothing is
+loaded, baked, or licensed for a debug label: `drawText` is a required decl of
+labelle-core's *draw* sub-surface, so every conforming backend has one —
+raylib forwards to `DrawText` and its embedded default font, labelle-bgfx
+samples its own embedded 8×8 ASCII bitmap atlas. The draw site is still
+`@hasDecl`-gated, so a partial backend that omits the decl no-ops cleanly.
+
+Backend caveats, alongside the material/post-fx degradations above:
+
+| Caveat | Where it bites |
+|---|---|
+| **Fixed size.** `GizmoDraw` has no size field, so every label draws at `renderer_mod.gizmo_text_size` (10 px). | every backend |
+| **ASCII only.** labelle-bgfx's atlas covers printable ASCII 32–126; anything outside advances the cursor and draws nothing. | labelle-bgfx |
+| **1 px snap.** raylib's `drawText` narrows x/y with `@intFromFloat`, so a label lands on whole pixels. | labelle-raylib |
+| **255-char truncation.** The borrowed string is copied into a stack buffer to NUL-terminate it for the backend; longer strings are truncated, not dropped. | every backend |
+
+`space = .world` labels are **projected through the active camera in the gizmo
+pass and then drawn in screen space** — not submitted inside the camera
+transform like the geometric arms. So a label pans and tracks its subject
+exactly like a world-space rect, but its glyphs keep a constant on-screen size
+instead of growing with camera zoom, which is what makes a debug readout
+legible at any zoom. It is also the only shape a backend that routes text
+through a camera-unaware debug pass (bgfx's `BGFX_DEBUG_TEXT` / `dbgTextPrintf`)
+could reproduce, should one ever be used here.
+
+Off-viewport labels are **culled**, not clamped (`renderer_mod.gizmoTextVisible`).
+A world label far outside the view projects to an enormous coordinate, and
+narrowing that with `@intFromFloat` is illegal behaviour rather than a harmless
+off-screen quad; a character-cell debug pass would instead clamp a negative
+column to 0 and stack every off-screen label in the corner.
+
+The string on `GizmoDraw.text` is **borrowed for the duration of the
+`renderGizmoDraws` call** (labelle-core#73). The renderer copies it into a
+stack buffer that dies with the call and retains nothing.
+
 ## Modules
 
 | Module | Description |
