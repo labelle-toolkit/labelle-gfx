@@ -5593,3 +5593,177 @@ test "gizmoTextVisible: keeps a multi-line label whose later rows are on-screen"
     // A single-row label at the same offset is correctly still culled.
     try testing.expect(!renderer_mod.gizmoTextVisible(100, -15, "aa", size, vw, vh));
 }
+
+// ── Font seam at the text draw (gfx#348/#349, labelle-engine#845) ───────────
+//
+// `drawTextEntry` is the only place a `TextVisual.font` can become pixels, and
+// until labelle-core#75 grew an optional font-aware text draw it could not: the id was
+// read here and then DROPPED, because the contract's only text decl
+// (`drawText`, REQUIRED) takes no font. These drive the REAL draw leaf against
+// the two backend shapes that exist — a wrapper that declares
+// `drawTextWithFont` and one that doesn't (every backend shipping today) —
+// the same way the engine's tests gate on renderer shape.
+
+/// What reached the backend, for both stand-in wrappers below.
+const TextDrawLog = struct {
+    plain_calls: u32 = 0,
+    font_calls: u32 = 0,
+    last_text: []const u8 = "",
+    last_x: f32 = 0,
+    last_y: f32 = 0,
+    last_size: f32 = 0,
+    last_r: u8 = 0,
+    last_a: u8 = 0,
+    /// Handle the font-aware decl received. `null` covers both "not called" and
+    /// "called with no font"; `font_calls` separates them.
+    last_font: ?u32 = null,
+};
+
+threadlocal var text_log: TextDrawLog = .{};
+
+const TestTextColor = struct { r: u8 = 0, g: u8 = 0, b: u8 = 0, a: u8 = 0 };
+
+/// Stands in for `Backend(Impl)` of a backend that DOES declare the optional
+/// font-aware text draw. Shaped like the wrapper, not the raw `Impl`, because
+/// that is what the draw leaf calls through.
+const FontAwareWrapper = struct {
+    pub const Color = TestTextColor;
+
+    pub fn drawText(text: [:0]const u8, x: f32, y: f32, size: f32, tint: Color) void {
+        text_log.plain_calls += 1;
+        record(text, x, y, size, tint);
+    }
+
+    pub fn drawTextWithFont(
+        text: [:0]const u8,
+        x: f32,
+        y: f32,
+        size: f32,
+        tint: Color,
+        font: ?u32,
+    ) void {
+        text_log.font_calls += 1;
+        record(text, x, y, size, tint);
+        text_log.last_font = font;
+    }
+
+    fn record(text: [:0]const u8, x: f32, y: f32, size: f32, tint: Color) void {
+        text_log.last_text = text;
+        text_log.last_x = x;
+        text_log.last_y = y;
+        text_log.last_size = size;
+        text_log.last_r = tint.r;
+        text_log.last_a = tint.a;
+    }
+};
+
+/// Stands in for the wrapper of a backend WITHOUT the optional decl — the state
+/// of every backend today, and of any labelle-core older than the font seam.
+const PlainWrapper = struct {
+    pub const Color = TestTextColor;
+
+    pub fn drawText(text: [:0]const u8, x: f32, y: f32, size: f32, tint: Color) void {
+        FontAwareWrapper.drawText(text, x, y, size, tint);
+    }
+};
+
+/// A real engine instantiation, purely to borrow its REAL entry types.
+const TextTestEngine = RetainedEngineWith(MockBackend, DefaultLayers);
+
+/// The real draw leaves, bound to real entry types and a stand-in wrapper.
+fn textDrawHelpers(comptime Wrapper: type) type {
+    return gfx.retained_draw_mod.DrawHelpers(struct {
+        pub const BackendType = Wrapper;
+        pub const SpriteEntry = TextTestEngine.SpriteEntry;
+        pub const ShapeEntry = TextTestEngine.ShapeEntry;
+        pub const TextEntry = TextTestEngine.TextEntry;
+    });
+}
+
+fn textEntryWithFont(font: gfx.FontId) TextTestEngine.TextEntry {
+    return .{
+        .visual = .{
+            .font = font,
+            .text = "score",
+            .size = 24,
+            .color = .{ .r = 200, .g = 10, .b = 10, .a = 255 },
+        },
+        .position = .{ .x = 12, .y = 34 },
+    };
+}
+
+test "font seam: a backend WITH the decl receives the visual's font" {
+    text_log = .{};
+    const entry = textEntryWithFont(.from(7));
+    textDrawHelpers(FontAwareWrapper).drawTextEntry(&entry);
+
+    // The whole point: the id survives the call it used to die at.
+    try testing.expectEqual(@as(u32, 1), text_log.font_calls);
+    try testing.expectEqual(@as(u32, 0), text_log.plain_calls);
+    try testing.expectEqual(@as(?u32, 7), text_log.last_font);
+    // ...carrying exactly the geometry/colour the plain draw would have.
+    try testing.expectEqualStrings("score", text_log.last_text);
+    try testing.expectEqual(@as(f32, 12), text_log.last_x);
+    try testing.expectEqual(@as(f32, 34), text_log.last_y);
+    try testing.expectEqual(@as(f32, 24), text_log.last_size);
+    try testing.expectEqual(@as(u8, 200), text_log.last_r);
+}
+
+test "font seam: no font means the plain drawText, even on a font-aware backend" {
+    text_log = .{};
+    const entry = textEntryWithFont(.invalid);
+    textDrawHelpers(FontAwareWrapper).drawTextEntry(&entry);
+
+    try testing.expectEqual(@as(u32, 1), text_log.plain_calls);
+    try testing.expectEqual(@as(u32, 0), text_log.font_calls);
+}
+
+test "font seam: a backend WITHOUT the decl still draws, font or no font" {
+    const Draw = textDrawHelpers(PlainWrapper);
+
+    text_log = .{};
+    const plain_entry = textEntryWithFont(.invalid);
+    Draw.drawTextEntry(&plain_entry);
+    const no_font = text_log;
+
+    text_log = .{};
+    const font_entry = textEntryWithFont(.from(7));
+    Draw.drawTextEntry(&font_entry);
+    const with_font = text_log;
+
+    // Both take the required `drawText`, and a font on the visual changes
+    // NOTHING about the call: a backend that hasn't implemented the seam isn't
+    // broken by it, it just keeps rendering its built-in font.
+    try testing.expectEqual(@as(u32, 1), no_font.plain_calls);
+    try testing.expectEqual(@as(u32, 1), with_font.plain_calls);
+    try testing.expectEqual(@as(u32, 0), with_font.font_calls);
+    try testing.expectEqual(no_font.last_x, with_font.last_x);
+    try testing.expectEqual(no_font.last_y, with_font.last_y);
+    try testing.expectEqual(no_font.last_size, with_font.last_size);
+    try testing.expectEqual(no_font.last_r, with_font.last_r);
+    try testing.expectEqual(no_font.last_a, with_font.last_a);
+    try testing.expectEqualStrings(no_font.last_text, with_font.last_text);
+}
+
+test "font seam: the no-font path is byte-identical across both backend shapes" {
+    // The compatibility guarantee, spelled out: for a text visual with no font,
+    // a font-aware backend and a plain one receive the very same `drawText`.
+    const entry = textEntryWithFont(.invalid);
+
+    text_log = .{};
+    textDrawHelpers(FontAwareWrapper).drawTextEntry(&entry);
+    const aware = text_log;
+
+    text_log = .{};
+    textDrawHelpers(PlainWrapper).drawTextEntry(&entry);
+    const plain = text_log;
+
+    try testing.expectEqual(aware.plain_calls, plain.plain_calls);
+    try testing.expectEqual(aware.font_calls, plain.font_calls);
+    try testing.expectEqual(aware.last_x, plain.last_x);
+    try testing.expectEqual(aware.last_y, plain.last_y);
+    try testing.expectEqual(aware.last_size, plain.last_size);
+    try testing.expectEqual(aware.last_r, plain.last_r);
+    try testing.expectEqual(aware.last_a, plain.last_a);
+    try testing.expectEqualStrings(aware.last_text, plain.last_text);
+}

@@ -508,27 +508,41 @@ pub fn DrawHelpers(comptime Self: type) type {
             }
         }
 
-        /// KNOWN GAP (gfx#348): `text.font` is carried all the way here — the
-        /// component sets it, `toVisual` propagates it, the retained text table
-        /// stores it — but it is DROPPED at this call. `drawText` is a REQUIRED
-        /// decl of core's draw sub-surface and its signature takes no font
-        /// (`labelle-core/src/backend_contract.zig`, `draw_fn_decls` /
-        /// `DRAW_CONTRACT_VERSION`), so every backend renders text with its own
-        /// built-in font. Honouring a `FontId` needs a font-aware draw decl in
-        /// core plus backend support — a core release + pin bump, out of scope
-        /// here. Until then a non-`.invalid` font is inert at the pixel level,
-        /// but it is now DATA the engine can set and a backend can later read,
-        /// instead of a field the component could not even hold.
+        /// Draws one retained text entry.
+        ///
+        /// `text.font` is honoured through core's OPTIONAL `drawTextWithFont`
+        /// decl (labelle-core#75, the font seam) when BOTH hold:
+        ///   * the resolved backend wrapper declares it — a backend opts in;
+        ///     one that doesn't isn't wrong, it just has no font-aware text
+        ///     draw yet, and the `@hasDecl` gate is comptime so it costs
+        ///     nothing there; and
+        ///   * the visual actually carries a font (`!= .invalid`).
+        ///
+        /// Otherwise this is the plain required `drawText` — the exact call
+        /// this function has always made, byte for byte, so a text entity with
+        /// no font (every one that exists today) renders identically.
+        ///
+        /// This is the last link of the chain `Game.setTextFont`
+        /// (labelle-engine#845) → `TextComponent.font` (gfx#348) → `TextVisual`
+        /// → the backend. Before it, the id was carried the whole way and then
+        /// DROPPED here, because the only text decl in the contract took no
+        /// font. Note the chain still ends at a backend: until one implements
+        /// `drawTextWithFont`, the gate is false and nothing changes on screen.
+        ///
+        /// `FontId.toInt()` is the handle the contract transports (core's
+        /// `FontHandle`, an opaque `u32`). `null` there means "built-in font";
+        /// we never pass it, because `.invalid` already took the plain path.
         pub fn drawTextEntry(entry: *const TextEntry) void {
             const text = &entry.visual;
             const tpos = entry.position;
-            B.drawText(
-                text.text,
-                tpos.x,
-                tpos.y,
-                text.size,
-                .{ .r = text.color.r, .g = text.color.g, .b = text.color.b, .a = text.color.a },
-            );
+            const color: B.Color = .{ .r = text.color.r, .g = text.color.g, .b = text.color.b, .a = text.color.a };
+            if (comptime @hasDecl(B, "drawTextWithFont")) {
+                if (text.font != .invalid) {
+                    B.drawTextWithFont(text.text, tpos.x, tpos.y, text.size, color, text.font.toInt());
+                    return;
+                }
+            }
+            B.drawText(text.text, tpos.x, tpos.y, text.size, color);
         }
     };
 }

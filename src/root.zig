@@ -39,6 +39,14 @@ pub const materialCapabilities = backend_mod.materialCapabilities;
 /// (`PostFxDriver`). The runtime API (`setPostFx`/`pushPostPass`/`clearPostFx`)
 /// lives on the retained engine surface.
 pub const post_fx_mod = @import("post_fx.zig");
+
+/// The per-visual backend draw leaves (`drawSpriteEntry` / `drawShapeEntry` /
+/// `drawTextEntry`) the retained engine renders through. Exposed like every
+/// other sub-module here so a test can drive ONE leaf against a stand-in
+/// backend wrapper — notably a wrapper that declares core's optional
+/// font-aware `drawTextWithFont`, which cannot be reached by standing up a
+/// whole engine on a backend that lacks it (gfx#348/#349).
+pub const retained_draw_mod = @import("retained_engine/draw.zig");
 pub const PostFxDriver = post_fx_mod.PostFxDriver;
 pub const PostPass = backend_mod.PostPass;
 pub const PostPassKind = backend_mod.PostPassKind;
