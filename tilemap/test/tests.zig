@@ -337,6 +337,88 @@ const nested_tileset_tsx =
     \\</map>
 ;
 
+// ── Per-tile animations (labelle-gfx#351) ────────────────────────────
+
+/// A sheet tileset animating tile 0 between two rows of its sheet.
+/// `columns="4"` at 16x16 puts local tile 0 at src (0,0) and local tile 4
+/// directly beneath it at (0,16) — so the src RECT of a recorded draw call
+/// names the frame on screen.
+const animated_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="2" height="1" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="water" tilewidth="16" tileheight="16" columns="4" tilecount="8">
+    \\  <image source="water.png" width="64" height="32"/>
+    \\  <tile id="0">
+    \\   <animation>
+    \\    <frame tileid="0" duration="240"/>
+    \\    <frame tileid="4" duration="240"/>
+    \\   </animation>
+    \\  </tile>
+    \\ </tileset>
+    \\ <layer name="sea" width="2" height="1">
+    \\  <data encoding="csv">1,1</data>
+    \\ </layer>
+    \\</map>
+;
+
+/// Frames of DIFFERENT durations — 100ms, 50ms, 250ms. Tiled writes a
+/// duration per frame and artists routinely hold one longer than the rest,
+/// so uniform-duration playback is not good enough.
+const varied_duration_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="1" height="1" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="torch" tilewidth="16" tileheight="16" columns="4" tilecount="8">
+    \\  <image source="torch.png" width="64" height="32"/>
+    \\  <tile id="0">
+    \\   <animation>
+    \\    <frame tileid="0" duration="100"/>
+    \\    <frame tileid="4" duration="50"/>
+    \\    <frame tileid="1" duration="250"/>
+    \\   </animation>
+    \\  </tile>
+    \\ </tileset>
+    \\ <layer name="fx" width="1" height="1">
+    \\  <data encoding="csv">1</data>
+    \\ </layer>
+    \\</map>
+;
+
+/// The same animated tile, placed HORIZONTALLY FLIPPED
+/// (gid 1 | 0x80000000 = 2147483649).
+const flipped_animated_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="1" height="1" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="water" tilewidth="16" tileheight="16" columns="4" tilecount="8">
+    \\  <image source="water.png" width="64" height="32"/>
+    \\  <tile id="0">
+    \\   <animation>
+    \\    <frame tileid="0" duration="240"/>
+    \\    <frame tileid="4" duration="240"/>
+    \\   </animation>
+    \\  </tile>
+    \\ </tileset>
+    \\ <layer name="sea" width="1" height="1">
+    \\  <data encoding="csv">2147483649</data>
+    \\ </layer>
+    \\</map>
+;
+
+/// An external tileset carrying the animation — Tiled's shared-tileset
+/// workflow, which is how a real project (e.g. the wonderdot set, 261
+/// animated tiles) ships its water and torches.
+const animated_tsx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<tileset version="1.10" name="shared_water" tilewidth="16" tileheight="16" tilecount="8" columns="4">
+    \\ <image source="water.png" width="64" height="32"/>
+    \\ <tile id="2">
+    \\  <animation>
+    \\   <frame tileid="2" duration="120"/>
+    \\   <frame tileid="3" duration="120"/>
+    \\  </animation>
+    \\ </tile>
+    \\</tileset>
+;
+
 /// A `.tmx` referencing `source` and nothing else — the reference is what
 /// these tests vary.
 fn tmxReferencing(comptime source: []const u8) []const u8 {
@@ -358,6 +440,7 @@ fn tableTsxResolver(_: ?*anyopaque, source: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, source, "tilesets/multiline.tsx")) return multiline_image_tsx;
     if (std.mem.eql(u8, source, "tilesets/commented.tsx")) return commented_image_tsx;
     if (std.mem.eql(u8, source, "tilesets/nested.tsx")) return nested_tileset_tsx;
+    if (std.mem.eql(u8, source, "tilesets/animated.tsx")) return animated_tsx;
     return null;
 }
 
@@ -2580,5 +2663,317 @@ pub const XML_ENTITY_DECODING = struct {
 
         try std.testing.expectEqualStrings("odd&notanentity;.png", map.tilesets[0].image_source);
         try std.testing.expectEqualStrings("A &amp B", map.tilesets[0].name);
+    }
+};
+
+// ── Per-tile animations (labelle-gfx#351) ────────────────────────────
+
+pub const TILE_ANIMATIONS = struct {
+    /// Src-rect Y of the one recorded draw call — the animated fixtures
+    /// place their frames on different sheet ROWS, so this names the frame
+    /// currently on screen (row 0 = tile 0..3, row 16 = tile 4..7).
+    fn drawnSrc(index: usize) RecordingBackend.Rectangle {
+        return RecordingBackend.calls.items[index].src;
+    }
+
+    test "parses an <animation> into its frames, with durations" {
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, animated_tmx);
+        defer map.deinit();
+
+        const tileset = map.tilesets[0];
+        try std.testing.expectEqual(@as(usize, 1), tileset.animations.len);
+
+        const anim = tileset.animations[0];
+        try std.testing.expectEqual(@as(u32, 0), anim.local_id);
+        try std.testing.expectEqual(@as(usize, 2), anim.frames.len);
+        try std.testing.expectEqual(@as(u32, 0), anim.frames[0].local_id);
+        try std.testing.expectEqual(@as(u32, 240), anim.frames[0].duration_ms);
+        try std.testing.expectEqual(@as(u32, 4), anim.frames[1].local_id);
+        try std.testing.expectEqual(@as(u32, 240), anim.frames[1].duration_ms);
+        try std.testing.expectEqual(@as(u32, 480), anim.totalDurationMs());
+        try std.testing.expectEqual(&tileset.animations[0], tileset.tileAnimation(0).?);
+        try std.testing.expectEqual(@as(?*const tilemap.TileAnimation, null), tileset.tileAnimation(4));
+    }
+
+    test "an <animation> keeps its tile's <image> parsing intact" {
+        // The `<tile>` scan is shared with collection-of-images support;
+        // an animation must not disturb the sheet it sits beside.
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, animated_tmx);
+        defer map.deinit();
+
+        try std.testing.expectEqualStrings("water.png", map.tilesets[0].image_source);
+        try std.testing.expectEqual(@as(usize, 0), map.tilesets[0].tile_images.len);
+        try std.testing.expect(!map.tilesets[0].isCollection());
+    }
+
+    test "an external .tsx carries its animations across the reference" {
+        var map = try tilemap.TileMap.loadFromMemoryWithOptions(
+            std.testing.allocator,
+            tmxReferencing("tilesets/animated.tsx"),
+            "",
+            .{ .tsx_resolver = tsx_table_resolver },
+        );
+        defer map.deinit();
+
+        const tileset = map.tilesets[0];
+        try std.testing.expectEqual(@as(u32, 17), tileset.firstgid);
+        try std.testing.expectEqual(@as(usize, 1), tileset.animations.len);
+        try std.testing.expectEqual(@as(u32, 2), tileset.animations[0].local_id);
+        try std.testing.expectEqual(@as(usize, 2), tileset.animations[0].frames.len);
+        try std.testing.expectEqual(@as(u32, 3), tileset.animations[0].frames[1].local_id);
+    }
+
+    test "an animated external tileset draws its second frame after a tick" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemoryWithOptions(
+            std.testing.allocator,
+            tmxReferencing("tilesets/animated.tsx"),
+            "",
+            .{ .tsx_resolver = tsx_table_resolver },
+        );
+        defer map.deinit();
+
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // The fixture map places gids 17..20; local tile 2 (gid 19) is the
+        // animated one, whose frames are local 2 (src x=32) then 3 (x=48).
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, 32), RecordingBackend.calls.items[2].src.x);
+
+        RecordingBackend.calls.clearRetainingCapacity();
+        renderer.advanceAnimations(0.15);
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, 48), RecordingBackend.calls.items[2].src.x);
+        // The tiles that declare no animation are untouched by the tick.
+        try std.testing.expectEqual(@as(f32, 0), RecordingBackend.calls.items[0].src.x);
+        try std.testing.expectEqual(@as(f32, 16), RecordingBackend.calls.items[1].src.x);
+    }
+
+    test "an unticked animation draws its first frame" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, animated_tmx);
+        defer map.deinit();
+
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+        try std.testing.expect(renderer.hasAnimations());
+
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(usize, 2), RecordingBackend.calls.items.len);
+        try std.testing.expectEqual(@as(f32, 0), drawnSrc(0).y);
+        try std.testing.expectEqual(@as(f32, 0), drawnSrc(1).y);
+    }
+
+    test "advancing past a frame boundary swaps the drawn tile" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, animated_tmx);
+        defer map.deinit();
+
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // 239ms is still inside frame 0; 241ms is inside frame 1.
+        renderer.advanceAnimations(0.239);
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, 0), drawnSrc(0).y);
+
+        RecordingBackend.calls.clearRetainingCapacity();
+        renderer.advanceAnimations(0.002);
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, 16), drawnSrc(0).y);
+    }
+
+    test "every cell of one tile id flips in lockstep" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, animated_tmx);
+        defer map.deinit();
+
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        renderer.advanceAnimations(0.3);
+        renderer.drawAllLayers(0, 0, .{});
+        // Both cells place tile 0; state is per TILE ID, not per cell, so
+        // a field of water moves as one surface rather than as noise.
+        try std.testing.expectEqual(@as(usize, 2), RecordingBackend.calls.items.len);
+        try std.testing.expectEqual(@as(f32, 16), drawnSrc(0).y);
+        try std.testing.expectEqual(@as(f32, 16), drawnSrc(1).y);
+    }
+
+    test "the cycle wraps back to the first frame" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, animated_tmx);
+        defer map.deinit();
+
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // 300ms → frame 1; +300ms = 600ms → 120ms into the NEXT cycle,
+        // i.e. back on frame 0.
+        renderer.advanceAnimations(0.3);
+        renderer.advanceAnimations(0.3);
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, 0), drawnSrc(0).y);
+    }
+
+    test "a dt spanning several whole cycles lands where playback would" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, animated_tmx);
+        defer map.deinit();
+
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // A hitched frame / debugger pause: 2740ms is five full 480ms
+        // cycles plus 340ms, which is frame 1 — not "frame 0, one step
+        // behind", and not a catch-up loop.
+        renderer.advanceAnimations(2.74);
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, 16), drawnSrc(0).y);
+
+        // And exactly N cycles is the start of the cycle again.
+        RecordingBackend.calls.clearRetainingCapacity();
+        renderer.advanceAnimations(0.14 + 0.48 * 3);
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, 0), drawnSrc(0).y);
+    }
+
+    test "frames of differing durations advance on their own clocks" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, varied_duration_tmx);
+        defer map.deinit();
+
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // 100ms / 50ms / 250ms over local tiles 0 (src 0,0), 4 (0,16),
+        // 1 (16,0). A uniform-duration implementation gets every one of
+        // these wrong.
+        renderer.advanceAnimations(0.11); // 110ms → frame 1
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, 0), drawnSrc(0).x);
+        try std.testing.expectEqual(@as(f32, 16), drawnSrc(0).y);
+
+        RecordingBackend.calls.clearRetainingCapacity();
+        renderer.advanceAnimations(0.05); // 160ms → frame 2 (the long one)
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, 16), drawnSrc(0).x);
+        try std.testing.expectEqual(@as(f32, 0), drawnSrc(0).y);
+
+        RecordingBackend.calls.clearRetainingCapacity();
+        renderer.advanceAnimations(0.2); // 360ms → still frame 2
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, 16), drawnSrc(0).x);
+
+        RecordingBackend.calls.clearRetainingCapacity();
+        renderer.advanceAnimations(0.05); // 410ms → wrapped to frame 0
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, 0), drawnSrc(0).x);
+        try std.testing.expectEqual(@as(f32, 0), drawnSrc(0).y);
+    }
+
+    test "animation composes with a flipped gid" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, flipped_animated_tmx);
+        defer map.deinit();
+
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // Frame 0, flipped: negated source width, first sheet row.
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, -16), drawnSrc(0).width);
+        try std.testing.expectEqual(@as(f32, 0), drawnSrc(0).y);
+
+        // Frame 1: the flip SURVIVES the substitution — the high gid bits
+        // are read off the raw gid, not off the substituted one.
+        RecordingBackend.calls.clearRetainingCapacity();
+        renderer.advanceAnimations(0.3);
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, -16), drawnSrc(0).width);
+        try std.testing.expectEqual(@as(f32, 16), drawnSrc(0).y);
+        try std.testing.expectEqual(@as(f32, 0), RecordingBackend.calls.items[0].rotation);
+    }
+
+    test "a map without <animation> parses none and allocates no state" {
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, minimal_tmx);
+        defer map.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), map.tilesets[0].animations.len);
+
+        // The zero-cost path, proved rather than asserted: building
+        // animation state for an unanimated map must not touch the
+        // allocator AT ALL, so a `FailingAllocator` primed to fail its
+        // very first allocation still yields a (null) animator.
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+        const animator = try tilemap.TileAnimator.init(failing.allocator(), map.tilesets);
+        try std.testing.expectEqual(@as(?tilemap.TileAnimator, null), animator);
+        try std.testing.expectEqual(@as(usize, 0), failing.allocated_bytes);
+    }
+
+    test "ticking an unanimated map changes nothing it draws" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, minimal_tmx);
+        defer map.deinit();
+
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+        try std.testing.expect(!renderer.hasAnimations());
+
+        renderer.drawAllLayers(0, 0, .{});
+        const before = try std.testing.allocator.dupe(RecordingBackend.Call, RecordingBackend.calls.items);
+        defer std.testing.allocator.free(before);
+
+        // Ten seconds of ticking — a no-op both in state and on screen.
+        var i: usize = 0;
+        while (i < 600) : (i += 1) renderer.advanceAnimations(1.0 / 60.0);
+
+        RecordingBackend.calls.clearRetainingCapacity();
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(before.len, RecordingBackend.calls.items.len);
+        for (before, RecordingBackend.calls.items) |a, b| {
+            try std.testing.expectEqual(a.texture_id, b.texture_id);
+            try std.testing.expectEqual(a.src.x, b.src.x);
+            try std.testing.expectEqual(a.src.y, b.src.y);
+            try std.testing.expectEqual(a.dest.x, b.dest.x);
+            try std.testing.expectEqual(a.dest.y, b.dest.y);
+        }
+    }
+
+    test "a non-positive dt never moves an animation" {
+        RecordingBackend.reset(std.testing.allocator);
+        defer RecordingBackend.cleanup();
+
+        var map = try tilemap.TileMap.loadFromMemory(std.testing.allocator, animated_tmx);
+        defer map.deinit();
+
+        var renderer = try resolvedRenderer(std.testing.allocator, &map);
+        defer renderer.deinit();
+
+        // A hard pause (`time_scale = 0`) and a nonsense negative dt both
+        // freeze the water rather than rewinding it.
+        renderer.advanceAnimations(0);
+        renderer.advanceAnimations(-5);
+        renderer.drawAllLayers(0, 0, .{});
+        try std.testing.expectEqual(@as(f32, 0), drawnSrc(0).y);
     }
 };

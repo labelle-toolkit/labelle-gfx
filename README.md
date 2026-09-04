@@ -9,7 +9,7 @@ Backend-agnostic, retained-mode 2D graphics engine for Zig. Part of the [labelle
 - **Sprites, shapes, text, and icons** -- full 2D rendering primitive set with rotation, scale, flip, tint, and pivot support
 - **Layer system** -- user-defined layer enums with world-space and screen-space modes, validated at comptime
 - **Multi-camera** -- single camera, split-screen (vertical, horizontal, quadrant), zoom, rotation, bounds clamping, and coordinate conversion
-- **Tilemap support** -- TMX format loading/rendering from Tiled Map Editor with flip flags and viewport culling
+- **Tilemap support** -- TMX format loading/rendering from Tiled Map Editor with flip flags, per-tile animations and viewport culling
 - **Spatial grid** -- uniform grid spatial partitioning for O(k) viewport queries
 - **Visual effects** -- fade, flash, and temporal fade (e.g. day/night cycles)
 - **Materials & post-fx** -- curated per-draw shader effects (`flash`, `palette_swap`, `dissolve`, `outline`) and a full-screen pass stack (`bloom`, `vignette`, `color_grade`, `crt`), degrading gracefully on backends without them

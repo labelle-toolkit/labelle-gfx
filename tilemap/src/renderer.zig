@@ -8,7 +8,9 @@
 const std = @import("std");
 const types = @import("types.zig");
 const tile_map = @import("tile_map.zig");
+const animation = @import("animation.zig");
 
+const TileAnimator = animation.TileAnimator;
 const TileFlags = types.TileFlags;
 const Tileset = types.Tileset;
 const TileImage = types.TileImage;
@@ -235,6 +237,15 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
         tile_overhang_up: f32,
         tile_overhang_down: f32,
         base_path: []const u8,
+        /// Per-tile animation playback (labelle-gfx#351), or `null` when
+        /// the map declares no `<animation>` — which is the common case
+        /// and costs nothing: no allocation at init, an early return in
+        /// `advanceAnimations`, and a single null test in the draw pass.
+        ///
+        /// Driven by the CALLER (`advanceAnimations(dt)`); the renderer
+        /// never reads a clock, so a headless test is reproducible and a
+        /// paused game freezes its water by simply not ticking.
+        animator: ?TileAnimator,
 
         pub fn init(allocator: std.mem.Allocator, map: *const TileMap) !Self {
             return initWithOptions(allocator, map, .{});
@@ -252,6 +263,7 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
                 .tile_overhang_up = 0,
                 .tile_overhang_down = 0,
                 .base_path = map.base_path,
+                .animator = try TileAnimator.init(allocator, map.tilesets),
             };
             errdefer self.deinit();
 
@@ -458,6 +470,35 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
             }
             self.owned_tile_textures.deinit(self.allocator);
             self.tile_textures.deinit();
+
+            if (self.animator) |*anim| anim.deinit();
+            self.animator = null;
+        }
+
+        /// Advance every per-tile animation this map declares by `dt`
+        /// SECONDS, and no-op when it declares none (labelle-gfx#351).
+        ///
+        /// Call once per frame BEFORE the draw pass, with the same
+        /// time-scaled delta the rest of the game steps on — a paused or
+        /// slowed game then pauses or slows its water for free. `dt` may
+        /// exceed a whole animation cycle (a hitched frame, a test
+        /// stepping a minute at once); the animator wraps rather than
+        /// catching up frame by frame.
+        ///
+        /// The renderer deliberately has NO clock of its own: backends
+        /// disagree about how to read one, and a headless test must be
+        /// deterministic. Time comes in through this parameter or not at
+        /// all.
+        pub fn advanceAnimations(self: *Self, dt: f32) void {
+            if (self.animator) |*anim| anim.advance(dt);
+        }
+
+        /// True when the map declares at least one usable per-tile
+        /// animation — i.e. when `advanceAnimations` has anything to do.
+        /// Lets a caller skip the per-frame call entirely (and lets a test
+        /// assert the zero-cost path).
+        pub fn hasAnimations(self: *const Self) bool {
+            return self.animator != null;
         }
 
         pub fn drawLayer(
@@ -522,8 +563,17 @@ pub fn TileMapRendererWith(comptime BackendType: type) type {
                 var x: u32 = cols.start;
                 while (x < cols.end) : (x += 1) {
                     const raw_gid = layer.getTileRaw(x, y);
-                    const gid = raw_gid & ~TileFlags.ALL_FLAGS;
-                    if (gid == 0) continue;
+                    const placed_gid = raw_gid & ~TileFlags.ALL_FLAGS;
+                    if (placed_gid == 0) continue;
+
+                    // Per-tile animation (labelle-gfx#351): swap in the
+                    // gid of the active frame. Substitution happens on the
+                    // FLAG-STRIPPED gid and `resolveFlip` reads `raw_gid`
+                    // independently below, so an animated tile placed with
+                    // a flip keeps its flip on every frame. `resolve` is a
+                    // subtract, a compare and a load; the whole thing folds
+                    // to one null test on a map without animations.
+                    const gid = if (self.animator) |*anim| anim.resolve(placed_gid) else placed_gid;
 
                     const tileset_idx = self.findTilesetIndex(gid) orelse continue;
                     const tileset = &self.map.tilesets[tileset_idx];
