@@ -13,6 +13,47 @@ pub const LayerSpace = enum {
     /// game's design canvas. Use sparingly — content on this layer WILL
     /// be horizontally/vertically stretched on devices whose aspect
     /// ratio doesn't match the design.
+    ///
+    /// **What stretches is the CANVAS-to-framebuffer mapping.** A sprite's
+    /// pixels really are stretched on screen — possibly non-uniformly —
+    /// but its DESIGN-SPACE bounds are unchanged, and nothing resizes a
+    /// sprite to fit the canvas for you. Those are different statements
+    /// and the difference is the whole trap: a backdrop authored for one
+    /// canvas leaves a gap on a bigger one, and that gap looks exactly
+    /// like a broken fit.
+    ///
+    /// So size backdrops FROM the design canvas rather than hardcoding the
+    /// dimensions they were authored at. This cost real time to diagnose
+    /// in labelle-bgfx#42, where a backdrop scaled for a 1024-wide canvas
+    /// left the right ~256px of a 1280-wide one uncovered while the fit
+    /// was correct throughout, on both the shape and sprite draw paths.
+    ///
+    /// ## What the coverage guarantee actually covers
+    ///
+    /// "Canvas-sized content covers the window" holds for a **fixed design
+    /// canvas on a PINNED layer**. Outside that, check your own case:
+    ///
+    ///   * **Design that follows the physical size.** The canvas is not
+    ///     always fixed — a backend whose design size is never set falls
+    ///     back to the live screen size (labelle-raylib's
+    ///     `getDesignWidth`/`getDesignHeight` do exactly that), and a
+    ///     project that re-sets it on resize is choosing the same thing.
+    ///     There, widening the window DOES widen the canvas, and
+    ///     canvas-derived content has to be re-derived rather than
+    ///     computed once.
+    ///   * **Camera-bound `screen_fill`.** A non-null `camera` tag
+    ///     overrides pinning, and the renderer runs the layer inside
+    ///     `cam.begin()` — so pan and zoom move this layer's content too.
+    ///     Covering the canvas at rest does not mean covering it once the
+    ///     camera has moved; give such a backdrop overscan, or leave it
+    ///     pinned.
+    ///
+    /// Where the canvas size comes from depends on which of the two modes
+    /// above you are in: an explicitly configured fixed canvas is
+    /// `project.labelle`'s `.width` / `.height`, while a dynamic one is
+    /// whatever the backend reports (`getDesignWidth` / `getDesignHeight`
+    /// after a `setDesignSize`). Either way it is the DESIGN canvas, not
+    /// the physical framebuffer.
     screen_fill,
 };
 
