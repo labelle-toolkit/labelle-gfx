@@ -13,6 +13,23 @@ pub const LayerSpace = enum {
     /// game's design canvas. Use sparingly — content on this layer WILL
     /// be horizontally/vertically stretched on devices whose aspect
     /// ratio doesn't match the design.
+    ///
+    /// **It stretches the CANVAS, not your sprites.** The design canvas is
+    /// mapped onto the whole framebuffer, so a sprite that covers the
+    /// canvas covers the window at any size — but nothing resizes a sprite
+    /// to the canvas for you. A backdrop sized for one canvas leaves a gap
+    /// on a bigger one, and the gap looks exactly like a fit bug.
+    ///
+    /// So size backdrops from the design canvas rather than hardcoding the
+    /// dimensions they were authored at. This cost real time to diagnose in
+    /// labelle-bgfx#42, where a backdrop scaled for a 1024-wide canvas left
+    /// the right ~256px of a 1280-wide one uncovered; the fit was correct
+    /// throughout, on both the shape and sprite draw paths.
+    ///
+    /// Note the two sizes are different things: widening the WINDOW does
+    /// not widen the canvas (the fill still covers), whereas widening the
+    /// project's `.width`/`.height` widens the canvas and can expose
+    /// content that no longer reaches its edges.
     screen_fill,
 };
 
