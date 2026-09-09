@@ -48,8 +48,12 @@ pub const LayerSpace = enum {
     ///     camera has moved; give such a backdrop overscan, or leave it
     ///     pinned.
     ///
-    /// Sizes come from `project.labelle`'s `.width` / `.height`, which are
-    /// the design canvas — not the physical framebuffer.
+    /// Where the canvas size comes from depends on which of the two modes
+    /// above you are in: an explicitly configured fixed canvas is
+    /// `project.labelle`'s `.width` / `.height`, while a dynamic one is
+    /// whatever the backend reports (`getDesignWidth` / `getDesignHeight`
+    /// after a `setDesignSize`). Either way it is the DESIGN canvas, not
+    /// the physical framebuffer.
     screen_fill,
 };
 
