@@ -14,6 +14,7 @@
 //! from `base_path/source` on disk otherwise.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const types = @import("types.zig");
 const xml = @import("xml.zig");
 
@@ -1097,12 +1098,26 @@ pub const TileMap = struct {
 /// pathological file, generous next to any real Tiled document.
 const max_document_bytes = 64 << 20;
 
+/// Whether this target has a filesystem the loader can read a `.tsx` from.
+/// Doubles as a compile barrier: merely referencing `std.Io.Threaded`
+/// pulls its whole vtable (child-process wait included) into analysis,
+/// and that does not compile for wasm32-emscripten on Zig 0.16.0.
+const has_filesystem = switch (builtin.os.tag) {
+    .emscripten, .wasi, .freestanding => false,
+    else => true,
+};
+
 /// Read a whole document into an allocator-owned buffer (caller frees).
 ///
 /// Zig 0.16's filesystem API takes an `std.Io` and the loader has no
 /// ambient one, so it stands up a short-lived blocking implementation for
 /// the read — the same `std.Io.Dir` entry point the repo's tooling uses.
+///
+/// On targets without a filesystem this is the same answer
+/// `read_external_from_filesystem = false` gives: the reference can only
+/// be satisfied by a `tsx_resolver`.
 fn readFileOwned(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    if (comptime !has_filesystem) return error.ExternalTilesetUnsupported;
     var threaded: std.Io.Threaded = .init(allocator, .{});
     defer threaded.deinit();
     return std.Io.Dir.cwd().readFileAlloc(threaded.io(), path, allocator, .limited(max_document_bytes));
