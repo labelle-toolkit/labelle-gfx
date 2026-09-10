@@ -71,6 +71,8 @@ jobs:
   # shipped in v1.31.0–v1.34.0 and broke every downstream web build. Object
   # compile only — no emsdk, no link.
   wasm-check:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
