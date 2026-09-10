@@ -1116,15 +1116,24 @@ const max_document_bytes = 64 << 20;
 /// analysis, and its child-process wait does not type-check against
 /// emscripten's signal-enum shape (`std/Io/Threaded.zig:15315`,
 /// `std/os/emscripten.zig:215`). Fixed upstream by Zig PR #31850
-/// (0.17.0-dev). TODO: once labelle-toolkit moves off 0.16.x, revisit —
-/// emscripten with `-lc` does have MEMFS, so the gate could then be
-/// dropped or replaced by an `io: std.Io` supplied through `LoadOptions`.
-/// See also labelle-assembler's `preview/wasm_workaround.zig` for the
-/// same bug hit through the default panic handler.
+/// (0.17.0-dev). TODO(labelle-gfx#357): once labelle-toolkit moves off
+/// 0.16.x, revisit — emscripten with `-lc` does have MEMFS (v1.30.x could
+/// `load` a `.tmx` by path there), so the gate should be dropped or
+/// replaced by an `io: std.Io` supplied through `LoadOptions`. See also
+/// labelle-assembler's `preview/wasm_workaround.zig` for the same bug hit
+/// through the default panic handler.
 const has_filesystem = switch (builtin.os.tag) {
     .emscripten, .freestanding => false,
     else => true,
 };
+
+/// Errors a document read can produce, identical on every target. Spelled
+/// out rather than inferred on purpose: with inference the set would
+/// collapse to `error{FilesystemUnavailable}` on gated targets, and a
+/// consumer switching on `error.FileNotFound` (valid on desktop) would fail
+/// to COMPILE on wasm — the target-only build break this gate exists to
+/// remove, reintroduced in miniature.
+pub const ReadFileError = std.Io.Dir.ReadFileAllocError || error{FilesystemUnavailable};
 
 /// Read a whole document into an allocator-owned buffer (caller frees).
 ///
@@ -1137,7 +1146,7 @@ const has_filesystem = switch (builtin.os.tag) {
 /// a filesystem (`has_filesystem == false`) every call fails with
 /// `error.FilesystemUnavailable` before anything is read: load from memory
 /// and supply external tilesets through a `tsx_resolver`.
-fn readFileOwned(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+fn readFileOwned(allocator: std.mem.Allocator, path: []const u8) ReadFileError![]u8 {
     if (comptime !has_filesystem) return error.FilesystemUnavailable;
     var threaded: std.Io.Threaded = .init(allocator, .{});
     defer threaded.deinit();
