@@ -179,6 +179,29 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // wasm32-emscripten analysis probe for the tilemap module (labelle-gfx#355).
+    // Compiles tilemap/wasm_check.zig as an object for emscripten — no emsdk
+    // and no link step needed, semantic analysis is the whole check. Catches
+    // any std symbol reachable from the loader that fails to analyse only on
+    // that target (Zig 0.16.0's `std.Io.Threaded`), which the host test
+    // suite cannot see.
+    const wasm_check_obj = b.addObject(.{
+        .name = "tilemap-wasm-check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tilemap/wasm_check.zig"),
+            .target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .emscripten }),
+            .optimize = .Debug,
+            // The real web build links libc (emcc); without it std fails
+            // earlier on unrelated missing posix symbols and masks #355.
+            .link_libc = true,
+        }),
+    });
+    const wasm_check_step = b.step(
+        "wasm-check",
+        "Analyse the tilemap loader for wasm32-emscripten (labelle-gfx#355)",
+    );
+    wasm_check_step.dependOn(&wasm_check_obj.step);
+
     const run_tests = b.addRunArtifact(tests);
     const run_root_tests = b.addRunArtifact(root_tests);
     const run_tilemap_tests = b.addRunArtifact(tilemap_tests);

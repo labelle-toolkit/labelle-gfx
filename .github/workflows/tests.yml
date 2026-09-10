@@ -64,3 +64,23 @@ jobs:
 
       - name: Cross-backend material golden diff
         run: zig build material-cross-check
+
+  # wasm32-emscripten analysis of the tilemap loader (labelle-gfx#355): a std
+  # symbol that only fails to analyse on that target is invisible to the host
+  # test job above, and one such regression (Zig 0.16.0's `std.Io.Threaded`)
+  # shipped in v1.31.0–v1.34.0 and broke every downstream web build. Object
+  # compile only — no emsdk, no link.
+  wasm-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: '0.16.0'
+
+      - name: Analyse tilemap loader for wasm32-emscripten
+        run: zig build wasm-check --summary all
