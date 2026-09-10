@@ -11,9 +11,13 @@
 //! the `.tsx` root element is the same `<tileset>` shape the inline path
 //! parses, so resolution is file lookup plus a second run of the same
 //! element parser. Bytes come from `LoadOptions.tsx_resolver` first and
-//! from `base_path/source` on disk otherwise.
+//! from `base_path/source` on disk otherwise — except on targets without a
+//! filesystem (wasm32-emscripten / freestanding), where every disk read
+//! fails with `error.FilesystemUnavailable` and a resolver is the only
+//! way to satisfy the reference (see `has_filesystem`).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const types = @import("types.zig");
 const xml = @import("xml.zig");
 
@@ -147,6 +151,11 @@ pub const LoadOptions = struct {
     /// running. A `.tsx` reference then still fails with
     /// `error.ExternalTilesetUnsupported` unless a resolver supplies the
     /// bytes.
+    ///
+    /// Has no effect on targets without a filesystem (see
+    /// `has_filesystem`): there the read fails with
+    /// `error.FilesystemUnavailable` regardless, so a `.tsx` reference
+    /// needs a `tsx_resolver`.
     read_external_from_filesystem: bool = true,
 };
 
@@ -735,7 +744,8 @@ pub const TileMap = struct {
 
             // A missing/unreadable `.tsx` surfaces the filesystem error
             // (e.g. `error.FileNotFound`) rather than the catch-all — the
-            // path it failed on is the useful diagnostic.
+            // path it failed on is the useful diagnostic. On a target with
+            // no filesystem this is `error.FilesystemUnavailable` instead.
             const buf = try readFileOwned(allocator, full_path);
             owned_bytes = buf;
             break :blk buf;
@@ -1097,12 +1107,47 @@ pub const TileMap = struct {
 /// pathological file, generous next to any real Tiled document.
 const max_document_bytes = 64 << 20;
 
+/// Whether this target has a filesystem the loader can read documents
+/// from. `false` on wasm32-emscripten and freestanding; wasm32-wasi keeps
+/// its preopen-directory filesystem and is NOT gated.
+///
+/// This is also a compile barrier for a Zig 0.16.0 std bug (labelle-gfx#355):
+/// merely referencing `std.Io.Threaded` pulls its whole vtable into
+/// analysis, and its child-process wait does not type-check against
+/// emscripten's signal-enum shape (`std/Io/Threaded.zig:15315`,
+/// `std/os/emscripten.zig:215`). Fixed upstream by Zig PR #31850
+/// (0.17.0-dev). TODO(labelle-gfx#357): once labelle-toolkit moves off
+/// 0.16.x, revisit — emscripten with `-lc` does have MEMFS (v1.30.x could
+/// `load` a `.tmx` by path there), so the gate should be dropped or
+/// replaced by an `io: std.Io` supplied through `LoadOptions`. See also
+/// labelle-assembler's `preview/wasm_workaround.zig` for the same bug hit
+/// through the default panic handler.
+const has_filesystem = switch (builtin.os.tag) {
+    .emscripten, .freestanding => false,
+    else => true,
+};
+
+/// Errors a document read can produce, identical on every target. Spelled
+/// out rather than inferred on purpose: with inference the set would
+/// collapse to `error{FilesystemUnavailable}` on gated targets, and a
+/// consumer switching on `error.FileNotFound` (valid on desktop) would fail
+/// to COMPILE on wasm — the target-only build break this gate exists to
+/// remove, reintroduced in miniature.
+pub const ReadFileError = std.Io.Dir.ReadFileAllocError || error{FilesystemUnavailable};
+
 /// Read a whole document into an allocator-owned buffer (caller frees).
 ///
 /// Zig 0.16's filesystem API takes an `std.Io` and the loader has no
 /// ambient one, so it stands up a short-lived blocking implementation for
 /// the read — the same `std.Io.Dir` entry point the repo's tooling uses.
-fn readFileOwned(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+///
+/// Backs BOTH path-based entry points (`load` / `loadWithOptions` reading
+/// the `.tmx` itself) and the on-disk `.tsx` fallback. On a target without
+/// a filesystem (`has_filesystem == false`) every call fails with
+/// `error.FilesystemUnavailable` before anything is read: load from memory
+/// and supply external tilesets through a `tsx_resolver`.
+fn readFileOwned(allocator: std.mem.Allocator, path: []const u8) ReadFileError![]u8 {
+    if (comptime !has_filesystem) return error.FilesystemUnavailable;
     var threaded: std.Io.Threaded = .init(allocator, .{});
     defer threaded.deinit();
     return std.Io.Dir.cwd().readFileAlloc(threaded.io(), path, allocator, .limited(max_document_bytes));
@@ -1208,7 +1253,7 @@ test "joinRelative keeps the platform root when rebasing an absolute .tsx dir" {
     // POSIX hosts cannot see a Windows root at all: `isAbsolute` and
     // `componentIterator` both dispatch on the native target, so
     // `C:\tilesets` is an ordinary relative name there.
-    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
 
     const alloc = std.testing.allocator;
 
