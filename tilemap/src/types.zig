@@ -27,6 +27,11 @@ pub const ParseError = error{
     /// no directory to read it from (`TileMap.loadFromMemory`), or the
     /// referenced document holds no usable `<tileset>` root element.
     ExternalTilesetUnsupported,
+    /// The load needed to read a document from disk (`TileMap.load`, or
+    /// the `base_path/source` fallback for a `.tsx` reference) on a target
+    /// that has no filesystem — wasm32-emscripten / freestanding. Load
+    /// from memory and supply `.tsx` bytes via `LoadOptions.tsx_resolver`.
+    FilesystemUnavailable,
     /// The map declares `infinite="1"` (chunked layer data).
     InfiniteMapUnsupported,
     /// A tile layer's CSV payload does not contain exactly

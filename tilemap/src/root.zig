@@ -15,7 +15,8 @@
 //!   (engine asset catalog) or filesystem fallback
 //! - External `.tsx` tilesets (Tiled's shared-tileset workflow),
 //!   resolved from the map's directory or from caller-supplied bytes
-//!   (`LoadOptions.tsx_resolver`)
+//!   (`LoadOptions.tsx_resolver`); on wasm32-emscripten / freestanding
+//!   only the latter — see the limitation below
 //! - Both Tiled tileset layouts: a single sheet sliced by a uniform grid,
 //!   and a "collection of images" (`columns="0"`, one `<image>` per
 //!   `<tile>`, tiles free to differ in size) — inline or external
@@ -32,6 +33,12 @@
 //!   (`error.ExternalTilesetUnsupported` from `loadFromMemory`, which
 //!   has no directory to resolve against — pass a
 //!   `LoadOptions.tsx_resolver`, or use a base-path/filesystem load)
+//! - No filesystem reads on wasm32-emscripten / freestanding
+//!   (`error.FilesystemUnavailable` from `load` and from the on-disk
+//!   `.tsx` fallback — load from memory and pass a `tsx_resolver`).
+//!   Also the compile barrier for a Zig 0.16.0 std bug, see
+//!   `tile_map.zig`'s `has_filesystem` (labelle-gfx#355); restoring
+//!   MEMFS reads on emscripten is tracked in labelle-gfx#357
 //! - No infinite maps (`error.InfiniteMapUnsupported`)
 //!
 //! ## Collection-of-images tilesets (labelle-gfx#343)
@@ -123,6 +130,7 @@ pub const RenderOrder = types.RenderOrder;
 // ── TileMap loader (tile_map.zig) ───────────────────────────
 pub const TileMap = tile_map.TileMap;
 pub const LoadOptions = tile_map.LoadOptions;
+pub const ReadFileError = tile_map.ReadFileError;
 pub const TilesetSourceResolver = tile_map.TilesetSourceResolver;
 
 // ── Draw pass, options & pure math (renderer.zig) ───────────
