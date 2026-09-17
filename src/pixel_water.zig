@@ -132,6 +132,11 @@ pub const ConfigError = error{
     /// A value required to be > 0 (`wave_period_seconds` when waves are on,
     /// `ripple_duration_seconds`, `ripple_radius_pixels`) was not.
     NonPositiveDuration,
+    /// `wave_period_seconds` exceeded `WAVE_PERIOD_MAX_SECONDS` while waves
+    /// were on. A period that long has no representable phase under the
+    /// accumulator rebase (see that constant), so it is REFUSED rather than
+    /// animated wrongly forever.
+    WavePeriodTooLong,
     /// A nonnegative value (`wave_amplitude_pixels`, `distortion_pixels`,
     /// `ripple_strength_pixels`) was negative.
     NegativeAmplitude,
@@ -143,6 +148,15 @@ fn finite(v: f32) bool {
 
 fn rgbaFinite(c: PixelWaterRgba) bool {
     return finite(c.r) and finite(c.g) and finite(c.b) and finite(c.a);
+}
+
+/// The wave-period rule, shared by every entry point that can turn waves on
+/// with a given period: `create` / `setSettings` / `reconfigure` (through
+/// `validateConfig`) and `setWavesEnabled` (which enables waves against a
+/// RETAINED period and so must apply exactly the same bound).
+fn validateWavePeriod(period: f32) ConfigError!void {
+    if (!(period > 0)) return error.NonPositiveDuration;
+    if (period > WAVE_PERIOD_MAX_SECONDS) return error.WavePeriodTooLong;
 }
 
 /// Full authored-value validation from the RFC (§"Proposed authoring model").
@@ -160,7 +174,7 @@ pub fn validateConfig(cfg: WaterConfig) ConfigError!void {
     }
 
     if (cfg.reflection_opacity < 0 or cfg.reflection_opacity > 1) return error.OpacityOutOfRange;
-    if (cfg.waves_enabled and cfg.wave_period_seconds <= 0) return error.NonPositiveDuration;
+    if (cfg.waves_enabled) try validateWavePeriod(cfg.wave_period_seconds);
     if (cfg.ripple_duration_seconds <= 0) return error.NonPositiveDuration;
     if (cfg.ripple_radius_pixels <= 0) return error.NonPositiveDuration;
     if (cfg.wave_amplitude_pixels < 0 or cfg.distortion_pixels < 0 or
@@ -189,20 +203,28 @@ pub const UpdateError = error{
 /// under a frame — so `advanceTime` folds the accumulator back below this.
 pub const TIME_REBASE_SECONDS: f32 = 4096;
 
-/// Longest `wave_period_seconds` for which the rebase will WAIT for a whole
-/// period to elapse rather than break the surface phase.
+/// Longest `wave_period_seconds` a waves-enabled configuration may carry.
+/// REJECTED at validation (`error.WavePeriodTooLong`), not clamped.
 ///
-/// A rebase may only subtract a whole number of wave periods, or the phase
-/// (`time / wave_period_seconds`) jumps — so a period LONGER than
-/// `TIME_REBASE_SECONDS` has no legal offset at the first threshold crossing
-/// and the rebase has to defer until one whole period has passed. Deferring is
-/// only safe while the deferred value keeps resolving a frame delta: at 65536 s
-/// the `f32` spacing is ~7.8e-3 s, still well under 1/60 s, whereas the freeze
-/// this whole mechanism exists to prevent starts at 2^19 s. A period beyond
-/// this bound therefore rebases by the full elapsed time and accepts one phase
-/// discontinuity — a clock that still ticks beats a phase that never moves
-/// again.
-pub const TIME_PHASE_PRESERVE_MAX_PERIOD: f32 = 65536;
+/// A rebase may only subtract a WHOLE number of wave periods, or the surface
+/// phase (`time / wave_period_seconds`) jumps. A period longer than
+/// `TIME_REBASE_SECONDS` therefore has no legal offset at the first threshold
+/// crossing, and the rebase must DEFER until one whole period has elapsed —
+/// which is only safe while the deferred accumulator still resolves a frame
+/// delta. At 2 * 65536 s the `f32` spacing is ~1.6e-2 s, still inside 1/60 s,
+/// whereas the freeze this whole mechanism exists to prevent starts at 2^19 s.
+///
+/// Beyond that bound there is no honest behaviour left. Deferring forever
+/// walks into the freeze; rebasing by the full elapsed time resets the phase
+/// to zero at EVERY 4096 s crossing, so a 70000 s wave would replay only its
+/// first ~5.9% and never complete a period — a permanent, repeating defect
+/// rather than a one-off seam. Tracking phase separately would work, but
+/// `PixelWaterDraw.time` is ONE contract field feeding both the wave phase and
+/// every impact's age, so splitting them is a core-contract change, not a
+/// local fix. Since 65536 s is an 18-hour wave — absurd for any reservoir the
+/// effect was designed for — refusing the configuration with a diagnostic is
+/// strictly better than animating it wrongly in silence.
+pub const WAVE_PERIOD_MAX_SECONDS: f32 = 65536;
 
 /// One reservoir: its authored configuration plus the animated state the
 /// shader re-reads every frame.
@@ -243,16 +265,31 @@ pub const WaterState = struct {
     /// Fold the accumulator back under `TIME_REBASE_SECONDS` so an `f32` keeps
     /// resolving a frame delta (see that constant).
     ///
-    /// While waves are on the offset is a WHOLE number of wave periods, so the
+    /// The offset is a WHOLE number of wave periods whenever one exists, so the
     /// surface phase (`time / wave_period_seconds`) survives the rebase instead
     /// of snapping; every live impact's `start_time` shifts by the same offset,
-    /// so ages are preserved exactly as differences. If no whole period has
-    /// elapsed yet — a period longer than `TIME_REBASE_SECONDS` — the only
-    /// candidate offset is the full elapsed time, which would reset the phase
-    /// to 0 (a 5000 s period would jump from phase 4096/5000 straight to 0), so
-    /// the rebase DEFERS to the next crossing instead, bounded by
-    /// `TIME_PHASE_PRESERVE_MAX_PERIOD`. With waves off there is no phase to
-    /// keep, so the whole accumulator is folded away.
+    /// so ages are preserved exactly as differences.
+    ///
+    /// The whole period domain, and what each case does here:
+    ///
+    ///   - waves OFF (any period, including 0 or negative — validation does
+    ///     not constrain an unused period): no phase to keep, the full
+    ///     accumulator is folded away.
+    ///   - period <= `TIME_REBASE_SECONDS`: a whole period has always elapsed
+    ///     by the first crossing, so the offset is phase-preserving.
+    ///   - `TIME_REBASE_SECONDS` < period <= `WAVE_PERIOD_MAX_SECONDS`: no
+    ///     whole period yet at the first crossing, so the rebase DEFERS to the
+    ///     crossing that has one. Bounded: the deferred value stays under
+    ///     2 * `WAVE_PERIOD_MAX_SECONDS`, where an `f32` still resolves 1/60 s.
+    ///   - period > `WAVE_PERIOD_MAX_SECONDS`: unreachable — REJECTED at every
+    ///     entry point that can set it (`create`, `setSettings`, `reconfigure`,
+    ///     `setWavesEnabled`) with `error.WavePeriodTooLong`.
+    ///   - period so tiny that `time / period` overflows to infinity: no
+    ///     aligned offset is representable at all, so this falls back to a FULL
+    ///     rebase and accepts the phase discontinuity. Returning instead would
+    ///     skip the rebase entirely and walk straight into the `f32` freeze
+    ///     this exists to prevent — and at a sub-microsecond period the phase
+    ///     is meaningless to an observer anyway.
     ///
     /// Deliberately NOT applied by `setTime`: that is the deterministic-test
     /// and save-restore entry point, where the caller's value must land
@@ -265,13 +302,21 @@ pub const WaterState = struct {
         if (@abs(self.time) < TIME_REBASE_SECONDS) return;
         const period = self.config.wave_period_seconds;
         var offset = self.time;
-        if (self.config.waves_enabled and period > 0 and
-            period <= TIME_PHASE_PRESERVE_MAX_PERIOD)
-        {
+        if (self.config.waves_enabled and period > 0) {
             const aligned = @floor(self.time / period) * period;
-            // No whole period elapsed yet: defer rather than break the phase.
-            if (aligned == 0 or !std.math.isFinite(aligned)) return;
-            offset = aligned;
+            if (std.math.isFinite(aligned)) {
+                // Take the phase-preserving offset only when it actually
+                // SHRINKS the accumulator. `aligned == 0` is "no whole period
+                // elapsed yet"; for a negative clock `@floor` rounds away from
+                // zero, so an offset can also OVERSHOOT past -|time|. Either
+                // way, defer to the next crossing rather than break the phase.
+                if (aligned == 0 or @abs(self.time - aligned) >= @abs(self.time)) return;
+                offset = aligned;
+            }
+            // Non-finite `aligned` (a period tiny enough that `time / period`
+            // overflows): no representable aligned offset exists, so fall
+            // through with `offset == self.time` — a full rebase with one
+            // documented discontinuity beats skipping the rebase and freezing.
         }
         self.time -= offset;
         var i: u32 = 0;
@@ -508,7 +553,7 @@ pub const WaterStore = struct {
     ) (ConfigError || UpdateError)!void {
         const st = self.get(id) orelse return error.StaleInstance;
         if (st.config.waves_enabled == on) return;
-        if (on and !(st.config.wave_period_seconds > 0)) return error.NonPositiveDuration;
+        if (on) try validateWavePeriod(st.config.wave_period_seconds);
         st.config.waves_enabled = on;
         st.revision +%= 1;
     }

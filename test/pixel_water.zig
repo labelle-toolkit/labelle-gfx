@@ -1043,3 +1043,150 @@ test "PixelWater: an advance that would overflow the accumulator is rejected, no
     try engine.advanceWaterTime(id, 1.0 / 60.0);
     try testing.expect(std.math.isFinite(engine.waterState(id).?.time));
 }
+
+test "PixelWater: a wave period past the supported bound is refused at every entry point" {
+    var engine = MockEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+    registerWaterTextures(&engine);
+
+    const max = gfx.PIXEL_WATER_WAVE_PERIOD_MAX_SECONDS;
+    // Above the bound the rebase has no honest move left: deferring forever
+    // walks into the f32 freeze, and a full-time offset resets the phase at
+    // EVERY 4096 s crossing, so the wave would replay only its first few
+    // percent and never complete a cycle. The configuration is therefore
+    // REFUSED, with a diagnostic that names the reason.
+    var too_long = condenserConfig();
+    too_long.waves_enabled = true;
+    too_long.wave_period_seconds = 70000;
+
+    // ENTRY POINT 1: create. And the refusal is total — no slot is consumed.
+    try testing.expectError(error.WavePeriodTooLong, engine.createWaterInstance(too_long));
+    try testing.expectEqual(@as(usize, 0), engine.water.count());
+    try testing.expectEqual(@as(usize, 0), engine.water.slots.items.len);
+
+    // Exactly AT the bound is legal — the bound is inclusive, not a fencepost.
+    var at_bound = condenserConfig();
+    at_bound.waves_enabled = true;
+    at_bound.wave_period_seconds = max;
+    const id = try engine.createWaterInstance(at_bound);
+    try testing.expectEqual(max, engine.waterState(id).?.config.wave_period_seconds);
+    const revision_before = engine.waterState(id).?.revision;
+
+    // ENTRY POINT 2: setSettings (scalars only).
+    try testing.expectError(error.WavePeriodTooLong, engine.setWaterSettings(id, too_long));
+    // ENTRY POINT 3: reconfigure (structural too).
+    try testing.expectError(error.WavePeriodTooLong, engine.reconfigureWater(id, too_long));
+    // A rejected write leaves the previous settings — and the revision — intact.
+    try testing.expectEqual(max, engine.waterState(id).?.config.wave_period_seconds);
+    try testing.expectEqual(revision_before, engine.waterState(id).?.revision);
+
+    // ENTRY POINT 4: setWavesEnabled. An over-long period is legal while waves
+    // are OFF (nothing reads it), so this is the one path that could smuggle
+    // one into the rebase without ever calling `validateConfig` on it.
+    var off = condenserConfig();
+    off.waves_enabled = false;
+    off.wave_period_seconds = 70000;
+    const dormant = try engine.createWaterInstance(off);
+    const dormant_revision = engine.waterState(dormant).?.revision;
+    try testing.expectError(error.WavePeriodTooLong, engine.setWaterWavesEnabled(dormant, true));
+    // The rejected enable left the flag and the revision untouched.
+    try testing.expect(!engine.waterState(dormant).?.config.waves_enabled);
+    try testing.expectEqual(dormant_revision, engine.waterState(dormant).?.revision);
+}
+
+test "PixelWater: a wave period at the supported bound still completes whole cycles" {
+    var engine = MockEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+    registerWaterTextures(&engine);
+
+    // The worst legal case: the longest period the rebase must keep coherent.
+    // Every crossing below one whole period DEFERS, so this is also the case
+    // that proves deferral is bounded rather than unbounded.
+    const period = gfx.PIXEL_WATER_WAVE_PERIOD_MAX_SECONDS;
+    var cfg = condenserConfig();
+    cfg.waves_enabled = true;
+    cfg.wave_period_seconds = period;
+    const id = try engine.createWaterInstance(cfg);
+    try engine.setWaterLevel(id, 0.5);
+
+    // Two whole periods of simulation, in exactly-representable steps so the
+    // expected phase is computed, not observed.
+    const dt: f32 = 64;
+    const steps: u32 = 2048;
+    var elapsed: f64 = 0;
+    var max_phase: f32 = 0;
+    var wraps: u32 = 0;
+    var last_phase: f32 = 0;
+    var i: u32 = 0;
+    while (i < steps) : (i += 1) {
+        try engine.advanceWaterTime(id, dt);
+        elapsed += dt;
+        const st = engine.waterState(id).?;
+
+        // MECHANISM 1: the accumulator stays bounded. A deferred rebase may
+        // ride up to one extra period, never further.
+        try testing.expect(@abs(st.time) <= 2 * period);
+        // MECHANISM 2: every offset ever subtracted was a WHOLE number of
+        // periods, so the phase the shader sees is the phase the uninterrupted
+        // clock would have had — across the deferral AND across the rebase.
+        const expected_phase: f32 = @floatCast(@mod(elapsed, @as(f64, period)) / @as(f64, period));
+        const phase = st.time / period - @floor(st.time / period);
+        try testing.expectApproxEqAbs(expected_phase, phase, 1e-4);
+
+        if (phase < last_phase) wraps += 1;
+        max_phase = @max(max_phase, phase);
+        last_phase = phase;
+    }
+
+    // MECHANISM 3 (the finding): the wave actually COMPLETES its cycle. The
+    // defect being guarded against never got past ~5.9% of a period before the
+    // clock reset, so it could reach neither a high phase nor a wrap.
+    try testing.expect(max_phase > 0.99);
+    try testing.expectEqual(@as(u32, 2), wraps);
+
+    // MECHANISM 4: a frame delta still MOVES the clock at the end — the freeze
+    // this whole mechanism exists to prevent has not been traded for a phase.
+    const before = engine.waterState(id).?.time;
+    try engine.advanceWaterTime(id, 1.0 / 60.0);
+    try testing.expect(engine.waterState(id).?.time > before);
+}
+
+test "PixelWater: a period too small to align falls back to a full rebase instead of freezing" {
+    var engine = MockEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+    registerWaterTextures(&engine);
+
+    // A VALID period (finite, positive, under the bound) that is small enough
+    // that `time / period` overflows an f32 to infinity, so NO aligned offset
+    // is representable at all.
+    const period = std.math.floatMin(f32);
+    var cfg = condenserConfig();
+    cfg.waves_enabled = true;
+    cfg.wave_period_seconds = period;
+    const id = try engine.createWaterInstance(cfg);
+    try engine.setWaterLevel(id, 0.5);
+    // The premise, asserted rather than assumed.
+    try testing.expect(!std.math.isFinite(gfx.PIXEL_WATER_TIME_REBASE_SECONDS / period));
+
+    try engine.setWaterTime(id, 4095.9);
+    try engine.addWaterRipple(id, 12, 1);
+    const dt: f32 = 0.2;
+    try engine.advanceWaterTime(id, dt);
+    const st = engine.waterState(id).?;
+
+    // MECHANISM 1: the rebase RAN. Bailing out on the non-finite alignment
+    // left 4096.1 here and let the accumulator climb to the f32 precision
+    // limit, which is the exact freeze the rebase exists to prevent.
+    try testing.expect(st.time < gfx.PIXEL_WATER_TIME_REBASE_SECONDS);
+    // The fallback offset is the full elapsed time, so the clock lands on zero
+    // and takes the documented one-time phase discontinuity.
+    try testing.expectEqual(@as(f32, 0), st.time);
+    // MECHANISM 2: impact ages are still differences — the fallback shifted
+    // `start_time` by the same offset, so the impact is live and `dt` old.
+    try testing.expectEqual(@as(u32, 1), st.ripple_count);
+    try testing.expectApproxEqAbs(dt, st.time - st.ripples[0].start_time, 1e-3);
+
+    // MECHANISM 3: the clock keeps resolving a frame delta afterwards.
+    try engine.advanceWaterTime(id, 1.0 / 60.0);
+    try testing.expectApproxEqAbs(@as(f32, 1.0 / 60.0), engine.waterState(id).?.time, 1e-6);
+}
