@@ -189,6 +189,21 @@ pub const UpdateError = error{
 /// under a frame — so `advanceTime` folds the accumulator back below this.
 pub const TIME_REBASE_SECONDS: f32 = 4096;
 
+/// Longest `wave_period_seconds` for which the rebase will WAIT for a whole
+/// period to elapse rather than break the surface phase.
+///
+/// A rebase may only subtract a whole number of wave periods, or the phase
+/// (`time / wave_period_seconds`) jumps — so a period LONGER than
+/// `TIME_REBASE_SECONDS` has no legal offset at the first threshold crossing
+/// and the rebase has to defer until one whole period has passed. Deferring is
+/// only safe while the deferred value keeps resolving a frame delta: at 65536 s
+/// the `f32` spacing is ~7.8e-3 s, still well under 1/60 s, whereas the freeze
+/// this whole mechanism exists to prevent starts at 2^19 s. A period beyond
+/// this bound therefore rebases by the full elapsed time and accepts one phase
+/// discontinuity — a clock that still ticks beats a phase that never moves
+/// again.
+pub const TIME_PHASE_PRESERVE_MAX_PERIOD: f32 = 65536;
+
 /// One reservoir: its authored configuration plus the animated state the
 /// shader re-reads every frame.
 pub const WaterState = struct {
@@ -228,19 +243,35 @@ pub const WaterState = struct {
     /// Fold the accumulator back under `TIME_REBASE_SECONDS` so an `f32` keeps
     /// resolving a frame delta (see that constant).
     ///
-    /// The offset is a WHOLE number of wave periods whenever one is available,
-    /// so the surface phase (`time / wave_period_seconds`) survives the rebase
-    /// instead of snapping; every live impact's `start_time` shifts by the same
-    /// offset, so ages are preserved exactly as differences. Deliberately NOT
-    /// applied by `setTime`: that is the deterministic-test and save-restore
-    /// entry point, where the caller's value must land verbatim.
+    /// While waves are on the offset is a WHOLE number of wave periods, so the
+    /// surface phase (`time / wave_period_seconds`) survives the rebase instead
+    /// of snapping; every live impact's `start_time` shifts by the same offset,
+    /// so ages are preserved exactly as differences. If no whole period has
+    /// elapsed yet — a period longer than `TIME_REBASE_SECONDS` — the only
+    /// candidate offset is the full elapsed time, which would reset the phase
+    /// to 0 (a 5000 s period would jump from phase 4096/5000 straight to 0), so
+    /// the rebase DEFERS to the next crossing instead, bounded by
+    /// `TIME_PHASE_PRESERVE_MAX_PERIOD`. With waves off there is no phase to
+    /// keep, so the whole accumulator is folded away.
+    ///
+    /// Deliberately NOT applied by `setTime`: that is the deterministic-test
+    /// and save-restore entry point, where the caller's value must land
+    /// verbatim.
     fn rebaseTime(self: *WaterState) void {
+        // Defensive: every mutator rejects a non-finite result before it can
+        // land, so this is unreachable — but `inf - inf` would store a NaN that
+        // then rides every subsequent payload to the backend.
+        if (!std.math.isFinite(self.time)) return;
         if (@abs(self.time) < TIME_REBASE_SECONDS) return;
         const period = self.config.wave_period_seconds;
         var offset = self.time;
-        if (period > 0) {
+        if (self.config.waves_enabled and period > 0 and
+            period <= TIME_PHASE_PRESERVE_MAX_PERIOD)
+        {
             const aligned = @floor(self.time / period) * period;
-            if (aligned != 0 and std.math.isFinite(aligned)) offset = aligned;
+            // No whole period elapsed yet: defer rather than break the phase.
+            if (aligned == 0 or !std.math.isFinite(aligned)) return;
+            offset = aligned;
         }
         self.time -= offset;
         var i: u32 = 0;
@@ -443,11 +474,20 @@ pub const WaterStore = struct {
 
     /// Advance simulation time by `dt` (already pause/time-scale adjusted by
     /// the caller — this never reads a clock).
+    ///
+    /// The SUM is validated, not just `dt`: a finite clock plus a finite delta
+    /// can still overflow to infinity (`setTime(floatMax)` then any advance),
+    /// and an infinite accumulator turns the rebase's `time - offset` into
+    /// `inf - inf` = NaN — silent, permanent state corruption that every later
+    /// payload would ship to the backend while the call reported success. A
+    /// rejected advance leaves `time`, the impacts and the revision untouched.
     pub fn advanceTime(self: *WaterStore, id: WaterInstanceId, dt: f32) UpdateError!void {
         const st = self.get(id) orelse return error.StaleInstance;
         if (!finite(dt)) return error.NonFiniteValue;
         if (dt == 0) return;
-        st.time += dt;
+        const next = st.time + dt;
+        if (!finite(next)) return error.NonFiniteValue;
+        st.time = next;
         st.expire();
         st.rebaseTime();
         st.revision +%= 1;

@@ -953,3 +953,93 @@ test "PixelWater: the accumulator rebases before an f32 stops resolving a frame 
     try engine.advanceWaterTime(id, frame);
     try testing.expectApproxEqAbs(before + frame, engine.waterState(id).?.time, 1e-5);
 }
+
+test "PixelWater: a wave period above the rebase threshold keeps its phase instead of snapping to zero" {
+    var engine = MockEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    // Longer than TIME_REBASE_SECONDS (4096), so at the first crossing NO
+    // whole period has elapsed and the only "aligned" offset is zero.
+    const period: f32 = 5000;
+    var cfg = condenserConfig();
+    cfg.waves_enabled = true;
+    cfg.wave_period_seconds = period;
+    const id = try engine.createWaterInstance(cfg);
+    try engine.setWaterLevel(id, 0.5);
+
+    try engine.setWaterTime(id, 4095.9);
+    try engine.advanceWaterTime(id, 0.2);
+
+    // MECHANISM 1: crossing the threshold with no whole period behind it
+    // DEFERS the rebase. The bug this guards against subtracted the full
+    // elapsed time here, landing on exactly 0 — phase 4096/5000 -> 0.
+    const crossed = engine.waterState(id).?.time;
+    try testing.expect(crossed > gfx.PIXEL_WATER_TIME_REBASE_SECONDS);
+    try testing.expectApproxEqAbs(@as(f32, 4096.1), crossed, 1e-2);
+
+    // Now sit just under a WHOLE period — the first legal offset — and cross it
+    // with one frame-sized step, with a live impact riding across the rebase.
+    // (`setWaterTime` lands verbatim and is never rebased, so this stays a
+    // deterministic setup and not a second thing under test.)
+    const before_rebase: f32 = 7999.9;
+    try engine.setWaterTime(id, before_rebase);
+    try engine.addWaterRipple(id, 12, 1);
+    const dt: f32 = 0.2;
+    try engine.advanceWaterTime(id, dt);
+    const st = engine.waterState(id).?;
+
+    // MECHANISM 2: the rebase happened (folded back under the un-rebased
+    // value)...
+    const unrebased = before_rebase + dt;
+    try testing.expect(st.time < unrebased);
+    // ...and it is the PHASE that is continuous, not merely "time got smaller":
+    // the offset was one whole 5000 s period, so the phase fraction is identical.
+    const phase_before = unrebased / period - @floor(unrebased / period);
+    const phase_after = st.time / period - @floor(st.time / period);
+    try testing.expectApproxEqAbs(phase_before, phase_after, 1e-4);
+    // A full-time offset (the bug) would have produced phase 0 instead.
+    try testing.expect(phase_after > 0.01);
+
+    // MECHANISM 3: impact ages are differences, so the shift is invisible to
+    // them — the impact is still live and still exactly `dt` old.
+    try testing.expectEqual(@as(u32, 1), st.ripple_count);
+    try testing.expectApproxEqAbs(dt, st.time - st.ripples[0].start_time, 1e-2);
+}
+
+test "PixelWater: an advance that would overflow the accumulator is rejected, not stored as NaN" {
+    var engine = MockEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const id = try engine.createWaterInstance(condenserConfig());
+    try engine.setWaterLevel(id, 0.5);
+
+    // `setWaterTime` is the deterministic / save-restore entry point: it lands
+    // VERBATIM and is never rebased, threshold or no threshold.
+    const huge = std.math.floatMax(f32);
+    try engine.setWaterTime(id, huge);
+    try testing.expectEqual(huge, engine.waterState(id).?.time);
+    const revision_before = engine.waterState(id).?.revision;
+
+    // A FINITE dt whose SUM overflows. Validating `dt` alone let this through,
+    // after which the rebase evaluated `inf - inf` and stored a NaN.
+    try testing.expectError(error.NonFiniteValue, engine.advanceWaterTime(id, huge));
+
+    // MECHANISM 1: the rejection is total — the clock is byte-identical and the
+    // revision did not move, so nothing downstream sees a half-applied write.
+    const st = engine.waterState(id).?;
+    try testing.expectEqual(huge, st.time);
+    try testing.expect(!std.math.isNan(st.time));
+    try testing.expectEqual(revision_before, st.revision);
+
+    // MECHANISM 2: no NaN reaches a resolved payload. The payload is rebuilt
+    // from the store on EVERY submission, so a NaN stored here would ride every
+    // later frame to the backend while the call had reported success.
+    const w = engine.water.payload(id, mask_backend_id, 0).?;
+    try testing.expect(std.math.isFinite(w.time));
+    try testing.expectEqual(huge, w.time);
+
+    // MECHANISM 3: the store is still usable afterwards — a finite advance is
+    // still accepted and still cannot produce a non-finite clock.
+    try engine.advanceWaterTime(id, 1.0 / 60.0);
+    try testing.expect(std.math.isFinite(engine.waterState(id).?.time));
+}
