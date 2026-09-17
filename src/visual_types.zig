@@ -1,6 +1,7 @@
 const types = @import("types.zig");
 const visuals = @import("visuals.zig");
 const layer_mod = @import("layer.zig");
+const pixel_water_mod = @import("pixel_water.zig");
 
 pub const TextureId = types.TextureId;
 pub const FontId = types.FontId;
@@ -11,6 +12,7 @@ pub const Container = types.Container;
 pub const Position = types.Position;
 pub const SourceRect = types.SourceRect;
 pub const Material = types.Material;
+pub const WaterInstanceId = pixel_water_mod.WaterInstanceId;
 pub const Shape = visuals.Shape;
 
 /// Creates visual types parameterized by layer enum.
@@ -69,6 +71,21 @@ pub fn VisualTypes(comptime LayerEnum: type) type {
             /// For a zero-cost, every-backend timed tint swap use the CPU-side
             /// `effects.TintPulse` instead (RFC §5).
             material: Material = .{},
+            /// Reference to this sprite's reservoir in the gfx-owned
+            /// `WaterStore` (COND-07, labelle-bgfx#100). Only meaningful when
+            /// `material.effect == .pixel_water`; `.none` (the all-zero
+            /// default) on every other sprite.
+            ///
+            /// DELIBERATELY a reference and not the payload: `PixelWaterDraw`
+            /// is 256 bytes and carries ANIMATED state (time, level, eight
+            /// impacts). Inline, it would bloat every `.none` sprite AND sit
+            /// behind the renderer's `visual_dirty` check, where a time-only
+            /// change with a stationary transform is invisible. Resolved out
+            /// of the store at draw time instead, so animated state reaches
+            /// the backend every frame with no dirty flag and no GPU resource
+            /// churn. A stale/released id resolves to nothing and degrades to
+            /// a plain sprite draw — see `pixel_water.zig`.
+            water: WaterInstanceId = .none,
         };
 
         pub const ShapeVisual = struct {

@@ -34,7 +34,7 @@ const MaterialEffect = gfx.MaterialEffect;
 /// One logged submission: the program the backend would bind for it. `.plain`
 /// = the shared sprite program (batchable); an effect tag = that effect's
 /// material program (one submit per draw, per-draw uniform upload).
-const Submission = enum { plain, flash, palette_swap, dissolve, outline };
+const Submission = enum { plain, flash, palette_swap, dissolve, outline, pixel_water };
 
 const SubLog = struct {
     var list: std.ArrayList(Submission) = .empty;
@@ -170,6 +170,13 @@ const OrderedBackend = struct {
             .palette_swap => .palette_swap,
             .dissolve => .dissolve,
             .outline => .outline,
+            // Unreachable through THIS decl: `pixel_water` rides its own
+            // optional `drawTextureProPixelWater` (COND-07), which this
+            // fixture deliberately does not declare — so `materialSupported`
+            // reports it unsupported and the renderer degrades to a plain
+            // sprite. The arm exists so the switch stays exhaustive and a
+            // future effect cannot be added without visiting this fixture.
+            .pixel_water => .pixel_water,
         });
     }
 };

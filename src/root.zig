@@ -40,6 +40,27 @@ pub const materialCapabilities = backend_mod.materialCapabilities;
 /// lives on the retained engine surface.
 pub const post_fx_mod = @import("post_fx.zig");
 
+/// Pixel-water instance store (COND-07, labelle-bgfx#100, RFC-PIXEL-WATER).
+/// The 256-byte `PixelWaterDraw` payload is gfx-owned and addressed by a
+/// checked generational `WaterInstanceId` on `SpriteVisual.water`, so ordinary
+/// sprites keep their existing fast path and animated state (time, level,
+/// impacts) reaches the backend without a dirty flag. The runtime API
+/// (`createWaterInstance` / `setWaterLevel` / `addWaterRipple` / …) lives on
+/// the retained engine and is forwarded by `GfxRenderer`.
+pub const pixel_water_mod = @import("pixel_water.zig");
+pub const WaterInstanceId = pixel_water_mod.WaterInstanceId;
+pub const WaterConfig = pixel_water_mod.WaterConfig;
+pub const WaterState = pixel_water_mod.WaterState;
+pub const WaterStore = pixel_water_mod.WaterStore;
+pub const WaterConfigError = pixel_water_mod.ConfigError;
+pub const WaterUpdateError = pixel_water_mod.UpdateError;
+pub const validateWaterConfig = pixel_water_mod.validateConfig;
+pub const PixelWaterDraw = pixel_water_mod.PixelWaterDraw;
+pub const PixelWaterRipple = pixel_water_mod.PixelWaterRipple;
+pub const PixelWaterRgba = pixel_water_mod.PixelWaterRgba;
+pub const PIXEL_WATER_MAX_RIPPLES = pixel_water_mod.PIXEL_WATER_MAX_RIPPLES;
+pub const PIXEL_WATER_FLAG_WAVES = pixel_water_mod.PIXEL_WATER_FLAG_WAVES;
+
 /// The per-visual backend draw leaves (`drawSpriteEntry` / `drawShapeEntry` /
 /// `drawTextEntry`) the retained engine renders through. Exposed like every
 /// other sub-module here so a test can drive ONE leaf against a stand-in
