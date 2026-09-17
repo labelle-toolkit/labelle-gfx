@@ -785,3 +785,171 @@ test "PixelWater: GfxRenderer forwards the water API to the retained engine" {
     try testing.expect(renderer.releaseWaterInstance(id));
     try testing.expect(renderer.waterState(id) == null);
 }
+
+// ── 8. Review follow-ups (PR #359 bot findings) ─────────────────────────────
+//
+// Each of these asserts the MECHANISM the fix introduced, not just a value a
+// pre-existing fallback would also produce.
+
+test "PixelWater: the mask is required — the invalid sentinel is rejected at create" {
+    var engine = MockEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    var cfg = condenserConfig();
+    cfg.mask = .invalid;
+    try testing.expectError(error.MissingMask, engine.createWaterInstance(cfg));
+    // Rejected BEFORE a slot is taken — the store is untouched, not merely
+    // short one live instance.
+    try testing.expectEqual(@as(usize, 0), engine.waterInstanceCount());
+    try testing.expectEqual(@as(usize, 0), engine.water.slots.items.len);
+
+    // A nonzero handle whose catalog upload has not landed is NOT this case:
+    // it creates, and resolves late. (`condenserConfig`'s mask is unregistered
+    // in this engine.)
+    const id = try engine.createWaterInstance(condenserConfig());
+    try testing.expectEqual(@as(usize, 1), engine.waterInstanceCount());
+
+    // …and a structural reconfiguration cannot smuggle the sentinel in either.
+    var bad = condenserConfig();
+    bad.mask = .invalid;
+    try testing.expectError(error.MissingMask, engine.reconfigureWater(id, bad));
+    try testing.expectEqual(maskId(), engine.waterState(id).?.config.mask);
+}
+
+test "PixelWater: enabling waves revalidates the retained period instead of shipping a zero" {
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = MockEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+    registerWaterTextures(&engine);
+
+    // Legal: a zero period is only constrained while waves are ON.
+    var cfg = condenserConfig();
+    cfg.waves_enabled = false;
+    cfg.wave_period_seconds = 0;
+    const id = try engine.createWaterInstance(cfg);
+    try engine.setWaterLevel(id, 0.5);
+    const revision_before = engine.waterState(id).?.revision;
+
+    try testing.expectError(error.NonPositiveDuration, engine.setWaterWavesEnabled(id, true));
+
+    // MECHANISM: the flag did not flip and the write did not count — so the
+    // payload cannot carry FLAG_WAVES beside a zero period.
+    try testing.expect(!engine.waterState(id).?.config.waves_enabled);
+    try testing.expectEqual(revision_before, engine.waterState(id).?.revision);
+    addWaterSprite(&engine, 1, id);
+    engine.render();
+    const shipped = MockBackend.getPixelWaterCalls()[0].water;
+    try testing.expectEqual(@as(u32, 0), shipped.flags & PIXEL_WATER_FLAG_WAVES);
+
+    // A period first made positive re-opens the toggle.
+    var fixed = cfg;
+    fixed.wave_period_seconds = 2;
+    try engine.setWaterSettings(id, fixed);
+    try engine.setWaterWavesEnabled(id, true);
+    try testing.expect(engine.waterState(id).?.config.waves_enabled);
+}
+
+test "PixelWater: shortening the impact lifetime expires impacts for good" {
+    var engine = MockEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const id = try engine.createWaterInstance(condenserConfig());
+    try engine.setWaterLevel(id, 0.5);
+    try engine.addWaterRipple(id, 12, 1); // start_time 0, duration 0.8
+    try engine.setWaterTime(id, 0.7);
+    try testing.expectEqual(@as(u32, 1), engine.waterState(id).?.ripple_count);
+
+    var short = condenserConfig();
+    short.ripple_duration_seconds = 0.5; // age 0.7 is now past its life
+    try engine.setWaterSettings(id, short);
+
+    // MECHANISM: the impact is COMPACTED OUT OF THE STORE, not merely filtered
+    // out of the payload — the retained array itself is empty.
+    try testing.expectEqual(@as(u32, 0), engine.waterState(id).?.ripple_count);
+
+    // So a later lengthening cannot resurrect it.
+    var long = condenserConfig();
+    long.ripple_duration_seconds = 2;
+    try engine.setWaterSettings(id, long);
+    try testing.expectEqual(@as(u32, 0), engine.waterState(id).?.ripple_count);
+    try testing.expectEqual(
+        @as(u32, 0),
+        engine.water.payload(id, mask_backend_id, 0).?.ripple_count,
+    );
+}
+
+test "PixelWater: a slot whose generation is exhausted is retired, not handed back out" {
+    var engine = MockEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const first = try engine.createWaterInstance(condenserConfig());
+    try testing.expectEqual(@as(u32, 0), first.index);
+
+    // Drive the slot to the last generation it can issue. (Four billion real
+    // release/create cycles is the only other way to reach this state.)
+    engine.water.slots.items[first.index].generation = std.math.maxInt(u32);
+    const last: WaterInstanceId = .{ .index = first.index, .generation = std.math.maxInt(u32) };
+    try testing.expect(engine.releaseWaterInstance(last));
+
+    // MECHANISM: the slot is NOT returned to the free list, so the next create
+    // cannot land on it — rather than the generation wrapping onto 1 and
+    // reviving `first`, an id already in a caller's hands.
+    try testing.expectEqual(@as(usize, 0), engine.water.free_list.items.len);
+    try testing.expect(!engine.water.slots.items[first.index].live);
+
+    const next = try engine.createWaterInstance(condenserConfig());
+    try testing.expect(next.index != first.index);
+    try testing.expect(engine.waterState(first) == null);
+    try testing.expect(engine.waterState(last) == null);
+
+    // An ordinary release still recycles, so retirement is the exhaustion path
+    // and not the new normal.
+    try testing.expect(engine.releaseWaterInstance(next));
+    try testing.expectEqual(@as(usize, 1), engine.water.free_list.items.len);
+    const reused = try engine.createWaterInstance(condenserConfig());
+    try testing.expectEqual(next.index, reused.index);
+    try testing.expect(reused.generation != next.generation);
+}
+
+test "PixelWater: the accumulator rebases before an f32 stops resolving a frame delta" {
+    var engine = MockEngine.init(testing.allocator, .{});
+    defer engine.deinit();
+
+    const period: f32 = 3;
+    var cfg = condenserConfig();
+    cfg.wave_period_seconds = period;
+    const id = try engine.createWaterInstance(cfg);
+    try engine.setWaterLevel(id, 0.5);
+
+    // `setWaterTime` is the deterministic / save-restore entry point: it lands
+    // VERBATIM, rebase or no rebase.
+    const start: f32 = 4095.9;
+    try engine.setWaterTime(id, start);
+    try testing.expectEqual(start, engine.waterState(id).?.time);
+
+    try engine.addWaterRipple(id, 12, 1);
+    const dt: f32 = 0.2;
+    try engine.advanceWaterTime(id, dt);
+
+    const st = engine.waterState(id).?;
+    // MECHANISM 1: accumulating past the threshold folded the value back down.
+    // Without the rebase this would read 4096.1.
+    try testing.expect(st.time < gfx.PIXEL_WATER_TIME_REBASE_SECONDS);
+    // MECHANISM 2: the offset was a whole number of wave periods, so the
+    // surface phase is the same one the un-rebased value would have had.
+    try testing.expectApproxEqAbs(@mod(start + dt, period), st.time, 1e-2);
+    // MECHANISM 3: impact ages are differences, so they survive the shift —
+    // the impact is still live and still 0.2s old, not aged out or reborn.
+    try testing.expectEqual(@as(u32, 1), st.ripple_count);
+    try testing.expectApproxEqAbs(dt, st.time - st.ripples[0].start_time, 1e-3);
+
+    // MECHANISM 4 (the point of the whole thing): a frame delta still MOVES
+    // time afterwards. At 4096.1 an f32 still resolves 1/60; the freeze this
+    // guards against is at ~2^19, which the rebase now makes unreachable.
+    const before = st.time;
+    const frame: f32 = 1.0 / 60.0;
+    try engine.advanceWaterTime(id, frame);
+    try testing.expectApproxEqAbs(before + frame, engine.waterState(id).?.time, 1e-5);
+}

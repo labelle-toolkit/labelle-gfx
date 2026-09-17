@@ -60,6 +60,7 @@ pub const PixelWaterRipple = pixel_water_mod.PixelWaterRipple;
 pub const PixelWaterRgba = pixel_water_mod.PixelWaterRgba;
 pub const PIXEL_WATER_MAX_RIPPLES = pixel_water_mod.PIXEL_WATER_MAX_RIPPLES;
 pub const PIXEL_WATER_FLAG_WAVES = pixel_water_mod.PIXEL_WATER_FLAG_WAVES;
+pub const PIXEL_WATER_TIME_REBASE_SECONDS = pixel_water_mod.TIME_REBASE_SECONDS;
 
 /// The per-visual backend draw leaves (`drawSpriteEntry` / `drawShapeEntry` /
 /// `drawTextEntry`) the retained engine renders through. Exposed like every

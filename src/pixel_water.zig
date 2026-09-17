@@ -44,6 +44,9 @@ const types = @import("types.zig");
 
 const TextureId = types.TextureId;
 
+// The pixel-water contract (payload, ripple, colour, constants and the
+// `MaterialEffect.pixel_water` tag) landed in labelle-core v1.32.0 — that is
+// this module's floor, and the pin in `build.zig.zon`.
 pub const PixelWaterDraw = core.backend_contract.PixelWaterDraw;
 pub const PixelWaterRipple = core.backend_contract.PixelWaterRipple;
 pub const PixelWaterRgba = core.backend_contract.PixelWaterRgba;
@@ -112,6 +115,12 @@ pub const WaterConfig = struct {
 /// editor/hot-reload writes, and an out-of-range value that survives to the
 /// shader is a GPU-side mystery rather than a diagnostic.
 pub const ConfigError = error{
+    /// `mask` was the `.invalid` sentinel. The mask is REQUIRED: a reservoir
+    /// without one can never resolve a payload, so it would create happily and
+    /// then degrade to the plain sprite forever, with nothing to point at. A
+    /// nonzero handle whose catalog upload has not landed yet is NOT this — it
+    /// resolves late, by design.
+    MissingMask,
     /// `logical_width` / `logical_height` must both be > 0.
     InvalidLogicalSize,
     /// `grid_pixels` must be > 0.
@@ -138,6 +147,7 @@ fn rgbaFinite(c: PixelWaterRgba) bool {
 
 /// Full authored-value validation from the RFC (§"Proposed authoring model").
 pub fn validateConfig(cfg: WaterConfig) ConfigError!void {
+    if (cfg.mask == .invalid) return error.MissingMask;
     if (cfg.logical_width == 0 or cfg.logical_height == 0) return error.InvalidLogicalSize;
     if (cfg.grid_pixels == 0) return error.InvalidGridSize;
 
@@ -168,6 +178,16 @@ pub const UpdateError = error{
     /// An impact was added to an empty (level == 0) reservoir.
     EmptyReservoir,
 };
+
+/// Accumulated-time rebase threshold, in simulation seconds.
+///
+/// `PixelWaterDraw.time` is an `f32` by contract, and an `f32` that has
+/// accumulated far enough stops resolving a frame delta at all: past 2^19 s
+/// (~6 days) the spacing between representable values is 0.0625, so a 1/60 s
+/// `dt` rounds away entirely and the surface freezes while live impacts never
+/// age out. 4096 s keeps the spacing at ~2.4e-4 s — three orders of magnitude
+/// under a frame — so `advanceTime` folds the accumulator back below this.
+pub const TIME_REBASE_SECONDS: f32 = 4096;
 
 /// One reservoir: its authored configuration plus the animated state the
 /// shader re-reads every frame.
@@ -203,6 +223,30 @@ pub const WaterState = struct {
         var i = write;
         while (i < self.ripple_count) : (i += 1) self.ripples[i] = .{};
         self.ripple_count = write;
+    }
+
+    /// Fold the accumulator back under `TIME_REBASE_SECONDS` so an `f32` keeps
+    /// resolving a frame delta (see that constant).
+    ///
+    /// The offset is a WHOLE number of wave periods whenever one is available,
+    /// so the surface phase (`time / wave_period_seconds`) survives the rebase
+    /// instead of snapping; every live impact's `start_time` shifts by the same
+    /// offset, so ages are preserved exactly as differences. Deliberately NOT
+    /// applied by `setTime`: that is the deterministic-test and save-restore
+    /// entry point, where the caller's value must land verbatim.
+    fn rebaseTime(self: *WaterState) void {
+        if (@abs(self.time) < TIME_REBASE_SECONDS) return;
+        const period = self.config.wave_period_seconds;
+        var offset = self.time;
+        if (period > 0) {
+            const aligned = @floor(self.time / period) * period;
+            if (aligned != 0 and std.math.isFinite(aligned)) offset = aligned;
+        }
+        self.time -= offset;
+        var i: u32 = 0;
+        while (i < self.ripple_count) : (i += 1) {
+            self.ripples[i].start_time -= offset;
+        }
     }
 };
 
@@ -265,11 +309,18 @@ pub const WaterStore = struct {
         const slot = self.liveSlot(id) orelse return false;
         slot.state = .{};
         slot.live = false;
-        slot.generation +%= 1;
-        // Generation 0 is the "none" sentinel; skipping it keeps `isNone` and
-        // the liveness check from ever disagreeing after 2^32 recycles.
-        if (slot.generation == 0) slot.generation = 1;
         self.live_count -= 1;
+        if (slot.generation == std.math.maxInt(u32)) {
+            // Generation EXHAUSTED. A wrapping increment would skip 0 and land
+            // back on 1 — an id this slot already handed out — so a 2^32-old
+            // reference would resolve onto a later tenant's reservoir, which is
+            // precisely the guarantee this scheme exists to make. The slot is
+            // therefore RETIRED: left dead, never pushed to the free list,
+            // never reused. The cost is one dead `WaterState` after four
+            // billion recycles of a single slot.
+            return true;
+        }
+        slot.generation += 1;
         // A failed append only costs a slot's reuse, never correctness.
         self.free_list.append(allocator, id.index) catch {};
         return true;
@@ -323,6 +374,11 @@ pub const WaterStore = struct {
         try validateConfig(next);
         if (std.meta.eql(next, st.config)) return;
         st.config = next;
+        // A shortened `ripple_duration_seconds` must RETIRE the impacts it just
+        // aged out, not merely hide them from `payload`: leaving them in the
+        // array lets a later lengthening (runtime settings, hot reload) bring
+        // an already-finished disturbance back to life.
+        st.expire();
         st.revision +%= 1;
     }
 
@@ -339,6 +395,9 @@ pub const WaterStore = struct {
         try validateConfig(cfg);
         if (std.meta.eql(cfg, st.config)) return;
         st.config = cfg;
+        // Same rule as `setSettings`: a shortened lifetime expires impacts for
+        // good, so a later lengthening cannot resurrect them.
+        st.expire();
         const w: f32 = @floatFromInt(cfg.logical_width);
         var write: u32 = 0;
         var read: u32 = 0;
@@ -390,12 +449,26 @@ pub const WaterStore = struct {
         if (dt == 0) return;
         st.time += dt;
         st.expire();
+        st.rebaseTime();
         st.revision +%= 1;
     }
 
-    pub fn setWavesEnabled(self: *WaterStore, id: WaterInstanceId, on: bool) UpdateError!void {
+    /// Toggle `PIXEL_WATER_FLAG_WAVES`.
+    ///
+    /// Enabling REVALIDATES the retained period: `validateConfig` only requires
+    /// `wave_period_seconds > 0` while waves are on, so an instance can legally
+    /// hold a zero period while they are off. Flipping the flag without that
+    /// check would ship `PIXEL_WATER_FLAG_WAVES` beside a zero period and hand
+    /// the shader a division by zero. A rejected enable leaves the flag — and
+    /// the revision — untouched, like every other rejected write here.
+    pub fn setWavesEnabled(
+        self: *WaterStore,
+        id: WaterInstanceId,
+        on: bool,
+    ) (ConfigError || UpdateError)!void {
         const st = self.get(id) orelse return error.StaleInstance;
         if (st.config.waves_enabled == on) return;
+        if (on and !(st.config.wave_period_seconds > 0)) return error.NonPositiveDuration;
         st.config.waves_enabled = on;
         st.revision +%= 1;
     }
