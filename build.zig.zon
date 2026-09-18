@@ -5,8 +5,13 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .labelle_core = .{
-            .url = "https://github.com/labelle-toolkit/labelle-core/archive/refs/tags/v1.32.0.tar.gz",
-            .hash = "labelle_core-1.32.0-OauRcEK_BwBqC6MEsf3Bxqdo_kGeF2DRrwJbJWqspkoT",
+            // Pinned to the HEAD of labelle-core#79 (feat/game-shader-materials),
+            // which introduces `src/shader_material.zig` and MATERIAL_CONTRACT_VERSION 2.
+            // MERGE ORDER: core#79 must merge and release FIRST; this pin is then
+            // used meanwhile so CI resolves a real, immutable archive (a `.path`
+            // override never resolves on a runner).
+            .url = "https://github.com/labelle-toolkit/labelle-core/archive/refs/tags/v2.0.0.tar.gz",
+            .hash = "labelle_core-2.0.0-OauRcPGlBwCXfrDJneAcTZoHhXiFnsO3pCCBA3L0_Nup",
         },
         .spatial_grid = .{
             .path = "spatial_grid",

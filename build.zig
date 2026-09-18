@@ -208,6 +208,16 @@ pub fn build(b: *std.Build) void {
     const run_camera_tests = b.addRunArtifact(camera_tests);
     const run_cross_check_tests = b.addRunArtifact(cross_check_tests);
     const test_step = b.step("test", "Run labelle-gfx tests");
+    const shader_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("test/shader_material_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "labelle-core", .module = core_module }, .{ .name = "labelle-gfx", .module = gfx_module } },
+    }) });
+    const run_shader_tests = b.addRunArtifact(shader_tests);
+    test_step.dependOn(&run_shader_tests.step);
+    b.step("test-shader-material", "Execute generic shader facade tests").dependOn(&run_shader_tests.step);
+
     test_step.dependOn(&run_tests.step);
     test_step.dependOn(&run_root_tests.step);
     test_step.dependOn(&run_tilemap_tests.step);
