@@ -9,6 +9,7 @@ const tilemap_mod = @import("tilemap");
 const bounds_mod = @import("retained_engine/bounds.zig");
 const draw_mod = @import("retained_engine/draw.zig");
 const post_fx_mod = @import("post_fx.zig");
+const pixel_water_mod = @import("pixel_water.zig");
 
 /// Viewport rectangle (engine coordinate space) used to cull off-screen
 /// entities. Stored axis-aligned; `x,y` is the top-left corner.
@@ -57,6 +58,13 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         pub const Pivot = types.Pivot;
         pub const TextureId = types.TextureId;
         pub const BackendTextureId = types.BackendTextureId;
+
+        // ── Pixel-water instance store (COND-07, labelle-bgfx#100) ──────────
+        pub const WaterInstanceId = pixel_water_mod.WaterInstanceId;
+        pub const WaterConfig = pixel_water_mod.WaterConfig;
+        pub const WaterState = pixel_water_mod.WaterState;
+        pub const PixelWaterDraw = pixel_water_mod.PixelWaterDraw;
+        pub const PixelWaterRipple = pixel_water_mod.PixelWaterRipple;
 
         // World-space layers are camera-transformed and therefore
         // cullable; screen-space layers are pinned and always drawn.
@@ -191,6 +199,13 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         /// backend that implements the post-fx seams).
         post_fx: PostFx = .{},
 
+        /// Gfx-owned reservoir slab for `MaterialEffect.pixel_water`
+        /// (COND-07, labelle-bgfx#100). Empty and allocation-free until the
+        /// first `createWaterInstance`, so a game with no water pays nothing.
+        /// See `pixel_water.zig` for why the payload lives here rather than
+        /// inline on `SpriteVisual`.
+        water: pixel_water_mod.WaterStore = .{},
+
         pub const Config = struct {
             screen_width: f32 = 800,
             screen_height: f32 = 600,
@@ -235,6 +250,92 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             self.cull_scratch.deinit(self.allocator);
             self.sort_scratch.deinit(self.allocator);
             self.post_fx.deinit();
+            // Frees only gfx bookkeeping. Mask/reflection textures are
+            // registry-owned and were already handled by the loop above (or
+            // belong to the asset catalog); releasing water never destroys a
+            // shared texture.
+            self.water.deinit(self.allocator);
+        }
+
+        // ── Pixel-water runtime API (COND-07, labelle-bgfx#100) ─────────────
+        //
+        // The whole animated payload lives in `self.water` and is re-resolved
+        // by `resolveWaterDraw` on EVERY submission, so each of these setters
+        // is visible to the backend on the next frame without the entity being
+        // marked dirty, without `updateSprite`, and without recreating a GPU
+        // resource. That is the RFC's dirty-tracking requirement, met by data
+        // placement rather than by a second invalidation channel.
+
+        /// Allocate a reservoir and return its checked generational id. Attach
+        /// it to a sprite by setting `SpriteVisual.water` alongside
+        /// `material.effect = .pixel_water`.
+        pub fn createWaterInstance(self: *Self, config: WaterConfig) !WaterInstanceId {
+            return self.water.create(self.allocator, config);
+        }
+
+        /// Release a reservoir. Stale-safe and idempotent (false = nothing to
+        /// release). NEVER destroys the mask/reflection textures: the store
+        /// holds `TextureId`s, and ownership stays with the asset manager.
+        pub fn releaseWaterInstance(self: *Self, id: WaterInstanceId) bool {
+            return self.water.release(self.allocator, id);
+        }
+
+        pub fn waterInstanceCount(self: *const Self) usize {
+            return self.water.count();
+        }
+
+        /// Read-only view of a reservoir's retained state; `null` when stale.
+        pub fn waterState(self: *const Self, id: WaterInstanceId) ?*const WaterState {
+            return self.water.getConst(id);
+        }
+
+        pub fn setWaterSettings(self: *Self, id: WaterInstanceId, config: WaterConfig) !void {
+            return self.water.setSettings(id, config);
+        }
+
+        pub fn reconfigureWater(self: *Self, id: WaterInstanceId, config: WaterConfig) !void {
+            return self.water.reconfigure(id, config);
+        }
+
+        pub fn setWaterLevel(self: *Self, id: WaterInstanceId, level: f32) !void {
+            return self.water.setLevel(id, level);
+        }
+
+        pub fn setWaterTime(self: *Self, id: WaterInstanceId, t: f32) !void {
+            return self.water.setTime(id, t);
+        }
+
+        pub fn advanceWaterTime(self: *Self, id: WaterInstanceId, dt: f32) !void {
+            return self.water.advanceTime(id, dt);
+        }
+
+        pub fn setWaterWavesEnabled(self: *Self, id: WaterInstanceId, on: bool) !void {
+            return self.water.setWavesEnabled(id, on);
+        }
+
+        pub fn addWaterRipple(self: *Self, id: WaterInstanceId, x: f32, strength: f32) !void {
+            return self.water.addRipple(id, x, strength);
+        }
+
+        /// Resolve `id` into the flat backend payload, binding mask/reflection
+        /// through the texture registry at DRAW time.
+        ///
+        /// Late resolution is deliberate: a catalog upload that has not landed
+        /// yet (or a handle invalidated by surface loss) makes this `null` for
+        /// those frames — the sprite degrades to the authored static reservoir
+        /// and recovers by itself — instead of baking a dead handle into the
+        /// instance at creation.
+        ///
+        /// `pub` for the draw sub-module; not an API for games.
+        pub fn resolveWaterDraw(self: *const Self, id: WaterInstanceId) ?PixelWaterDraw {
+            const st = self.water.getConst(id) orelse return null;
+            const mask = self.nativeTextureId(st.config.mask) orelse return null;
+            const mask_native: u32 = @intFromEnum(mask);
+            const reflection_native: u32 = if (self.nativeTextureId(st.config.reflection)) |r|
+                @intFromEnum(r)
+            else
+                0;
+            return self.water.payload(id, mask_native, reflection_native);
         }
 
         // -- Post-fx stack runtime API (labelle-gfx#305, RFC §2.5) --
