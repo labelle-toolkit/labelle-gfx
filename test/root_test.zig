@@ -858,14 +858,6 @@ comptime {
     _ = @import("material_batch_cost.zig");
 }
 
-// ── Pixel water (COND-07, labelle-bgfx#100) ────────────────────────
-//
-// The gfx-owned reservoir store, its generational ids, the draw dispatch and
-// the dirty-tracking proof. Deterministic, MockBackend-only.
-comptime {
-    _ = @import("pixel_water.zig");
-}
-
 test "Material: a flash sprite routes through drawTextureProMaterial with exact uniforms" {
     // A non-`.none` material the backend supports (mock advertises flash) is
     // forwarded to `drawTextureProMaterial`; the mock records the exact effect

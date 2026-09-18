@@ -295,64 +295,25 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             self.inner.unloadTexture(id);
         }
 
-        // ── Pixel water (COND-07, labelle-bgfx#100) ─────────────────────────
-        //
-        // Straight forwarders to the retained engine's gfx-owned reservoir
-        // store. The engine holds THIS wrapper, so a seam that exists only on
-        // the inner engine is unreachable from game code — same reason the
-        // texture-lifecycle forwarders below exist.
-        //
-        // NOTE none of these touch `tracked`: a water update deliberately does
-        // NOT mark the entity dirty. The payload is resolved from the store on
-        // every submission, so a time/level/ripple change is already visible
-        // with a stationary transform — marking the visual dirty here would
-        // re-upload an unchanged sprite for nothing.
-        pub const WaterInstanceId = GfxEngine.WaterInstanceId;
-        pub const WaterConfig = GfxEngine.WaterConfig;
-        pub const WaterState = GfxEngine.WaterState;
-
-        pub fn createWaterInstance(self: *Self, config: WaterConfig) !WaterInstanceId {
-            return self.inner.createWaterInstance(config);
+        pub const ShaderMaterialDescriptor = GfxEngine.ShaderMaterialDescriptor;
+        pub const ShaderMaterialId = GfxEngine.ShaderMaterialId;
+        pub fn shaderMaterialSupported(self: *const Self) bool {
+            return self.inner.shaderMaterialSupported();
         }
-
-        pub fn releaseWaterInstance(self: *Self, id: WaterInstanceId) bool {
-            return self.inner.releaseWaterInstance(id);
+        pub fn createShaderMaterial(self: *Self, desc: ShaderMaterialDescriptor) anyerror!ShaderMaterialId {
+            return self.inner.createShaderMaterial(desc);
         }
-
-        pub fn waterInstanceCount(self: *const Self) usize {
-            return self.inner.waterInstanceCount();
+        pub fn setShaderParameter(self: *Self, id: ShaderMaterialId, name: []const u8, values: []const f32) anyerror!void {
+            try self.inner.setShaderParameter(id, name, values);
         }
-
-        pub fn waterState(self: *const Self, id: WaterInstanceId) ?*const WaterState {
-            return self.inner.waterState(id);
+        pub fn setShaderTexture(self: *Self, id: ShaderMaterialId, name: []const u8, texture: types_mod.TextureId) anyerror!void {
+            try self.inner.setShaderTexture(id, name, texture);
         }
-
-        pub fn setWaterSettings(self: *Self, id: WaterInstanceId, config: WaterConfig) !void {
-            return self.inner.setWaterSettings(id, config);
+        pub fn destroyShaderMaterial(self: *Self, id: ShaderMaterialId) void {
+            self.inner.destroyShaderMaterial(id);
         }
-
-        pub fn reconfigureWater(self: *Self, id: WaterInstanceId, config: WaterConfig) !void {
-            return self.inner.reconfigureWater(id, config);
-        }
-
-        pub fn setWaterLevel(self: *Self, id: WaterInstanceId, level: f32) !void {
-            return self.inner.setWaterLevel(id, level);
-        }
-
-        pub fn setWaterTime(self: *Self, id: WaterInstanceId, t: f32) !void {
-            return self.inner.setWaterTime(id, t);
-        }
-
-        pub fn advanceWaterTime(self: *Self, id: WaterInstanceId, dt: f32) !void {
-            return self.inner.advanceWaterTime(id, dt);
-        }
-
-        pub fn setWaterWavesEnabled(self: *Self, id: WaterInstanceId, on: bool) !void {
-            return self.inner.setWaterWavesEnabled(id, on);
-        }
-
-        pub fn addWaterRipple(self: *Self, id: WaterInstanceId, x: f32, strength: f32) !void {
-            return self.inner.addWaterRipple(id, x, strength);
+        pub fn clearShaderMaterials(self: *Self) void {
+            self.inner.clearShaderMaterials();
         }
 
         // Surface-loss lifecycle for minted keys (labelle-engine#820).

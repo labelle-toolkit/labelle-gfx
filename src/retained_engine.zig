@@ -1,4 +1,5 @@
 const std = @import("std");
+const shader_mod = @import("shader_material.zig");
 const backend_mod = @import("backend.zig");
 const visual_types_mod = @import("visual_types.zig");
 const types = @import("types.zig");
@@ -9,7 +10,6 @@ const tilemap_mod = @import("tilemap");
 const bounds_mod = @import("retained_engine/bounds.zig");
 const draw_mod = @import("retained_engine/draw.zig");
 const post_fx_mod = @import("post_fx.zig");
-const pixel_water_mod = @import("pixel_water.zig");
 
 /// Viewport rectangle (engine coordinate space) used to cull off-screen
 /// entities. Stored axis-aligned; `x,y` is the top-left corner.
@@ -58,13 +58,6 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         pub const Pivot = types.Pivot;
         pub const TextureId = types.TextureId;
         pub const BackendTextureId = types.BackendTextureId;
-
-        // ── Pixel-water instance store (COND-07, labelle-bgfx#100) ──────────
-        pub const WaterInstanceId = pixel_water_mod.WaterInstanceId;
-        pub const WaterConfig = pixel_water_mod.WaterConfig;
-        pub const WaterState = pixel_water_mod.WaterState;
-        pub const PixelWaterDraw = pixel_water_mod.PixelWaterDraw;
-        pub const PixelWaterRipple = pixel_water_mod.PixelWaterRipple;
 
         // World-space layers are camera-transformed and therefore
         // cullable; screen-space layers are pinned and always drawn.
@@ -199,12 +192,95 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         /// backend that implements the post-fx seams).
         post_fx: PostFx = .{},
 
-        /// Gfx-owned reservoir slab for `MaterialEffect.pixel_water`
-        /// (COND-07, labelle-bgfx#100). Empty and allocation-free until the
-        /// first `createWaterInstance`, so a game with no water pays nothing.
-        /// See `pixel_water.zig` for why the payload lives here rather than
-        /// inline on `SpriteVisual`.
-        water: pixel_water_mod.WaterStore = .{},
+        shader_materials: std.AutoHashMapUnmanaged(shader_mod.Id, shader_mod.References) = .{},
+        pub const ShaderMaterialDescriptor = shader_mod.Descriptor;
+        pub const ShaderMaterialId = shader_mod.Id;
+
+        pub fn shaderMaterialSupported(_: *const Self) bool {
+            return B.shaderMaterialSupported();
+        }
+
+        pub fn createShaderMaterial(self: *Self, desc: ShaderMaterialDescriptor) anyerror!ShaderMaterialId {
+            if (!self.shaderMaterialSupported()) return error.Unsupported;
+            if (desc.textures.len > shader_mod.contract.MAX_TEXTURES) return error.CapacityExceeded;
+            var bindings: [shader_mod.contract.MAX_TEXTURES]shader_mod.contract.TextureBinding = undefined;
+            for (desc.textures, 0..) |binding, i| bindings[i] = .{
+                .name = binding.name,
+                .texture = self.nativeTextureId(binding.texture) orelse return error.InvalidTexture,
+                .sampler = binding.sampler,
+            };
+            const native: shader_mod.contract.Descriptor = .{
+                .version = desc.version,
+                .label = desc.label,
+                .shaders = desc.shaders,
+                .parameters = desc.parameters,
+                .textures = bindings[0..desc.textures.len],
+                .blend = desc.blend,
+            };
+            try shader_mod.contract.validateDescriptor(native);
+            var refs: shader_mod.References = .{};
+            errdefer refs.deinit(self.allocator);
+            for (desc.textures, 0..) |binding, i| {
+                refs.bindings[i] = .{ .name = try self.allocator.dupe(u8, binding.name), .texture = binding.texture };
+                refs.len += 1;
+            }
+            try self.shader_materials.ensureUnusedCapacity(self.allocator, 1);
+            const id = try B.createShaderMaterial(native);
+            self.shader_materials.putAssumeCapacity(id, refs);
+            return id;
+        }
+
+        pub fn setShaderParameter(self: *Self, id: ShaderMaterialId, name: []const u8, values: []const f32) anyerror!void {
+            if (!self.shaderMaterialSupported()) return error.Unsupported;
+            if (!self.shader_materials.contains(id)) return error.InvalidHandle;
+            try B.setShaderParameter(id, name, values);
+        }
+
+        pub fn setShaderTexture(self: *Self, id: ShaderMaterialId, name: []const u8, texture: TextureId) anyerror!void {
+            if (!self.shaderMaterialSupported()) return error.Unsupported;
+            if (!self.shader_materials.contains(id)) return error.InvalidHandle;
+            const refs = self.shader_materials.getPtr(id).?;
+            for (refs.bindings[0..refs.len]) |*binding| {
+                if (!std.mem.eql(u8, binding.name, name)) continue;
+                try B.setShaderTexture(id, name, self.nativeTextureId(texture) orelse return error.InvalidTexture);
+                binding.texture = texture;
+                return;
+            }
+            return error.UnknownTexture;
+        }
+
+        pub fn destroyShaderMaterial(self: *Self, id: ShaderMaterialId) void {
+            if (self.shader_materials.fetchRemove(id)) |entry| {
+                var refs = entry.value;
+                refs.deinit(self.allocator);
+                B.destroyShaderMaterial(id);
+            }
+        }
+
+        /// Call before context teardown; stale handles are then rejected locally.
+        pub fn clearShaderMaterials(self: *Self) void {
+            while (self.shader_materials.count() != 0) {
+                var it = self.shader_materials.keyIterator();
+                self.destroyShaderMaterial(it.next().?.*);
+            }
+        }
+
+        /// TextureId is the identity; replacing/freeing its backing slot invalidates
+        /// dependent materials before any backend slot can be reused.
+        fn invalidateShaderTexture(self: *Self, texture: TextureId) void {
+            outer: while (true) {
+                var it = self.shader_materials.iterator();
+                while (it.next()) |entry| {
+                    for (entry.value_ptr.bindings[0..entry.value_ptr.len]) |binding| {
+                        if (binding.texture == texture) {
+                            self.destroyShaderMaterial(entry.key_ptr.*);
+                            continue :outer;
+                        }
+                    }
+                }
+                break;
+            }
+        }
 
         pub const Config = struct {
             screen_width: f32 = 800,
@@ -233,6 +309,8 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         }
 
         pub fn deinit(self: *Self) void {
+            self.clearShaderMaterials();
+            self.shader_materials.deinit(self.allocator);
             // Unload all textures from the backend
             var tex_iter = self.textures.iterator();
             while (tex_iter.next()) |entry| {
@@ -250,92 +328,6 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             self.cull_scratch.deinit(self.allocator);
             self.sort_scratch.deinit(self.allocator);
             self.post_fx.deinit();
-            // Frees only gfx bookkeeping. Mask/reflection textures are
-            // registry-owned and were already handled by the loop above (or
-            // belong to the asset catalog); releasing water never destroys a
-            // shared texture.
-            self.water.deinit(self.allocator);
-        }
-
-        // ── Pixel-water runtime API (COND-07, labelle-bgfx#100) ─────────────
-        //
-        // The whole animated payload lives in `self.water` and is re-resolved
-        // by `resolveWaterDraw` on EVERY submission, so each of these setters
-        // is visible to the backend on the next frame without the entity being
-        // marked dirty, without `updateSprite`, and without recreating a GPU
-        // resource. That is the RFC's dirty-tracking requirement, met by data
-        // placement rather than by a second invalidation channel.
-
-        /// Allocate a reservoir and return its checked generational id. Attach
-        /// it to a sprite by setting `SpriteVisual.water` alongside
-        /// `material.effect = .pixel_water`.
-        pub fn createWaterInstance(self: *Self, config: WaterConfig) !WaterInstanceId {
-            return self.water.create(self.allocator, config);
-        }
-
-        /// Release a reservoir. Stale-safe and idempotent (false = nothing to
-        /// release). NEVER destroys the mask/reflection textures: the store
-        /// holds `TextureId`s, and ownership stays with the asset manager.
-        pub fn releaseWaterInstance(self: *Self, id: WaterInstanceId) bool {
-            return self.water.release(self.allocator, id);
-        }
-
-        pub fn waterInstanceCount(self: *const Self) usize {
-            return self.water.count();
-        }
-
-        /// Read-only view of a reservoir's retained state; `null` when stale.
-        pub fn waterState(self: *const Self, id: WaterInstanceId) ?*const WaterState {
-            return self.water.getConst(id);
-        }
-
-        pub fn setWaterSettings(self: *Self, id: WaterInstanceId, config: WaterConfig) !void {
-            return self.water.setSettings(id, config);
-        }
-
-        pub fn reconfigureWater(self: *Self, id: WaterInstanceId, config: WaterConfig) !void {
-            return self.water.reconfigure(id, config);
-        }
-
-        pub fn setWaterLevel(self: *Self, id: WaterInstanceId, level: f32) !void {
-            return self.water.setLevel(id, level);
-        }
-
-        pub fn setWaterTime(self: *Self, id: WaterInstanceId, t: f32) !void {
-            return self.water.setTime(id, t);
-        }
-
-        pub fn advanceWaterTime(self: *Self, id: WaterInstanceId, dt: f32) !void {
-            return self.water.advanceTime(id, dt);
-        }
-
-        pub fn setWaterWavesEnabled(self: *Self, id: WaterInstanceId, on: bool) !void {
-            return self.water.setWavesEnabled(id, on);
-        }
-
-        pub fn addWaterRipple(self: *Self, id: WaterInstanceId, x: f32, strength: f32) !void {
-            return self.water.addRipple(id, x, strength);
-        }
-
-        /// Resolve `id` into the flat backend payload, binding mask/reflection
-        /// through the texture registry at DRAW time.
-        ///
-        /// Late resolution is deliberate: a catalog upload that has not landed
-        /// yet (or a handle invalidated by surface loss) makes this `null` for
-        /// those frames — the sprite degrades to the authored static reservoir
-        /// and recovers by itself — instead of baking a dead handle into the
-        /// instance at creation.
-        ///
-        /// `pub` for the draw sub-module; not an API for games.
-        pub fn resolveWaterDraw(self: *const Self, id: WaterInstanceId) ?PixelWaterDraw {
-            const st = self.water.getConst(id) orelse return null;
-            const mask = self.nativeTextureId(st.config.mask) orelse return null;
-            const mask_native: u32 = @intFromEnum(mask);
-            const reflection_native: u32 = if (self.nativeTextureId(st.config.reflection)) |r|
-                @intFromEnum(r)
-            else
-                0;
-            return self.water.payload(id, mask_native, reflection_native);
         }
 
         // -- Post-fx stack runtime API (labelle-gfx#305, RFC §2.5) --
@@ -648,6 +640,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         }
 
         pub fn unloadTexture(self: *Self, id: TextureId) void {
+            self.invalidateShaderTexture(id);
             if (self.textures.fetchRemove(id)) |kv| {
                 // See `invalidateTexture`: a non-resident handle is already
                 // dead, so the entry is dropped without a backend free.
@@ -696,6 +689,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         /// the handle — the one thing an invalidated key must never do.
         /// So a sub-base id is ignored here, not marked.
         pub fn invalidateTexture(self: *Self, id: TextureId) void {
+            self.invalidateShaderTexture(id);
             if (!isMintedKey(id)) return;
             if (self.textures.getPtr(id)) |info| info.gpu_resident = false;
         }
@@ -729,6 +723,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 B.unloadTexture(tex);
                 return error.TextureNotRegistered;
             };
+            self.invalidateShaderTexture(id);
             if (info.gpu_resident) B.unloadTexture(info.backend_texture);
             info.* = .{
                 .backend_texture = tex,
@@ -804,6 +799,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // manager re-arms bindings on scene unload; loud so a future
             // stale-binding regression is visible in one logcat capture.
             if (self.textures.contains(id)) {
+                self.invalidateShaderTexture(id);
                 std.log.warn(
                     "registerCatalogTexture: overwriting live key {d} — catalog slot recycled",
                     .{handle},

@@ -155,44 +155,14 @@ pub fn DrawHelpers(comptime Self: type) type {
             // one material sprite ≈ one submit. The no-material path above is
             // unchanged and fully batched; materials are the exception (a few
             // hit-flashing/selected entities), never a whole-layer default.
-            if (sprite.material.effect == .none) {
-                B.drawTexturePro(backend_tex, src_rect, dest_rect, origin, sprite.rotation, tint);
-            } else if (sprite.material.effect == .pixel_water) {
-                // Pixel water (COND-07, labelle-bgfx#100) is the one effect
-                // whose payload does NOT ride `Material.uniforms`: 256 bytes of
-                // reservoir state live in the gfx-owned store and are resolved
-                // HERE, every frame, from `sprite.water`. That late resolution
-                // is what makes a time/level/ripple change reach the backend
-                // with the transform and material identity unchanged.
-                //
-                // Two independent degrade reasons, each warned once:
-                //   - the backend lacks `drawTextureProPixelWater` (or declines
-                //     the effect) → capability fallback;
-                //   - the instance id is stale/released, or its mask texture is
-                //     not resolvable yet → resource fallback.
-                // Both draw the authored static reservoir sprite, which is
-                // exactly the RFC's fallback.
-                if (!B.materialSupported(.pixel_water)) {
-                    warnOnce(
-                        @intFromEnum(MaterialEffect.pixel_water),
-                        "labelle-gfx: material effect 'pixel_water' not supported by this backend — " ++
-                            "drawing the authored static reservoir instead (labelle-bgfx#100). " ++
-                            "This is a graceful degradation, not an error.",
-                        .{},
-                    );
-                    B.drawTexturePro(backend_tex, src_rect, dest_rect, origin, sprite.rotation, tint);
-                } else if (self.resolveWaterDraw(sprite.water)) |water| {
-                    B.drawTextureProPixelWater(backend_tex, src_rect, dest_rect, origin, sprite.rotation, tint, water);
+            if (sprite.material.shader != .none) {
+                if (self.shader_materials.contains(sprite.material.shader) and B.shaderMaterialSupported()) {
+                    B.drawTextureProMaterial(backend_tex, src_rect, dest_rect, origin, sprite.rotation, tint, sprite.material);
                 } else {
-                    warnOnce(
-                        water_instance_slot,
-                        "labelle-gfx: a pixel_water sprite has no resolvable water instance " ++
-                            "(stale/released id, or its mask texture is not registered) — drawing the " ++
-                            "authored static reservoir instead (labelle-bgfx#100).",
-                        .{},
-                    );
                     B.drawTexturePro(backend_tex, src_rect, dest_rect, origin, sprite.rotation, tint);
                 }
+            } else if (sprite.material.effect == .none) {
+                B.drawTexturePro(backend_tex, src_rect, dest_rect, origin, sprite.rotation, tint);
             } else if (B.materialSupported(sprite.material.effect)) {
                 // The backend both declares the decl AND advertises this effect →
                 // draw with the material. `materialSupported` folds the coarse
@@ -212,12 +182,7 @@ pub fn DrawHelpers(comptime Self: type) type {
         /// the table is a per-backend static — a dropped effect logs exactly
         /// once, no per-frame spam. Degradation leaves the game playable (the
         /// sprite still draws), so this is a polish note, not an error.
-        /// One slot per `MaterialEffect` tag, plus ONE extra for the pixel-water
-        /// "no resolvable instance" reason — a resource failure rather than a
-        /// capability one, and the two must not shadow each other. Same single
-        /// table, same single mechanism; no second dedupe channel.
-        const water_instance_slot = @typeInfo(MaterialEffect).@"enum".fields.len;
-        var material_warned = [_]bool{false} ** (@typeInfo(MaterialEffect).@"enum".fields.len + 1);
+        var material_warned = [_]bool{false} ** @typeInfo(MaterialEffect).@"enum".fields.len;
 
         fn warnOnce(slot: usize, comptime fmt: []const u8, args: anytype) void {
             if (material_warned[slot]) return;

@@ -13,7 +13,6 @@ pub const Container = types_mod.Container;
 pub const TextureId = types_mod.TextureId;
 pub const FontId = types_mod.FontId;
 pub const Material = types_mod.Material;
-pub const WaterInstanceId = @import("pixel_water.zig").WaterInstanceId;
 pub const Shape = visuals_mod.Shape;
 pub const VisualType = core.VisualType;
 
@@ -51,12 +50,6 @@ pub fn SpriteComponent(comptime LayerEnum: type) type {
         /// `Game.setMaterial`, see labelle-engine#790). Propagated to
         /// `SpriteVisual.material` by `toVisual` below.
         material: Material = .{},
-        /// Reservoir reference for `MaterialEffect.pixel_water` sprites
-        /// (COND-07). The ENGINE owns the entity→instance association and sets
-        /// this after creating the instance on the renderer; gfx owns the
-        /// retained state behind it. Propagated to `SpriteVisual.water` below.
-        water: WaterInstanceId = .none,
-
         pub fn toVisual(self: Self) SpriteVisual {
             return .{
                 .texture = self.texture,
@@ -75,7 +68,6 @@ pub fn SpriteComponent(comptime LayerEnum: type) type {
                 .size_mode = self.size_mode,
                 .container = self.container,
                 .material = self.material,
-                .water = self.water,
             };
         }
     };
