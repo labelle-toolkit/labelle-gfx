@@ -140,6 +140,11 @@ const ShaderBackend = struct {
         destroys += 1;
     }
 };
+
+/// Every material in these tests declares the parameters it later updates —
+/// the facade rejects an undeclared name, which is the point.
+const time_param: sm.Parameter = .{ .name = "u_time", .kind = .scalar };
+
 test "generic material uses typed registry resolution, executes draw, and rejects stale handles" {
     gfx.MockBackend.initMock(testing.allocator);
     defer gfx.MockBackend.deinitMock();
@@ -150,7 +155,11 @@ test "generic material uses typed registry resolution, executes draw, and reject
     var renderer = R.init(testing.allocator, .{});
     defer renderer.deinit();
     const texture = try renderer.loadTexture("texture.png");
-    const id = try renderer.createShaderMaterial(.{ .shaders = .{ .spv = "fragment" }, .textures = &.{.{ .name = "s_mask", .texture = texture }} });
+    const id = try renderer.createShaderMaterial(.{
+        .shaders = .{ .spv = "fragment" },
+        .parameters = &.{time_param},
+        .textures = &.{.{ .name = "s_mask", .texture = texture }},
+    });
     try testing.expectEqual(renderer.nativeTextureId(texture).?, ShaderBackend.bound);
     try testing.expect(@intFromEnum(texture) != @intFromEnum(ShaderBackend.bound));
     try renderer.setShaderParameter(id, "u_time", &.{1});
@@ -167,6 +176,7 @@ test "generic material uses typed registry resolution, executes draw, and reject
     renderer.destroyShaderMaterial(id);
     try testing.expectEqual(@as(usize, 1), ShaderBackend.destroys);
 }
+
 test "generic facade reports unsupported instead of silently accepting material" {
     gfx.MockBackend.initMock(testing.allocator);
     defer gfx.MockBackend.deinitMock();
@@ -175,6 +185,7 @@ test "generic facade reports unsupported instead of silently accepting material"
     try testing.expect(!renderer.shaderMaterialSupported());
     try testing.expectError(error.Unsupported, renderer.createShaderMaterial(.{ .shaders = .{ .spv = "fragment" } }));
 }
+
 test "texture slot replacement invalidates dependent generic material before reuse" {
     gfx.MockBackend.initMock(testing.allocator);
     defer gfx.MockBackend.deinitMock();
@@ -184,7 +195,11 @@ test "texture slot replacement invalidates dependent generic material before reu
     defer renderer.deinit();
     const texture = try renderer.loadTexture("a.png");
     const other = try renderer.loadTexture("b.png");
-    var desc: gfx.ShaderMaterialDescriptor = .{ .shaders = .{ .spv = "fragment" }, .textures = &.{.{ .name = "s_mask", .texture = texture }} };
+    var desc: gfx.ShaderMaterialDescriptor = .{
+        .shaders = .{ .spv = "fragment" },
+        .parameters = &.{time_param},
+        .textures = &.{.{ .name = "s_mask", .texture = texture }},
+    };
     const first = try renderer.createShaderMaterial(desc);
     renderer.unloadTexture(texture);
     _ = try renderer.loadTexture("replacement.png");
@@ -197,6 +212,7 @@ test "texture slot replacement invalidates dependent generic material before reu
     try testing.expectError(error.InvalidHandle, renderer.setShaderTexture(second, "s_mask", other));
     try testing.expectEqual(@as(usize, 2), ShaderBackend.destroys);
 }
+
 test "successful texture setter transfers tracked dependency to new registry key" {
     gfx.MockBackend.initMock(testing.allocator);
     defer gfx.MockBackend.deinitMock();
@@ -206,10 +222,153 @@ test "successful texture setter transfers tracked dependency to new registry key
     defer renderer.deinit();
     const a = try renderer.loadTexture("a.png");
     const b = try renderer.loadTexture("b.png");
-    const id = try renderer.createShaderMaterial(.{ .shaders = .{ .spv = "fragment" }, .textures = &.{.{ .name = "s_mask", .texture = a }} });
+    const id = try renderer.createShaderMaterial(.{
+        .shaders = .{ .spv = "fragment" },
+        .parameters = &.{time_param},
+        .textures = &.{.{ .name = "s_mask", .texture = a }},
+    });
     try renderer.setShaderTexture(id, "s_mask", b);
     renderer.unloadTexture(a);
     try renderer.setShaderParameter(id, "u_time", &.{0});
     renderer.unloadTexture(b);
     try testing.expectError(error.InvalidHandle, renderer.setShaderParameter(id, "u_time", &.{0}));
+}
+
+// ── Regressions carried over from the retired pixel-water store ─────────────
+// Each of these asserts the MECHANISM: which code path ran, not just a value a
+// fallback would also produce.
+
+test "a parameter update reaches the backend on a stationary already-rendered sprite" {
+    gfx.MockBackend.initMock(testing.allocator);
+    defer gfx.MockBackend.deinitMock();
+    ShaderBackend.creates = 0;
+    ShaderBackend.destroys = 0;
+    ShaderBackend.writes = 0;
+    var renderer = gfx.RetainedEngineWith(ShaderBackend, gfx.DefaultLayers).init(testing.allocator, .{});
+    defer renderer.deinit();
+    const texture = try renderer.loadTexture("texture.png");
+    const id = try renderer.createShaderMaterial(.{
+        .shaders = .{ .spv = "fragment" },
+        .parameters = &.{time_param},
+        .textures = &.{.{ .name = "s_mask", .texture = texture }},
+    });
+    renderer.createSprite(gfx.EntityId.from(7), .{ .material = .{ .shader = id } }, .{ .x = 12, .y = 34 });
+    renderer.render();
+    try testing.expectEqual(@as(usize, 1), gfx.MockBackend.getMaterialCallCount());
+
+    // No updateSprite, no markPositionDirty, no material-identity change: the
+    // animated value must still land on the backend. Parameter state lives on
+    // the material, so the write happens on the call itself, not at submission.
+    try renderer.setShaderParameter(id, "u_time", &.{0.5});
+    try testing.expectEqual(@as(usize, 1), ShaderBackend.writes);
+    renderer.render();
+    // The sprite is still drawn through the MATERIAL path (not degraded), with
+    // the same handle — the transform and identity genuinely did not change.
+    try testing.expectEqual(@as(usize, 2), gfx.MockBackend.getMaterialCallCount());
+    try testing.expectEqual(id, gfx.MockBackend.getMaterialCalls()[1].material.shader);
+    try testing.expectEqual(gfx.MockBackend.getMaterialCalls()[0].dest, gfx.MockBackend.getMaterialCalls()[1].dest);
+}
+
+test "a non-finite or mis-shaped update is rejected before it can reach the backend" {
+    gfx.MockBackend.initMock(testing.allocator);
+    defer gfx.MockBackend.deinitMock();
+    ShaderBackend.creates = 0;
+    ShaderBackend.destroys = 0;
+    ShaderBackend.writes = 0;
+    var renderer = gfx.RetainedEngineWith(ShaderBackend, gfx.DefaultLayers).init(testing.allocator, .{});
+    defer renderer.deinit();
+    const id = try renderer.createShaderMaterial(.{
+        .shaders = .{ .spv = "fragment" },
+        .parameters = &.{ time_param, .{ .name = "u_tint", .kind = .vec3 } },
+    });
+    try testing.expectError(error.NonFiniteParameter, renderer.setShaderParameter(id, "u_time", &.{std.math.nan(f32)}));
+    try testing.expectError(error.NonFiniteParameter, renderer.setShaderParameter(id, "u_time", &.{std.math.inf(f32)}));
+    try testing.expectError(error.ParameterShapeMismatch, renderer.setShaderParameter(id, "u_tint", &.{ 1, 2 }));
+    try testing.expectError(error.ParameterShapeMismatch, renderer.setShaderParameter(id, "u_tint", &.{ 1, 2, 3, 4 }));
+    try testing.expectError(error.UnknownParameter, renderer.setShaderParameter(id, "u_never_declared", &.{1}));
+    // The mechanism, not the value: NOTHING was forwarded. A guard that ran
+    // after the write would leave `writes` at 5.
+    try testing.expectEqual(@as(usize, 0), ShaderBackend.writes);
+    // …and a well-shaped update on the same material still works, so the
+    // rejections above are not a blanket failure.
+    try renderer.setShaderParameter(id, "u_tint", &.{ 1, 2, 3 });
+    try testing.expectEqual(@as(usize, 1), ShaderBackend.writes);
+}
+
+test "a stale shader handle degrades to the plain sprite draw, never to another material" {
+    gfx.MockBackend.initMock(testing.allocator);
+    defer gfx.MockBackend.deinitMock();
+    ShaderBackend.creates = 0;
+    ShaderBackend.destroys = 0;
+    var renderer = gfx.RetainedEngineWith(ShaderBackend, gfx.DefaultLayers).init(testing.allocator, .{});
+    defer renderer.deinit();
+    const id = try renderer.createShaderMaterial(.{ .shaders = .{ .spv = "fragment" }, .parameters = &.{time_param} });
+    renderer.createSprite(gfx.EntityId.from(1), .{ .material = .{ .shader = id } }, .{ .x = 0, .y = 0 });
+    renderer.render();
+    try testing.expectEqual(@as(usize, 1), gfx.MockBackend.getMaterialCallCount());
+
+    renderer.destroyShaderMaterial(id);
+    gfx.MockBackend.resetMock();
+    renderer.render();
+    // Degraded: the ordinary textured draw ran and the material path did NOT.
+    try testing.expectEqual(@as(usize, 0), gfx.MockBackend.getMaterialCallCount());
+    try testing.expectEqual(@as(usize, 1), gfx.MockBackend.getDrawCallCount());
+
+    // A SECOND material now takes the slot the backend recycles. The stale
+    // handle must not address it.
+    const next = try renderer.createShaderMaterial(.{ .shaders = .{ .spv = "fragment" }, .parameters = &.{time_param} });
+    try testing.expect(next != id);
+    try testing.expectError(error.InvalidHandle, renderer.setShaderParameter(id, "u_time", &.{1}));
+    renderer.destroyShaderMaterial(id);
+    // The live material survived the stale destroy.
+    try renderer.setShaderParameter(next, "u_time", &.{1});
+}
+
+test "an ordinary .none sprite keeps the plain fast path" {
+    gfx.MockBackend.initMock(testing.allocator);
+    defer gfx.MockBackend.deinitMock();
+    var renderer = gfx.RetainedEngineWith(ShaderBackend, gfx.DefaultLayers).init(testing.allocator, .{});
+    defer renderer.deinit();
+    renderer.createSprite(gfx.EntityId.from(1), .{}, .{ .x = 0, .y = 0 });
+    renderer.render();
+    try testing.expectEqual(@as(usize, 1), gfx.MockBackend.getDrawCallCount());
+    try testing.expectEqual(@as(usize, 0), gfx.MockBackend.getMaterialCallCount());
+    // `.none` is the all-zero default and allocates nothing.
+    try testing.expectEqual(sm.Id.none, (gfx.Material{}).shader);
+    try testing.expectEqual(@as(usize, 0), renderer.shader_materials.count());
+}
+
+test "descriptor validation ceilings are enforced at the facade" {
+    gfx.MockBackend.initMock(testing.allocator);
+    defer gfx.MockBackend.deinitMock();
+    var renderer = gfx.RetainedEngineWith(ShaderBackend, gfx.DefaultLayers).init(testing.allocator, .{});
+    defer renderer.deinit();
+    const tex = try renderer.loadTexture("a.png");
+    try testing.expectError(error.InvalidShader, renderer.createShaderMaterial(.{ .shaders = .{} }));
+    try testing.expectError(error.InvalidName, renderer.createShaderMaterial(.{
+        .shaders = .{ .spv = "f" },
+        .parameters = &.{.{ .name = "u_material_rect" }},
+    }));
+    try testing.expectError(error.InvalidName, renderer.createShaderMaterial(.{
+        .shaders = .{ .spv = "f" },
+        .textures = &.{.{ .name = "s_tex", .texture = tex }},
+    }));
+    try testing.expectError(error.DuplicateBinding, renderer.createShaderMaterial(.{
+        .shaders = .{ .spv = "f" },
+        .parameters = &.{ .{ .name = "u_a" }, .{ .name = "u_a" } },
+    }));
+    try testing.expectError(error.InvalidDefault, renderer.createShaderMaterial(.{
+        .shaders = .{ .spv = "f" },
+        .parameters = &.{.{ .name = "u_a", .kind = .vec2, .defaults = &.{1} }},
+    }));
+    try testing.expectError(error.CapacityExceeded, renderer.createShaderMaterial(.{
+        .shaders = .{ .spv = "f" },
+        .textures = &.{
+            .{ .name = "s_a", .texture = tex }, .{ .name = "s_b", .texture = tex },
+            .{ .name = "s_c", .texture = tex }, .{ .name = "s_d", .texture = tex },
+            .{ .name = "s_e", .texture = tex },
+        },
+    }));
+    // Nothing was registered by any of the rejections.
+    try testing.expectEqual(@as(usize, 0), renderer.shader_materials.count());
 }

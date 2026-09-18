@@ -224,22 +224,56 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 refs.bindings[i] = .{ .name = try self.allocator.dupe(u8, binding.name), .texture = binding.texture };
                 refs.len += 1;
             }
+            // The descriptor is borrowed for this call only, so the declared
+            // parameter shapes are copied now; `setShaderParameter` validates
+            // against this copy.
+            for (desc.parameters, 0..) |parameter, i| {
+                refs.parameters[i] = .{
+                    .name = try self.allocator.dupe(u8, parameter.name),
+                    .kind = parameter.kind,
+                    .count = parameter.count,
+                };
+                refs.parameter_len += 1;
+            }
             try self.shader_materials.ensureUnusedCapacity(self.allocator, 1);
             const id = try B.createShaderMaterial(native);
-            self.shader_materials.putAssumeCapacity(id, refs);
+            // `.none` is the contract's "absent" sentinel and is what an
+            // all-zero `Material` carries; a backend must never hand it back as
+            // a live handle. Refuse it rather than register a material that
+            // every `.none` sprite would then alias.
+            if (id == .none) return error.InvalidHandle;
+            const slot = self.shader_materials.getOrPutAssumeCapacity(id);
+            // A backend that reissues a live id has violated the generational
+            // handle rule; keep OUR side consistent (and leak-free) by retiring
+            // the entry it just replaced instead of overwriting it in place.
+            if (slot.found_existing) slot.value_ptr.deinit(self.allocator);
+            slot.value_ptr.* = refs;
             return id;
         }
 
+        /// Push a new value for a declared parameter.
+        ///
+        /// Reaches the backend IMMEDIATELY and deliberately does NOT mark the
+        /// entity dirty: parameter state lives on the material, not on the
+        /// sprite, so an animated value is visible on the next frame with the
+        /// transform and material identity unchanged. (The retired pixel-water
+        /// store achieved the same thing by re-resolving its payload on every
+        /// submission; here the value simply never passes through the visual.)
+        ///
+        /// Shape and finiteness are checked BEFORE anything is forwarded, so a
+        /// rejected update never half-applies — the exact bug the water store
+        /// shipped (success returned while a persistent NaN was stored).
         pub fn setShaderParameter(self: *Self, id: ShaderMaterialId, name: []const u8, values: []const f32) anyerror!void {
             if (!self.shaderMaterialSupported()) return error.Unsupported;
-            if (!self.shader_materials.contains(id)) return error.InvalidHandle;
+            const refs = self.shader_materials.getPtr(id) orelse return error.InvalidHandle;
+            const declared = refs.parameter(name) orelse return error.UnknownParameter;
+            try shader_mod.contract.validateParameter(declared, values);
             try B.setShaderParameter(id, name, values);
         }
 
         pub fn setShaderTexture(self: *Self, id: ShaderMaterialId, name: []const u8, texture: TextureId) anyerror!void {
             if (!self.shaderMaterialSupported()) return error.Unsupported;
-            if (!self.shader_materials.contains(id)) return error.InvalidHandle;
-            const refs = self.shader_materials.getPtr(id).?;
+            const refs = self.shader_materials.getPtr(id) orelse return error.InvalidHandle;
             for (refs.bindings[0..refs.len]) |*binding| {
                 if (!std.mem.eql(u8, binding.name, name)) continue;
                 try B.setShaderTexture(id, name, self.nativeTextureId(texture) orelse return error.InvalidTexture);
@@ -689,8 +723,11 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         /// the handle — the one thing an invalidated key must never do.
         /// So a sub-base id is ignored here, not marked.
         pub fn invalidateTexture(self: *Self, id: TextureId) void {
-            self.invalidateShaderTexture(id);
+            // AFTER the minted-key guard on purpose: a sub-base id is not a key
+            // this engine owns, and reacting to it would let an unrelated
+            // handle tear down a live material.
             if (!isMintedKey(id)) return;
+            self.invalidateShaderTexture(id);
             if (self.textures.getPtr(id)) |info| info.gpu_resident = false;
         }
 
