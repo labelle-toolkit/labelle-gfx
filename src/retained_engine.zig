@@ -291,7 +291,9 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             }
         }
 
-        /// Call before context teardown; stale handles are then rejected locally.
+        /// Destroy every live material through the backend. Call while the
+        /// GPU context is still alive (orderly teardown); for the context-
+        /// already-gone case use `invalidateShaderMaterials` instead.
         pub fn clearShaderMaterials(self: *Self) void {
             while (self.shader_materials.count() != 0) {
                 var it = self.shader_materials.keyIterator();
@@ -299,15 +301,59 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             }
         }
 
-        /// TextureId is the identity; replacing/freeing its backing slot invalidates
+        /// Drop gfx's record of `id` WITHOUT touching the backend — the
+        /// material counterpart of a texture entry going `gpu_resident =
+        /// false`. Afterwards the id resolves to nothing (`InvalidHandle`
+        /// on every setter, plain-sprite fallback in the draw pass) and a
+        /// later `destroyShaderMaterial(id)` is a no-op, so a handle that
+        /// died with its surface can never reach the backend destructor —
+        /// which on the dead context is UB, and after re-init would free
+        /// whatever live material was recycled into that slot.
+        fn forgetShaderMaterial(self: *Self, id: ShaderMaterialId) void {
+            if (self.shader_materials.fetchRemove(id)) |entry| {
+                var refs = entry.value;
+                refs.deinit(self.allocator);
+            }
+        }
+
+        /// Surface-loss counterpart of `clearShaderMaterials`: the GPU
+        /// context that owned every material is already gone, so forget
+        /// ALL of them without issuing a single backend destroy. Every
+        /// outstanding `ShaderMaterialId` is invalid from here on (the
+        /// contract's "renderer teardown invalidates all IDs"); it is the
+        /// engine's job to notice and recreate on `surfaceRestored`. Also
+        /// what a material with NO texture bindings needs, since the
+        /// per-texture `invalidateTexture` path never sees it.
+        pub fn invalidateShaderMaterials(self: *Self) void {
+            while (self.shader_materials.count() != 0) {
+                var it = self.shader_materials.keyIterator();
+                self.forgetShaderMaterial(it.next().?.*);
+            }
+        }
+
+        /// How a dependent material is retired when its texture goes away —
+        /// the same split `TextureInfo.gpu_resident` encodes for textures.
+        const ShaderRetire = enum {
+            /// The context is alive (plain unload / content swap / catalog
+            /// slot recycle): free the GPU resource through the backend.
+            destroy,
+            /// The context is gone (`invalidateTexture`): drop bookkeeping
+            /// only, never call into the backend.
+            forget,
+        };
+
+        /// TextureId is the identity; replacing/freeing its backing slot retires
         /// dependent materials before any backend slot can be reused.
-        fn invalidateShaderTexture(self: *Self, texture: TextureId) void {
+        fn invalidateShaderTexture(self: *Self, texture: TextureId, how: ShaderRetire) void {
             outer: while (true) {
                 var it = self.shader_materials.iterator();
                 while (it.next()) |entry| {
                     for (entry.value_ptr.bindings[0..entry.value_ptr.len]) |binding| {
                         if (binding.texture == texture) {
-                            self.destroyShaderMaterial(entry.key_ptr.*);
+                            switch (how) {
+                                .destroy => self.destroyShaderMaterial(entry.key_ptr.*),
+                                .forget => self.forgetShaderMaterial(entry.key_ptr.*),
+                            }
                             continue :outer;
                         }
                     }
@@ -674,7 +720,9 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
         }
 
         pub fn unloadTexture(self: *Self, id: TextureId) void {
-            self.invalidateShaderTexture(id);
+            // Materials bound to a texture being unloaded on a LIVE context
+            // are destroyed; the `forget` case is `invalidateTexture`.
+            self.invalidateShaderTexture(id, .destroy);
             if (self.textures.fetchRemove(id)) |kv| {
                 // See `invalidateTexture`: a non-resident handle is already
                 // dead, so the entry is dropped without a backend free.
@@ -727,7 +775,10 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // this engine owns, and reacting to it would let an unrelated
             // handle tear down a live material.
             if (!isMintedKey(id)) return;
-            self.invalidateShaderTexture(id);
+            // Same rule as the texture below: the context is gone, so a
+            // dependent material is FORGOTTEN, never destroyed through the
+            // backend. `invalidateShaderMaterials` is the whole-context form.
+            self.invalidateShaderTexture(id, .forget);
             if (self.textures.getPtr(id)) |info| info.gpu_resident = false;
         }
 
@@ -760,7 +811,9 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 B.unloadTexture(tex);
                 return error.TextureNotRegistered;
             };
-            self.invalidateShaderTexture(id);
+            // A content swap on a live context destroys dependants; after a
+            // surface loss `invalidateTexture` already forgot them.
+            self.invalidateShaderTexture(id, .destroy);
             if (info.gpu_resident) B.unloadTexture(info.backend_texture);
             info.* = .{
                 .backend_texture = tex,
@@ -836,7 +889,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             // manager re-arms bindings on scene unload; loud so a future
             // stale-binding regression is visible in one logcat capture.
             if (self.textures.contains(id)) {
-                self.invalidateShaderTexture(id);
+                self.invalidateShaderTexture(id, .destroy);
                 std.log.warn(
                     "registerCatalogTexture: overwriting live key {d} — catalog slot recycled",
                     .{handle},

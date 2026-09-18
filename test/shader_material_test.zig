@@ -372,3 +372,110 @@ test "descriptor validation ceilings are enforced at the facade" {
     // Nothing was registered by any of the rejections.
     try testing.expectEqual(@as(usize, 0), renderer.shader_materials.count());
 }
+
+// ── Surface loss (labelle-engine#820 idiom, Codex P1 on #361) ───────────────
+// After the GPU context is gone the backend destructor must NEVER run on a
+// stale handle (UB on the dead context; frees a recycled slot after re-init).
+// The material path mirrors what `TextureInfo.gpu_resident = false` does for
+// textures: gfx forgets its record, the id resolves to nothing, the backend
+// is not called. Recreation is the engine's job (labelle-engine#882).
+
+test "invalidateTexture forgets a dependent material without calling the backend destructor" {
+    gfx.MockBackend.initMock(testing.allocator);
+    defer gfx.MockBackend.deinitMock();
+    ShaderBackend.creates = 0;
+    ShaderBackend.destroys = 0;
+    ShaderBackend.writes = 0;
+    var renderer = gfx.RetainedEngineWith(ShaderBackend, gfx.DefaultLayers).init(testing.allocator, .{});
+    defer renderer.deinit();
+    const texture = try renderer.loadTextureFromMemory("png", &[_]u8{});
+    const id = try renderer.createShaderMaterial(.{
+        .shaders = .{ .spv = "fragment" },
+        .parameters = &.{time_param},
+        .textures = &.{.{ .name = "s_mask", .texture = texture }},
+    });
+    renderer.createSprite(gfx.EntityId.from(1), .{ .material = .{ .shader = id } }, .{ .x = 0, .y = 0 });
+    renderer.render();
+    try testing.expectEqual(@as(usize, 1), gfx.MockBackend.getMaterialCallCount());
+
+    // Simulated surface loss: the documented per-texture path.
+    renderer.invalidateTexture(texture);
+
+    // MECHANISM: the backend destructor did not run …
+    try testing.expectEqual(@as(usize, 0), ShaderBackend.destroys);
+    // … while the gfx-side record is gone and the old id resolves to nothing.
+    try testing.expectEqual(@as(usize, 0), renderer.shader_materials.count());
+    try testing.expectError(error.InvalidHandle, renderer.setShaderParameter(id, "u_time", &.{1}));
+    try testing.expectError(error.InvalidHandle, renderer.setShaderTexture(id, "s_mask", texture));
+    try testing.expectEqual(@as(usize, 0), ShaderBackend.writes);
+    // A later explicit destroy of the dead id is a no-op — it can never
+    // reach the backend, even after the context re-inits.
+    renderer.destroyShaderMaterial(id);
+    try testing.expectEqual(@as(usize, 0), ShaderBackend.destroys);
+
+    // The texture side kept the #820 contract: key registered, non-resident.
+    try testing.expect(renderer.textures.contains(texture));
+    try testing.expect(renderer.nativeTextureId(texture) == null);
+
+    // Re-arming the SAME texture key after restore does not resurrect the
+    // material, and the sprite that still names the dead id degrades to the
+    // plain draw instead of the material path.
+    try renderer.reuploadTextureFromMemory(texture, "png", &[_]u8{});
+    gfx.MockBackend.resetMock();
+    renderer.render();
+    try testing.expectEqual(@as(usize, 0), gfx.MockBackend.getMaterialCallCount());
+    try testing.expectEqual(@as(usize, 1), gfx.MockBackend.getDrawCallCount());
+    try testing.expectEqual(@as(usize, 0), ShaderBackend.destroys);
+}
+
+test "invalidateShaderMaterials forgets every material, texture-less ones included, with zero backend destroys" {
+    gfx.MockBackend.initMock(testing.allocator);
+    defer gfx.MockBackend.deinitMock();
+    ShaderBackend.creates = 0;
+    ShaderBackend.destroys = 0;
+    var renderer = gfx.RetainedEngineWith(ShaderBackend, gfx.DefaultLayers).init(testing.allocator, .{});
+    defer renderer.deinit();
+    const texture = try renderer.loadTexture("a.png");
+    const bound = try renderer.createShaderMaterial(.{
+        .shaders = .{ .spv = "fragment" },
+        .parameters = &.{time_param},
+        .textures = &.{.{ .name = "s_mask", .texture = texture }},
+    });
+    // A material with no texture bindings is invisible to the per-texture
+    // path; the whole-context form must still retire it.
+    const bare = try renderer.createShaderMaterial(.{ .shaders = .{ .spv = "fragment" }, .parameters = &.{time_param} });
+
+    renderer.invalidateShaderMaterials();
+
+    try testing.expectEqual(@as(usize, 0), ShaderBackend.destroys);
+    try testing.expectEqual(@as(usize, 0), renderer.shader_materials.count());
+    try testing.expectError(error.InvalidHandle, renderer.setShaderParameter(bound, "u_time", &.{1}));
+    try testing.expectError(error.InvalidHandle, renderer.setShaderParameter(bare, "u_time", &.{1}));
+    renderer.destroyShaderMaterial(bound);
+    renderer.destroyShaderMaterial(bare);
+    try testing.expectEqual(@as(usize, 0), ShaderBackend.destroys);
+
+    // Contrast: the orderly-teardown form on a live context DOES destroy.
+    const fresh = try renderer.createShaderMaterial(.{ .shaders = .{ .spv = "fragment" } });
+    _ = fresh;
+    renderer.clearShaderMaterials();
+    try testing.expectEqual(@as(usize, 1), ShaderBackend.destroys);
+}
+
+test "a live-context unload still destroys the dependent material through the backend" {
+    gfx.MockBackend.initMock(testing.allocator);
+    defer gfx.MockBackend.deinitMock();
+    ShaderBackend.creates = 0;
+    ShaderBackend.destroys = 0;
+    var renderer = gfx.RetainedEngineWith(ShaderBackend, gfx.DefaultLayers).init(testing.allocator, .{});
+    defer renderer.deinit();
+    const texture = try renderer.loadTexture("a.png");
+    _ = try renderer.createShaderMaterial(.{
+        .shaders = .{ .spv = "fragment" },
+        .textures = &.{.{ .name = "s_mask", .texture = texture }},
+    });
+    renderer.unloadTexture(texture);
+    // The split is real: this path is the one that reaches the backend.
+    try testing.expectEqual(@as(usize, 1), ShaderBackend.destroys);
+    try testing.expectEqual(@as(usize, 0), renderer.shader_materials.count());
+}

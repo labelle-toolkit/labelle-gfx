@@ -315,6 +315,11 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
         pub fn clearShaderMaterials(self: *Self) void {
             self.inner.clearShaderMaterials();
         }
+        /// Surface-loss form: forget every material without a backend
+        /// destroy (see `RetainedEngine.invalidateShaderMaterials`).
+        pub fn invalidateShaderMaterials(self: *Self) void {
+            self.inner.invalidateShaderMaterials();
+        }
 
         // Surface-loss lifecycle for minted keys (labelle-engine#820).
         // Forwarded explicitly — the engine holds THIS wrapper and gates on
