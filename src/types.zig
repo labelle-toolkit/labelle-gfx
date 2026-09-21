@@ -116,6 +116,24 @@ pub const ScreenPoint = struct {
     y: f32,
 };
 
+/// A pair of screen dimensions in ONE explicit coordinate space — the
+/// physical framebuffer or the design canvas, never a mix. Returned by
+/// `GfxRenderer.framebufferSize` / `.designSize`, which the engine's
+/// `Game.framebufferSize` / `.designSize` accessors forward.
+///
+/// The two spaces differ whenever the backend letterboxes a fixed design
+/// canvas into a differently-shaped surface, which is exactly when the
+/// difference matters: `.screen` layers are aspect-fit into the design
+/// band while `.screen_fill` covers the whole framebuffer, so content
+/// authored at the canvas edge stops short of the real edge by
+/// `(framebuffer.height / fit - design.height) / 2` on a surface taller
+/// in aspect than the canvas. Deriving that needs BOTH sizes, which is
+/// why this type exists rather than a single "screen size".
+pub const ScreenSize = struct {
+    width: f32,
+    height: f32,
+};
+
 /// Pre-resolved source rectangle within a texture (from atlas or manual).
 /// When set on a sprite, the renderer uses this directly instead of the full texture.
 ///

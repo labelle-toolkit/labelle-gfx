@@ -483,6 +483,64 @@ pub fn GfxRendererWith(comptime BackendImpl: type, comptime LayerEnum: type, com
             return .{ .x = px, .y = py };
         }
 
+        /// The **physical framebuffer** size — the real surface bgfx draws
+        /// into, in backend-native pixels (2x the window on a Retina
+        /// display, the live canvas size x `devicePixelRatio` on wasm).
+        ///
+        /// Read live from the backend on every call rather than cached:
+        /// the surface changes under the game without asking (browser
+        /// window resize, Android orientation flip, foldable unfold), and
+        /// a cached value is how a stale backbuffer gets scaled by the
+        /// compositor (labelle-bgfx#66/#82).
+        ///
+        /// The naming here is a trap worth stating plainly: the contract's
+        /// `getScreenWidth`/`getScreenHeight` return the **DESIGN** canvas,
+        /// not the surface (bgfx `getScreenWidth` returns `design_w`;
+        /// sokol, wgpu and null do the same). The physical surface is a
+        /// SEPARATE, optional pair — `physicalWidth`/`physicalHeight` —
+        /// which only backends that letterbox a fixed canvas define.
+        ///
+        /// So this is `@hasDecl`-guarded on the physical pair, and a
+        /// backend without it has no design/physical distinction: its
+        /// canvas IS the surface, and the contract accessors are the right
+        /// answer. See `designSize` for the other half.
+        pub fn framebufferSize(_: *const Self) types_mod.ScreenSize {
+            if (@hasDecl(BackendImpl, "physicalWidth") and @hasDecl(BackendImpl, "physicalHeight")) {
+                return .{
+                    .width = @floatFromInt(BackendImpl.physicalWidth()),
+                    .height = @floatFromInt(BackendImpl.physicalHeight()),
+                };
+            }
+            return .{
+                .width = @floatFromInt(BackendImpl.getScreenWidth()),
+                .height = @floatFromInt(BackendImpl.getScreenHeight()),
+            };
+        }
+
+        /// The **design canvas** size — the logical space sprite
+        /// `Position`s and `.screen` layers are authored in, which the
+        /// backend aspect-fits into the framebuffer.
+        ///
+        /// Unguarded, because `getScreenWidth`/`getScreenHeight` are
+        /// REQUIRED contract decls (labelle-core `backend_contract`) and
+        /// every backend returns its design canvas from them — the fixed
+        /// one where it letterboxes (bgfx/sokol/wgpu/null return
+        /// `design_w`), the live window where it does not (raylib and SDL
+        /// return the window, which for them IS the canvas). Either way
+        /// the answer is the space `Position` is authored in, which is
+        /// what callers mean by "design".
+        ///
+        /// Callers that only need to map a COORDINATE between the two
+        /// spaces should use `screenToDesign` instead of a ratio of these
+        /// two sizes: it accounts for the letterbox offset, which a bare
+        /// ratio does not.
+        pub fn designSize(_: *const Self) types_mod.ScreenSize {
+            return .{
+                .width = @floatFromInt(BackendImpl.getScreenWidth()),
+                .height = @floatFromInt(BackendImpl.getScreenHeight()),
+            };
+        }
+
         /// Pixel-dimension lookup for a previously-loaded texture.
         /// Atlas loaders need this to derive a `texture_scale` against
         /// the JSON's `meta.size` when the user ships a downscaled PNG

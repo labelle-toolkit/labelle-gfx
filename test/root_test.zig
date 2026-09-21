@@ -2277,6 +2277,17 @@ const FitBackend = struct {
     pub fn getScreenHeight() i32 {
         return @intFromFloat(fit_design_h);
     }
+    // The PHYSICAL surface, separate from the contract's design-space
+    // `getScreenWidth`/`getScreenHeight` above — the same split bgfx has
+    // (`physicalWidth` returns `screen_w`, `getScreenWidth` returns
+    // `design_w`). This backend already tracked both; these decls make
+    // the distinction reachable, which is what `framebufferSize` keys on.
+    pub fn physicalWidth() i32 {
+        return @intFromFloat(fit_phys_w);
+    }
+    pub fn physicalHeight() i32 {
+        return @intFromFloat(fit_phys_h);
+    }
     pub fn beginMode2D(cam: Camera2D) void {
         fit_cam = cam;
     }
@@ -5766,4 +5777,116 @@ test "font seam: the no-font path is byte-identical across both backend shapes" 
     try testing.expectEqual(aware.last_r, plain.last_r);
     try testing.expectEqual(aware.last_a, plain.last_a);
     try testing.expectEqualStrings(aware.last_text, plain.last_text);
+}
+
+// ── framebufferSize / designSize (labelle-gfx#353) ──────────────────
+//
+// The two spaces only diverge on a backend that letterboxes a FIXED
+// canvas, so `FitBackend` is the one that can tell the accessors apart:
+// its `getScreenWidth` reports the design canvas and its `physicalWidth`
+// the surface, exactly as bgfx does. Asserting against `MockBackend`
+// alone would be vacuous — it has no distinction, so both accessors
+// return the same number whichever branch ran.
+
+test "GfxRenderer: designSize reports the design canvas, not the surface" {
+    const Renderer = GfxRenderer(FitBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    fitResetState(1024, 768, 900, 1200);
+
+    const design = renderer.designSize();
+    try testing.expectEqual(@as(f32, 1024), design.width);
+    try testing.expectEqual(@as(f32, 768), design.height);
+}
+
+test "GfxRenderer: framebufferSize reports the physical surface, not the canvas" {
+    const Renderer = GfxRenderer(FitBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    fitResetState(1024, 768, 900, 1200);
+
+    const fb = renderer.framebufferSize();
+    try testing.expectEqual(@as(f32, 900), fb.width);
+    try testing.expectEqual(@as(f32, 1200), fb.height);
+
+    // The branch is identified by the two DIVERGING, not by either value
+    // alone: a backend whose surface happened to equal its canvas would
+    // pass this whichever accessor the renderer had called.
+    const design = renderer.designSize();
+    try testing.expect(fb.width != design.width);
+    try testing.expect(fb.height != design.height);
+}
+
+test "GfxRenderer: framebufferSize tracks a surface change rather than caching" {
+    // The surface changes under the game without asking — browser resize,
+    // Android orientation flip, foldable unfold. A cached read is how a
+    // stale backbuffer ends up scaled by the compositor.
+    const Renderer = GfxRenderer(FitBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    fitResetState(1024, 768, 1024, 768);
+    try testing.expectEqual(@as(f32, 768), renderer.framebufferSize().height);
+
+    fitResetState(1024, 768, 900, 1200);
+    try testing.expectEqual(@as(f32, 1200), renderer.framebufferSize().height);
+    // The canvas did NOT move with it.
+    try testing.expectEqual(@as(f32, 768), renderer.designSize().height);
+}
+
+test "GfxRenderer: the two sizes derive the letterbox a screen layer cannot reach" {
+    // The reason these accessors exist. `.screen` layers are aspect-fit
+    // into the design band while `screen_fill` covers the framebuffer, so
+    // content authored at the canvas bottom stops short of the real
+    // bottom by this much.
+    //
+    // The strip has TWO sizes and mixing them up is the easy mistake —
+    // this test pins both. On screen it is 262.5 physical px, which is
+    // what a screenshot of the live FP web build measures at this exact
+    // viewport (clouds ended 262px above the bottom edge). In DESIGN
+    // units, the space `Position` is authored in, the same strip is
+    // 298.67 — bigger by exactly 1/fit. Anything repositioning a sprite
+    // wants the design figure; anything measuring a capture wants the
+    // physical one.
+    const Renderer = GfxRenderer(FitBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    fitResetState(1024, 768, 900, 1200);
+
+    const fb = renderer.framebufferSize();
+    const design = renderer.designSize();
+    const fit = @min(fb.width / design.width, fb.height / design.height);
+
+    const letterbox_physical = (fb.height - design.height * fit) / 2.0;
+    try testing.expectApproxEqAbs(@as(f32, 262.5), letterbox_physical, 0.5);
+
+    const letterbox_design = (fb.height / fit - design.height) / 2.0;
+    try testing.expectApproxEqAbs(@as(f32, 298.67), letterbox_design, 0.5);
+
+    // Same strip, two spaces — the relationship, not two loose numbers.
+    try testing.expectApproxEqAbs(letterbox_physical / fit, letterbox_design, 0.5);
+}
+
+test "GfxRenderer: a backend with no design/physical split reports one size for both" {
+    // MockBackend defines neither `physicalWidth` nor a separate canvas:
+    // its window IS its canvas (the raylib/SDL shape). Both accessors
+    // must agree, and the letterbox derived from them must be zero.
+    const Renderer = GfxRenderer(MockBackend, DefaultLayers, u32);
+    var renderer = Renderer.init(testing.allocator);
+    defer renderer.deinit();
+
+    MockBackend.setScreenSize(1280, 720);
+    defer MockBackend.setScreenSize(800, 600);
+
+    const fb = renderer.framebufferSize();
+    const design = renderer.designSize();
+    try testing.expectEqual(@as(f32, 1280), fb.width);
+    try testing.expectEqual(fb.width, design.width);
+    try testing.expectEqual(fb.height, design.height);
+
+    const fit = @min(fb.width / design.width, fb.height / design.height);
+    try testing.expectEqual(@as(f32, 0), (fb.height / fit - design.height) / 2.0);
 }
