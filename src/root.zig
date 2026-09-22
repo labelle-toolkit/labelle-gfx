@@ -13,6 +13,16 @@ pub const spatial_grid_mod = @import("spatial_grid");
 pub const tilemap_mod = @import("tilemap");
 pub const window_utils_mod = @import("window_utils.zig");
 
+// Tests inside a file are collected only when the file is reached from a
+// TEST context; a plain `pub const … = @import` is not one. Without this
+// block `window_utils.zig`'s tests never ran, which is how its
+// `Screenshot.writeBmp` kept calling `std.fs.cwd()` — removed in Zig 0.16 —
+// with `zig build test` green (labelle-gfx#358). Any src file that grows
+// inline tests needs a line here.
+test {
+    _ = window_utils_mod;
+}
+
 // Core re-exports
 pub const Backend = backend_mod.Backend;
 pub const DecodedImage = backend_mod.DecodedImage;
