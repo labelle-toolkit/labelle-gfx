@@ -1145,6 +1145,84 @@ test "PostFx: a [bloom, vignette] stack ping-pongs the two targets in order" {
     try testing.expectEqual(@as(u32, 0), MockBackend.getActiveRenderTarget());
 }
 
+test "PostFx: surface loss — invalidateTargets forgets without destroying, next begin re-creates (#364)" {
+    // Android surface cycle: the backend drops its whole render-target pool
+    // with the dead context. The driver must FORGET its ids (no destroy through
+    // a dead context) and re-create on the next frame. The canvas size is
+    // unchanged across the cycle, so without the invalidation `ensureTargets`
+    // would keep the stale ids forever and post-fx would silently stop.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var driver = PostFxDriver(MockBackend){};
+    defer driver.deinit();
+    driver.setPostFx(&.{ .{ .kind = .bloom }, .{ .kind = .vignette } });
+
+    try testing.expect(driver.begin(320, 240));
+    driver.resolve(320, 240);
+    try testing.expectEqual(@as(usize, 2), MockBackend.getRenderTargetCalls().len);
+
+    // Control: a second frame at the SAME size re-uses the targets — this is
+    // exactly why a surface cycle alone never triggers re-creation.
+    try testing.expect(driver.begin(320, 240));
+    driver.resolve(320, 240);
+    try testing.expectEqual(@as(usize, 2), MockBackend.getRenderTargetCalls().len);
+
+    const destroys_before = MockBackend.getRenderTargetDestroyCount();
+    driver.invalidateTargets();
+    // Forget, never destroy: the context that owned them is gone.
+    try testing.expectEqual(destroys_before, MockBackend.getRenderTargetDestroyCount());
+    // The stack survives the surface cycle.
+    try testing.expect(driver.active());
+    try testing.expectEqual(@as(usize, 2), driver.stack().len);
+
+    // Same size again — this time the targets ARE re-created (the mechanism).
+    try testing.expect(driver.begin(320, 240));
+    const calls = MockBackend.getRenderTargetCalls();
+    try testing.expectEqual(@as(usize, 4), calls.len);
+    const new_a = calls[2].id;
+    const new_b = calls[3].id;
+    try testing.expect(new_a != 0 and new_b != 0 and new_a != new_b);
+    // The scene is redirected into the NEW target, and the chain runs on them.
+    try testing.expectEqual(new_a, MockBackend.getActiveRenderTarget());
+    driver.resolve(320, 240);
+    const passes = MockBackend.getPostPassCalls();
+    const last = passes[passes.len - 2 ..];
+    try testing.expectEqual(new_a, last[0].src);
+    try testing.expectEqual(new_b, last[0].dst);
+    try testing.expectEqual(new_b, last[1].src);
+    try testing.expectEqual(new_a, last[1].dst);
+}
+
+test "PostFx: RetainedEngine.invalidatePostFxTargets reaches the driver (the seam the engine calls, #364)" {
+    // `labelle-engine`'s `Game.surfaceLost` calls this through `renderer.inner`
+    // behind an `@hasDecl` guard, so a rename would silently drop the call and
+    // bring #364 back. Drive it for real: the engine's own driver must forget
+    // its targets without destroying them, keep the stack, and re-create.
+    const Engine = RetainedEngineWith(MockBackend, DefaultLayers);
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+    engine.setPostFx(&.{.{ .kind = .bloom }});
+
+    try testing.expect(engine.post_fx.begin(320, 240));
+    engine.post_fx.resolve(320, 240);
+    try testing.expect(engine.post_fx.target_a != 0);
+
+    const destroys_before = MockBackend.getRenderTargetDestroyCount();
+    engine.invalidatePostFxTargets();
+    try testing.expectEqual(@as(u32, 0), engine.post_fx.target_a);
+    try testing.expectEqual(@as(u32, 0), engine.post_fx.target_b);
+    try testing.expectEqual(destroys_before, MockBackend.getRenderTargetDestroyCount());
+    try testing.expectEqual(@as(usize, 1), engine.post_fx.stack().len);
+
+    try testing.expect(engine.post_fx.begin(320, 240));
+    try testing.expectEqual(@as(usize, 4), MockBackend.getRenderTargetCalls().len);
+    engine.post_fx.resolve(320, 240);
+}
+
 test "PostFx: an unsupported pass is skipped (warn-once) without breaking the chain" {
     // The mock declines `crt`. The driver skips it WITHOUT advancing the
     // ping-pong pair, warns once, and the surrounding supported passes still run.

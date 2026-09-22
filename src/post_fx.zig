@@ -184,6 +184,27 @@ pub fn PostFxDriver(comptime BackendImpl: type) type {
             self.targets_h = 0;
         }
 
+        /// Surface-loss counterpart of `deinit` (labelle-gfx#364): the GPU
+        /// context that owned both ping-pong targets is already gone, so
+        /// FORGET them without a single backend destroy (destroying through a
+        /// dead context is UB). The stack itself is kept; the next `begin`
+        /// sees `target_a == 0` and re-creates both against the restored
+        /// context.
+        ///
+        /// Without this, `ensureTargets` keeps the stale ids after a surface
+        /// cycle. It only re-creates on `0` or a canvas resize, and the canvas
+        /// is the design size, which a surface cycle never changes. The backend
+        /// then no-ops every call on the unknown ids, so post-fx silently stops
+        /// and the scene goes straight to the backbuffer.
+        pub fn invalidateTargets(self: *Self) void {
+            self.target_a = 0;
+            self.target_b = 0;
+            self.targets_w = 0;
+            self.targets_h = 0;
+            // A redirect bound into the dead context is gone with it.
+            self.redirected = false;
+        }
+
         // ── Internals ───────────────────────────────────────────────────────
 
         /// Lazily (re)create the two targets when absent or the canvas resized.
