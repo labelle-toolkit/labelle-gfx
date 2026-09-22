@@ -437,6 +437,15 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
             self.post_fx.clearPostFx();
         }
 
+        /// Surface loss (labelle-gfx#364): forget the post-fx ping-pong
+        /// targets WITHOUT destroying them — the context that owned them is
+        /// gone. The stack is kept; targets are re-created against the
+        /// restored context on the next post-fx frame. The engine calls this
+        /// from `Game.surfaceLost`, next to `invalidateShaderMaterials`.
+        pub fn invalidatePostFxTargets(self: *Self) void {
+            self.post_fx.invalidateTargets();
+        }
+
         /// Clear all entity visuals but keep textures loaded.
         /// Used by save/load to reset rendering state without
         /// destroying GPU textures that are expensive to reload.
