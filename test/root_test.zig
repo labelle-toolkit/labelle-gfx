@@ -23,6 +23,48 @@ const VisualTypes = gfx.VisualTypes;
 const SpriteComponent = gfx.SpriteComponent;
 const getSortedLayers = gfx.getSortedLayers;
 
+test "retained layer interleaves fridge glass and citizens by depth with and without culling" {
+    const Layers = enum {
+        world,
+        pub fn config(_: @This()) LayerConfig {
+            return .{ .order = 0, .space = .world };
+        }
+    };
+    const Engine = RetainedEngineWith(MockBackend, Layers);
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    var engine = Engine.init(testing.allocator, .{});
+    defer engine.deinit();
+    const rgba = [_]u8{255} ** 4;
+    const texture = try engine.createTextureFromPixels(1, 1, &rgba);
+    // Insert out of order, including a sprite and shape on the same entity.
+    engine.createSprite(EntityId.from(30), .{ .texture = @enumFromInt(texture), .z_index = 5 }, .{ .x = 10, .y = 10 });
+    engine.createShape(EntityId.from(20), .{ .shape = .{ .rectangle = .{ .width = 10, .height = 10 } }, .z_index = 4 }, .{ .x = 10, .y = 10 });
+    engine.createSprite(EntityId.from(10), .{ .texture = @enumFromInt(texture), .z_index = 3 }, .{ .x = 10, .y = 10 });
+    engine.createShape(EntityId.from(30), .{ .shape = .{ .rectangle = .{ .width = 10, .height = 10 } }, .z_index = 5 }, .{ .x = 10, .y = 10 });
+    for ([_]bool{ false, true }) |culled| {
+        if (culled) engine.setCullViewport(.{ .x = 0, .y = 0, .w = 100, .h = 100 });
+        engine.renderLayer(.world);
+        // This is the draw stream consumed by the retained renderer, not
+        // separate per-kind lists: food, glass, citizen, same-depth shape.
+        try testing.expectEqual(@as(usize, 4), engine.sort_scratch.items.len);
+        for ([_]u32{ 10, 20, 30, 30 }, engine.sort_scratch.items) |key, entry|
+            try testing.expectEqual(key, entry.key);
+        try testing.expectEqual(.sprite, engine.sort_scratch.items[2].kind);
+        try testing.expectEqual(.shape, engine.sort_scratch.items[3].kind);
+    }
+    try testing.expectEqual(@as(usize, 4), MockBackend.getDrawCallCount());
+    try testing.expectEqual(@as(usize, 4), MockBackend.getShapeCalls().len);
+    // The full-frame entry point must use the same ordering, not an old
+    // per-kind path. One layer leaves the submitted draw stream observable.
+    engine.render();
+    try testing.expectEqual(@as(usize, 4), engine.sort_scratch.items.len);
+    for ([_]u32{ 10, 20, 30, 30 }, engine.sort_scratch.items) |key, entry|
+        try testing.expectEqual(key, entry.key);
+    try testing.expectEqual(@as(usize, 6), MockBackend.getDrawCallCount());
+    try testing.expectEqual(@as(usize, 6), MockBackend.getShapeCalls().len);
+}
+
 // ── Backend / MockBackend ──────────────────────────────────
 
 test "Backend(MockBackend) validates successfully" {

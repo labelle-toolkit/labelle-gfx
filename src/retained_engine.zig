@@ -1375,8 +1375,7 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 const vp = self.cull_viewport orelse break :blk null;
                 break :blk self.cullCandidates(vp);
             };
-            self.renderSpritesOnLayer(layer, candidates);
-            self.renderShapesOnLayer(layer, candidates);
+            self.renderVisualsOnLayer(layer, candidates);
             self.renderTextsOnLayer(layer, candidates);
         }
 
@@ -1391,15 +1390,68 @@ pub fn RetainedEngineWith(comptime BackendImpl: type, comptime LayerEnum: type) 
                 if (self.cull_viewport == null) break :blk null;
                 break :blk frame_candidates;
             };
-            self.renderSpritesOnLayer(layer, candidates);
-            self.renderShapesOnLayer(layer, candidates);
+            self.renderVisualsOnLayer(layer, candidates);
             self.renderTextsOnLayer(layer, candidates);
         }
 
+        const VisualKind = enum { sprite, shape };
         const SortEntry = struct {
             key: u32,
             z_index: i16,
+            kind: VisualKind = .sprite,
         };
+
+        fn renderVisualsOnLayer(self: *Self, layer: LayerEnum, candidates: ?[]const u32) void {
+            // Depth is a layer-wide contract. Separate sprite/shape passes
+            // put every glass pane over every citizen, even at a lower z.
+            self.sort_scratch.clearRetainingCapacity();
+            const upper_bound = if (candidates) |ids|
+                @min(ids.len, self.sprites.count()) + @min(ids.len, self.shapes.count())
+            else
+                self.sprites.count() + self.shapes.count();
+            self.sort_scratch.ensureTotalCapacity(self.allocator, upper_bound) catch {
+                // Preserve visibility on OOM, as the previous passes did;
+                // only draw order degrades when the sort buffer cannot grow.
+                self.renderSpritesOnLayer(layer, candidates);
+                self.renderShapesOnLayer(layer, candidates);
+                return;
+            };
+            self.collectVisuals(.sprite, layer, candidates);
+            self.collectVisuals(.shape, layer, candidates);
+            std.mem.sort(SortEntry, self.sort_scratch.items, {}, struct {
+                fn lessThan(_: void, a: SortEntry, b: SortEntry) bool {
+                    if (a.z_index != b.z_index) return a.z_index < b.z_index;
+                    if (a.key != b.key) return a.key < b.key;
+                    // An entity may have both visuals. Keep its shape above
+                    // its sprite when both have exactly the same depth.
+                    return @intFromEnum(a.kind) < @intFromEnum(b.kind);
+                }
+            }.lessThan);
+            for (self.sort_scratch.items) |sorted| switch (sorted.kind) {
+                .sprite => if (self.sprites.getPtr(sorted.key)) |entry| Draw.drawSpriteEntry(self, entry),
+                .shape => if (self.shapes.getPtr(sorted.key)) |entry| drawShapeEntry(entry),
+            };
+        }
+
+        fn collectVisuals(self: *Self, comptime kind: VisualKind, layer: LayerEnum, candidates: ?[]const u32) void {
+            const map = if (kind == .sprite) &self.sprites else &self.shapes;
+            if (candidates) |ids| {
+                const vp = self.cull_viewport.?;
+                for (ids) |id| {
+                    const entry = map.getPtr(id) orelse continue;
+                    if (entry.visual.layer != layer or !entry.visual.visible) continue;
+                    const bounds = if (kind == .sprite) self.spriteBounds(entry) else shapeBounds(entry);
+                    if (!bounds.overlaps(vp)) continue;
+                    self.sort_scratch.appendAssumeCapacity(.{ .key = id, .z_index = entry.visual.z_index, .kind = kind });
+                }
+            } else {
+                var it = map.iterator();
+                while (it.next()) |entry| {
+                    if (entry.value_ptr.visual.layer != layer or !entry.value_ptr.visual.visible) continue;
+                    self.sort_scratch.appendAssumeCapacity(.{ .key = entry.key_ptr.*, .z_index = entry.value_ptr.visual.z_index, .kind = kind });
+                }
+            }
+        }
 
         fn renderSpritesOnLayer(self: *Self, layer: LayerEnum, candidates: ?[]const u32) void {
             // Collect visible sprites for this layer into the reusable growable
